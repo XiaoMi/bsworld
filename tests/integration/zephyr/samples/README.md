@@ -17,13 +17,13 @@ Each directory owns its Python tests, profiles, and optional configuration fragm
 
 We recommend the [published Docker image](../../../../docker/README.md#run-tests), which includes all eight Zephyr samples. Select the Zephyr suites with `pytest tests/integration/zephyr/samples`. The preparation steps below are for native Linux builds.
 
-Prepare source and SDK from the [Zephyr workspace guide](common/source/README.md), compile BabbleSim from [README build instructions](../../../../README.md#build-and-test), then build the [Virtual Controller](../../../../components/bt_virt_controller/README.md).
+Prepare source and SDK from the [Zephyr workspace guide](common/source/README.md), compile BabbleSim from [README build instructions](../../../../README.md#build-and-test), then build the [Virtual Controller](../../../../components/bt_virt_controller/README.md). The repository README's [prebuilt binaries](../../../../README.md#prebuilt-binaries) can supply these eight samples and the Virtual Controller. Export those launchers, and still compile BabbleSim.
 
-Retain `BSWORLD_ROOT`, `ZEPHYR_WORKSPACE`, `BSIM_OUT_PATH`, `BSIM_COMPONENTS_PATH`, and `BSIM_BASE_PATH`, plus the test variables `BSWORLD_BSIM_DIR` and `BSWORLD_BT_VIRT_CONTROLLER_BIN`. Set these variables to your local workspace paths.
+Retain `BSWORLD_ROOT`, `ZEPHYR_WORKSPACE`, `BSIM_OUT_PATH`, `BSIM_COMPONENTS_PATH`, and `BSIM_BASE_PATH`, plus the test variables `BSWORLD_BSIM_DIR` and `BSWORLD_BT_VIRT_CONTROLLER_BIN`. Set these variables to your local workspace paths. `ZEPHYR_WORKSPACE` is only needed when building with `west`.
 
 ## Build and Run
 
-Each test directory's README documents its sample-specific `west build` commands, original output paths, environment variables, and pytest command. Follow the links in the table above. Build and test in the same shell, retaining exports when switching Python environments.
+Each test directory's README documents its sample-specific `west build` commands, original output paths, environment variables, and pytest command. Follow the links in the table above. Build with `$ZEPHYR_WORKSPACE/.venv` (`source "$ZEPHYR_WORKSPACE/.venv/bin/activate"`) and run pytest with `$BSWORLD_ROOT/.venv` (`source "$BSWORLD_ROOT/.venv/bin/activate"`). Stay in the same shell: activation changes `PATH` and keeps the exported `BSWORLD_*` and BabbleSim variables.
 
 After compiling every group and exporting its variables, run all groups in the BSWorld Python environment:
 

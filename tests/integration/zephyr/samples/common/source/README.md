@@ -6,7 +6,11 @@ This directory maintains only BSWorld configuration: `bsim_host_only.overlay` se
 
 ## Prepare the Workspace
 
-Prepare BSWorld using the repository README's [local Linux setup](../../../../../../README.md#local-linux). Install Zephyr's additional dependencies from the official [Getting Started Guide](https://docs.zephyrproject.org/latest/develop/getting_started/index.html), then create the workspace below. The source revision matches the Dockerfile:
+Prepare BSWorld using the repository README's [local Linux setup](../../../../../../README.md#local-linux). Install Zephyr's additional dependencies from the official [Getting Started Guide](https://docs.zephyrproject.org/latest/develop/getting_started/index.html), then create the workspace below. The source revision matches the Dockerfile.
+
+`$ZEPHYR_WORKSPACE/.venv` is only for `west` and `west build`. `$BSWORLD_ROOT/.venv` stays the environment for `pip install -e .` and pytest. The commands below activate the Zephyr environment explicitly; activate `$BSWORLD_ROOT/.venv` again before pytest. `source .../bin/activate` changes `PATH` and leaves exported `BSWORLD_*` and BabbleSim variables set.
+
+That local Linux setup installs `gcc-multilib` and `g++-multilib` because BabbleSim and the `nrf52_bsim` board need a 32-bit host toolchain.
 
 ```sh
 export ZEPHYR_WORKSPACE="$HOME/zephyrproject"
