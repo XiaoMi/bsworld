@@ -11,7 +11,9 @@ The suite covers:
 - connection establishment between a Bumble central and peripheral;
 - extended periodic advertising, periodic synchronization, and periodic report reception.
 
-Bumble is installed with BSWorld. For native Linux, follow the repository README's [quick start](../../../README.md#quick-start) to prepare the environment and build BabbleSim and the Virtual Controller. Retain `BSWORLD_BSIM_DIR` and `BSWORLD_BT_VIRT_CONTROLLER_BIN`, then run:
+We recommend the [published Docker image](../../../docker/README.md#run-tests). Select this suite with `pytest tests/integration/bumble`.
+
+Bumble is installed with BSWorld. For native Linux, follow the repository README's [local Linux setup](../../../README.md#local-linux) to prepare the environment and build BabbleSim and the Virtual Controller. Retain `BSWORLD_BSIM_DIR` and `BSWORLD_BT_VIRT_CONTROLLER_BIN`, then run:
 
 ```sh
 cd "$BSWORLD_ROOT"

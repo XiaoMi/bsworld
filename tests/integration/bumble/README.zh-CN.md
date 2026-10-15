@@ -11,7 +11,9 @@
 - Bumble Central 与 Peripheral 建立连接；
 - 扩展周期广播、周期同步和周期广播报告接收。
 
-Bumble 随 BSWorld 一起安装。本机 Linux 先按仓库 README 的[快速开始](../../../docs/zh-CH/README.md#快速开始)准备环境、编译 BabbleSim 和虚拟 Controller，并保留 `BSWORLD_BSIM_DIR` 与 `BSWORLD_BT_VIRT_CONTROLLER_BIN`，再运行：
+推荐使用[已发布的 Docker 镜像](../../../docker/README.zh-CN.md#运行测试)。选择本套件时使用 `pytest tests/integration/bumble`。
+
+Bumble 随 BSWorld 一起安装。本机 Linux 先按仓库 README 的[本地 Linux 环境搭建](../../../docs/zh-CH/README.md#本地-linux)准备环境、编译 BabbleSim 和虚拟 Controller，并保留 `BSWORLD_BSIM_DIR` 与 `BSWORLD_BT_VIRT_CONTROLLER_BIN`，再运行：
 
 ```sh
 cd "$BSWORLD_ROOT"

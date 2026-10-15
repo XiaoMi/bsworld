@@ -15,7 +15,7 @@ Each directory owns its Python tests, profiles, and optional configuration fragm
 
 ## Environment Setup
 
-With the Docker test image, run the suite pytest commands directly. The preparation steps below are for native Linux builds.
+We recommend the [published Docker image](../../../../docker/README.md#run-tests), which includes all eight Zephyr samples. Select the Zephyr suites with `pytest tests/integration/zephyr/samples`. The preparation steps below are for native Linux builds.
 
 Prepare source and SDK from the [Zephyr workspace guide](common/source/README.md), compile BabbleSim from [README build instructions](../../../../README.md#build-and-test), then build the [Virtual Controller](../../../../components/bt_virt_controller/README.md).
 

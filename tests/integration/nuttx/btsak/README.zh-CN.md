@@ -46,6 +46,8 @@ bt bnep0 scan get
 
 ## 运行
 
+推荐使用 [Docker 测试镜像](../../../../docker/README.zh-CN.md#选择测试套件)，将 pytest 测试路径设为 `tests/integration/nuttx/btsak`。
+
 本机 Linux 按 [source/README.zh-CN.md](source/README.zh-CN.md) 构建，保留 BabbleSim 和 Controller 变量，再切回 BSWorld Python 环境并运行：
 
 ```sh

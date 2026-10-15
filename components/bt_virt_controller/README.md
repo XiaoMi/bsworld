@@ -28,7 +28,7 @@ BSWorld starts one Virtual Controller per HCI socket:
 
 ## Build
 
-The Docker test image includes the Controller. The commands below are for native Linux builds.
+The recommended [Docker test image](../../docker/README.md#use-a-published-image) includes the Controller. The commands below are for native Linux builds.
 
 Build BabbleSim as described in [README build instructions](../../README.md#build-and-test), retaining `BSWORLD_ROOT`, `BSIM_OUT_PATH`, `BSIM_COMPONENTS_PATH`, and `BSIM_BASE_PATH`. For a native setup, see the [Zephyr environment guide](../../tests/integration/zephyr/samples/common/source/README.md) and set `ZEPHYR_WORKSPACE`.
 

@@ -123,7 +123,26 @@ Apache NimBLE 是同一套 Host 协议栈跨不同运行环境接入 BSWorld 的
 
 ## 快速开始
 
-BSWorld 支持在 Linux/x86_64 上使用本地 Python 环境或 Docker 编译和测试。以下原生环境搭建以 Ubuntu 24.04 为例。
+BSWorld 运行于 Linux/x86_64。推荐使用已发布的 Docker 镜像，其中已包含 Python、BSWorld 和集成测试所需的全部固件。也可以通过 Dockerfile 自行构建镜像，或直接在 Linux 系统上搭建环境。
+
+### Docker（推荐）
+
+按 Docker 官方 [Ubuntu 安装说明](https://docs.docker.com/engine/install/ubuntu/)安装 Docker Engine，然后拉取镜像并运行其中的集成测试：
+
+```sh
+sudo docker pull ghcr.io/xiaomi/bsworld:latest
+mkdir -p .cache/docker-results
+# The published image runs as UID/GID 1000.
+sudo chown 1000:1000 .cache/docker-results
+sudo docker run --rm \
+  -e PYTHONPATH=/workspace \
+  --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
+  ghcr.io/xiaomi/bsworld:latest
+```
+
+上述命令运行镜像内置的集成测试，将 `pytest.xml`、日志和抓包文件保存到当前目录的 `.cache/docker-results` 下。`latest` 指向最近从 `main` 发布且通过 CI 测试的环境镜像。
+
+测试当前仓库时，将仓库根目录挂载到 `/workspace`，固件使用镜像内的编译产物。挂载方式、测试套件选择、单元测试、静态检查及自行构建镜像的方法见 [Docker 使用说明](../../docker/README.zh-CN.md)。
 
 ### 本地 Linux
 
@@ -182,52 +201,6 @@ cd "$BSWORLD_ROOT"
 source .venv/bin/activate
 pytest tests/integration -n auto
 ```
-
-### Docker
-
-构建参数、测试命令、日志保存及 CI 用法见 [Docker 使用说明](../../docker/README.zh-CN.md)。
-
-[Dockerfile](../../docker/Dockerfile) 编译全部测试固件，并生成包含 BSWorld、pytest、BabbleSim 运行组件、Controller、Zephyr 示例、NuttX 镜像，以及 QEMU / Linux Guest 的测试镜像。最终镜像只保留测试所需的程序、固件、转换脚本和运行库。
-
-在仓库根目录构建镜像：
-
-```sh
-sudo docker build --progress=plain -f docker/Dockerfile \
-  --build-arg BUILD_UID="$(id -u)" --build-arg BUILD_GID="$(id -g)" \
-  --build-arg BUILD_JOBS=4 \
-  -t bsworld:dev .
-```
-
-镜像已设置固件环境变量，默认运行集成测试。将报告和日志保存到本机：
-
-```sh
-mkdir -p .cache/docker-results
-sudo docker run --rm \
-  --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  bsworld:dev
-```
-
-测试当前仓库代码时，把仓库挂载到 `/workspace`；镜像内的固件保持位于 `/opt`：
-
-```sh
-sudo docker run --rm \
-  --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
-  --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  bsworld:dev
-```
-
-可以在镜像名后指定 pytest 命令来选择套件：
-
-```sh
-sudo docker run --rm \
-  --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
-  --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  bsworld:dev \
-  pytest tests/integration/zephyr/samples/heart_rate -n 2 \
-    --out-dir /output --junitxml=/output/heart-rate.xml
-```
-
-[GitHub Actions workflow](../../.github/workflows/ci.yml) 先在 runner 上执行 Ruff 和单元测试。两项通过后，才使用对应的 Docker 环境和本次提交执行集成测试，必要时构建候选镜像，并从 `main` 将通过测试的镜像发布到 GHCR。测试失败时也会上传报告和日志。
 
 ## 文档
 

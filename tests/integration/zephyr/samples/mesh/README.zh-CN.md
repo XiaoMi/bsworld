@@ -6,7 +6,7 @@
 
 ## 构建
 
-Docker 测试镜像已包含本组固件。以下命令用于本机 Linux 构建。
+推荐使用的 [Docker 测试镜像](../../../../../docker/README.zh-CN.md#运行测试)已包含本组固件。按文档中的套件选择命令运行 `tests/integration/zephyr/samples/mesh`。以下命令用于本机 Linux 构建。
 
 先按上一级 README 的[环境准备](../README.zh-CN.md#环境准备)准备 Zephyr、BabbleSim 和虚拟 Controller，保留工作区及编译变量。以下命令只构建本组使用的两个上游示例：
 

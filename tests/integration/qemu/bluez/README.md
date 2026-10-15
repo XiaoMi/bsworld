@@ -16,6 +16,8 @@ Bumble is used only as a controlled peer. BlueZ, the Linux Bluetooth subsystem, 
 
 ## Build and Run
 
+We recommend the [Docker test image](../../../../docker/README.md#select-a-suite), using `tests/integration/qemu/bluez` as the pytest target.
+
 For native Linux, compile with the parent [QEMU / Buildroot README](../README.md), retain the BabbleSim/Controller exports and `BSWORLD_QEMU_BIN`, `BSWORLD_QEMU_KERNEL`, `BSWORLD_QEMU_ROOTFS`, then run from the repository root:
 
 ```sh

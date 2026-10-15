@@ -21,7 +21,9 @@ Linux 与 BlueZ 版本由经过验证的 Buildroot 提交和 BSWorld defconfig �
 
 ## 准备环境
 
-Docker 测试镜像已包含 QEMU、kernel 和 rootfs。以下步骤用于本机 Linux 构建。先按[README 构建说明](../../../docs/zh-CH/README.md#构建与测试)编译 BabbleSim，并按 [Controller README](../../../components/bt_virt_controller/README.zh-CN.md)编译虚拟 Controller，保留 `BSWORLD_ROOT`、`BSIM_OUT_PATH` 和 `BSIM_COMPONENTS_PATH`。
+推荐使用[已发布的 Docker 镜像](../../../docker/README.zh-CN.md#运行测试)，其中已包含 QEMU、kernel 和 rootfs。选择 QEMU 套件时使用 `pytest tests/integration/qemu`。
+
+以下步骤用于本机 Linux 构建。先按[README 构建说明](../../../docs/zh-CH/README.md#构建与测试)编译 BabbleSim，并按 [Controller README](../../../components/bt_virt_controller/README.zh-CN.md)编译虚拟 Controller，保留 `BSWORLD_ROOT`、`BSIM_OUT_PATH` 和 `BSIM_COMPONENTS_PATH`。
 
 本机 Linux 构建可按官方 [QEMU 构建说明](https://www.qemu.org/docs/master/devel/build-system.html)及 [Buildroot 手册](https://buildroot.org/downloads/manual/manual.html)准备环境。必须使用支持 BabbleSim 的 QEMU fork。环境搭建示例：
 

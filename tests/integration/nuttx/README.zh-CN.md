@@ -4,9 +4,9 @@
 
 ## 准备环境
 
-先按仓库 README 的[本地 Linux 环境搭建](../../../docs/zh-CH/README.md#本地-linux)安装 BSWorld 并设置 `BSWORLD_ROOT`。
+推荐使用[已发布的 Docker 镜像](../../../docker/README.zh-CN.md#运行测试)，其中已包含 BTSak 和 NimBLE 固件。选择 NuttX 套件时使用 `pytest tests/integration/nuttx`。
 
-Docker 测试镜像已包含 BTSak 和 NimBLE 固件。以下步骤用于本机 Linux 构建。`NUTTX_DIR`、`NUTTX_APPS_DIR` 用于 BTSak；`NUTTX_NIMBLE_DIR`、`NUTTX_NIMBLE_APPS_DIR` 用于 NimBLE。两个配置分别使用独立源码树，因为 NuttX 的 Make 构建会在源码根目录生成同名 `nuttx`，apps 也有配置相关的编译产物。
+以下步骤用于本机 Linux 构建。先按仓库 README 的[本地 Linux 环境搭建](../../../docs/zh-CH/README.md#本地-linux)安装 BSWorld 并设置 `BSWORLD_ROOT`。`NUTTX_DIR`、`NUTTX_APPS_DIR` 用于 BTSak；`NUTTX_NIMBLE_DIR`、`NUTTX_NIMBLE_APPS_DIR` 用于 NimBLE。两个配置分别使用独立源码树，因为 NuttX 的 Make 构建会在源码根目录生成同名 `nuttx`，apps 也有配置相关的编译产物。
 
 本机 Linux 构建先参考 Apache NuttX 官方[安装文档](https://nuttx.apache.org/docs/latest/quickstart/install.html)。Ubuntu 24.04 可安装以下依赖；sim 配置使用主机 GCC/multilib，不需要 ARM 交叉工具链：
 

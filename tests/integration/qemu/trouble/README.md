@@ -15,6 +15,8 @@ This test runs the upstream TrouBLE Battery Service peripheral example inside th
 
 ## Build and Run
 
+We recommend the [Docker test image](../../../../docker/README.md#select-a-suite), using `tests/integration/qemu/trouble` as the pytest target.
+
 For native Linux, compile with the parent [QEMU / Buildroot README](../README.md), retain the BabbleSim/Controller exports and `BSWORLD_QEMU_BIN`, `BSWORLD_QEMU_KERNEL`, `BSWORLD_QEMU_ROOTFS`, then run from the repository root:
 
 ```sh

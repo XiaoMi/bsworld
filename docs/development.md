@@ -2,11 +2,21 @@
 
 [English](development.md) | [中文](zh-CH/development.md)
 
-For local development, prepare dependencies and install BSWorld using the README's [local Linux setup](../README.md#local-linux), then run the commands below. For container test commands, see the [Docker guide](../docker/README.md#run-tests).
+We recommend the [published Docker image](../docker/README.md#use-a-published-image) for development checks and integration tests. Mount your checkout at `/workspace` to check the current code; see the [Docker test commands](../docker/README.md#run-tests). For a native Python environment, follow the README's [local Linux setup](../README.md#local-linux).
 
 ## Run Unit Tests
 
-Run from the repository root:
+With the published image, run from the repository root:
+
+```sh
+sudo docker run --rm \
+  --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
+  --env PYTHONDONTWRITEBYTECODE=1 \
+  -e PYTHONPATH=/workspace \
+  ghcr.io/xiaomi/bsworld:latest pytest tests/unit -q -p no:cacheprovider
+```
+
+With a local Python environment:
 
 ```sh
 cd "$BSWORLD_ROOT"
@@ -14,39 +24,38 @@ source .venv/bin/activate
 pytest tests/unit -q
 ```
 
-## Unit-Tested Contracts
+## Unit Test Coverage and Organization
 
-The fast unit suites cover the framework contracts described in the README:
+Tests under `tests/unit/` are organized by subsystem. Each test should focus on one stable public behavior, with a name that describes the behavior it verifies.
 
-- CLI flags, output directories, xdist identity sharing, and `--no-hci-dump`: `tests/unit/test_plugin.py`
-- Environment-selected artifact paths, BabbleSim binary/module readiness checks and native executable readiness checks: `tests/unit/test_env.py`, `tests/unit/test_artifact_paths.py`, and `tests/unit/test_dependency_readiness.py`
-- Virtual Controller setup, Application registration, device ID allocation, and topology lifecycle: `tests/unit/test_topology.py` and `tests/unit/test_babblesim_backend.py`
-- asyncio-compatible discrete time, callback and I/O ordering, clock protocol behavior, and FIFO-backed `wait_log`: `tests/unit/test_scheduler.py` and `tests/unit/test_runtime.py`
-- Virtual Controller BTSnoop socket capture: `tests/unit/test_hci.py`
-- RF interference and attenuation configuration: `tests/unit/test_interference.py` and `tests/unit/test_babblesim_backend.py`
+| Test file | Coverage |
+|---|---|
+| `test_plugin.py` | pytest plugin options, output directories, xdist identity sharing, and `--no-hci-dump` |
+| `test_env.py` | Environment variables, artifact path resolution, and runtime environment detection |
+| `test_artifact_paths.py` | Environment-selected artifact paths for Zephyr, NuttX, and QEMU tests |
+| `test_dependency_readiness.py` | BabbleSim binaries/modules, Controller files, and executable permissions |
+| `test_topology.py` | Topology lifecycle, Application registration, generic process management, and Controller allocation |
+| `test_babblesim_backend.py` | BabbleSim process arguments, device IDs and Controller setup, RF interference and attenuation, trace conversion, and cleanup |
+| `test_hci.py` | Virtual Controller BTSnoop socket capture |
+| `test_scheduler.py` | Discrete simulation time, standard asyncio primitives, callback and I/O ordering |
+| `test_bsim_clock.py` | FIFO registration, binary message encoding, connection and response timeouts, partial I/O, and disconnect handling |
+| `test_runtime.py` | FIFO log capture, complete-line matching, and `wait_log` |
+| `test_interference.py` | RF interference and attenuation configuration validation |
 
 Application behavior, RF propagation itself, and end-to-end Bluetooth LE examples are covered by the simulation suites under `tests/integration/*`.
-
-## Unit Test Organization
-
-Unit tests should cover stable behavior and module contracts, not incidental control flow. Prefer one focused assertion path per test and group tests by the subsystem they protect:
-
-- `tests/unit/test_plugin.py`: pytest plugin options and session environment.
-- `tests/unit/test_topology.py`: topology orchestration, generic process lifecycle, and Controller allocation.
-- `tests/unit/test_babblesim_backend.py`: BabbleSim process arguments, device ID allocation, interference, trace conversion, and cleanup.
-- `tests/unit/test_hci.py`: Virtual Controller BTSnoop socket capture.
-- `tests/unit/test_scheduler.py`: event loop time switching, standard asyncio primitives, and I/O ordering.
-- `tests/unit/test_bsim_clock.py`: FIFO registration, binary message encoding, connection and response timeouts, partial I/O, and disconnect handling.
-- `tests/unit/test_runtime.py`: FIFO log capture and complete-line matching.
-- `tests/unit/test_interference.py`: RF configuration validation.
-
-`tests/integration/babblesim/test_babblesim_clock.py` exercises the Python clock against a real PHY, including resource cleanup, PHY disconnects, an unresponsive PHY, and a PHY killed before clock connection. It requires the normal BabbleSim build but no built Application or Controller.
-
-Avoid tests that only pin private fallback order or implementation table ordering. If a behavior matters, name the test after the user-visible contract it protects.
 
 ## Linting
 
 Use [Ruff](https://docs.astral.sh/ruff/) for Python linting:
+
+```sh
+sudo docker run --rm \
+  --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
+  -e PYTHONPATH=/workspace \
+  ghcr.io/xiaomi/bsworld:latest ruff check --no-cache src tests
+```
+
+With a local Python environment, check or fix lint findings:
 
 ```sh
 ruff check src tests
@@ -76,6 +85,8 @@ Keep platform-specific profiles, source configuration, and build instructions wi
 
 Branch coverage is provided by [coverage.py](https://coverage.readthedocs.io/) and enabled via `[tool.coverage.run]` in `pyproject.toml`.
 
+Run the following commands in the local Python environment:
+
 ```sh
 # Unit-only coverage, fast and no firmware/BabbleSim required
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
@@ -83,7 +94,7 @@ python -m coverage run -m pytest \
   -p pytest_asyncio.plugin -p bsworld.plugin tests/unit
 python -m coverage report
 
-# Manual runtime dependency setup, then simulation without coverage instrumentation
+# Native integration tests after compiling the required firmware
 pytest tests/integration/ -n auto
 ```
 

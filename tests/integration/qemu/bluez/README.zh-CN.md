@@ -16,6 +16,8 @@ Bumble 在这些用例中只作为行为可控的对端。测试主体仍然是 
 
 ## 构建与运行
 
+推荐使用 [Docker 测试镜像](../../../../docker/README.zh-CN.md#选择测试套件)，将 pytest 测试路径设为 `tests/integration/qemu/bluez`。
+
 本机 Linux 按父目录 [QEMU / Buildroot README](../README.zh-CN.md) 编译，保留 BabbleSim、Controller 变量及 `BSWORLD_QEMU_BIN`、`BSWORLD_QEMU_KERNEL`、`BSWORLD_QEMU_ROOTFS`，再从仓库根目录运行：
 
 ```sh

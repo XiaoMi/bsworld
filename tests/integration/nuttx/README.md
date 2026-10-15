@@ -4,9 +4,9 @@
 
 ## Prepare the Environment
 
-Install BSWorld and set `BSWORLD_ROOT` using the repository README's [local Linux setup](../../../README.md#local-linux).
+We recommend the [published Docker image](../../../docker/README.md#run-tests), which includes BTSak and NimBLE firmware. Select the NuttX suite with `pytest tests/integration/nuttx`.
 
-The Docker test image includes BTSak and NimBLE firmware. The steps below are for native Linux builds. `NUTTX_DIR` and `NUTTX_APPS_DIR` serve BTSak; `NUTTX_NIMBLE_DIR` and `NUTTX_NIMBLE_APPS_DIR` serve NimBLE. Each configuration uses separate source trees because Make produces an in-tree executable named `nuttx`, and apps contains configuration-dependent build outputs.
+The steps below are for native Linux builds. Install BSWorld and set `BSWORLD_ROOT` using the repository README's [local Linux setup](../../../README.md#local-linux). `NUTTX_DIR` and `NUTTX_APPS_DIR` serve BTSak; `NUTTX_NIMBLE_DIR` and `NUTTX_NIMBLE_APPS_DIR` serve NimBLE. Each configuration uses separate source trees because Make produces an in-tree executable named `nuttx`, and apps contains configuration-dependent build outputs.
 
 For native Linux builds, follow the Apache NuttX official [installation guide](https://nuttx.apache.org/docs/latest/quickstart/install.html). Ubuntu 24.04 can use the following dependencies. Simulator configurations use host GCC/multilib rather than an ARM cross toolchain:
 

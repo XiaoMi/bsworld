@@ -28,7 +28,7 @@ BSWorld 为每个 HCI socket 启动一个虚拟 Controller：
 
 ## 构建
 
-Docker 测试镜像已包含 Controller。以下命令用于本机 Linux 构建。
+推荐使用的 [Docker 测试镜像](../../docker/README.zh-CN.md#使用已发布镜像)已包含 Controller。以下命令用于本机 Linux 构建。
 
 先按照[README 构建说明](../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim，并保留 `BSWORLD_ROOT`、`BSIM_OUT_PATH`、`BSIM_COMPONENTS_PATH` 和 `BSIM_BASE_PATH`。本机请先按 [Zephyr 环境说明](../../tests/integration/zephyr/samples/common/source/README.zh-CN.md)设置 `ZEPHYR_WORKSPACE`。
 

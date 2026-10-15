@@ -16,9 +16,7 @@ BSWorld's first-party code is licensed under Apache License 2.0. Imported or reu
 
 ## Development Setup
 
-Prepare the Python environment using the README's [local Linux setup](README.md#local-linux). Development checks and coverage commands are documented in [Development and unit tests](docs/development.md).
-
-For integration tests, use the [Docker test image](docker/README.md#run-tests), or follow the README's [build instructions](README.md#build-and-test) and platform READMEs to compile BabbleSim, the Controller, and the relevant Applications locally.
+We recommend the [Docker test image](docker/README.md#run-tests) with your checkout mounted at `/workspace` for lint, unit tests, and integration tests. To change firmware or build configuration, [build your own image](docker/README.md#build).
 
 ## Making Changes
 
@@ -32,10 +30,10 @@ For integration tests, use the [Docker test image](docker/README.md#run-tests), 
 
 ## Validation
 
-Run the checks relevant to the change. At minimum, framework changes should pass:
+Run the checks relevant to the change in a [Docker shell](docker/README.md#shell) with your checkout mounted, or in the local Python environment. At minimum, framework changes should pass:
 
 ```sh
-ruff check src tests
+ruff check --no-cache src tests
 pytest tests/unit/
 ```
 

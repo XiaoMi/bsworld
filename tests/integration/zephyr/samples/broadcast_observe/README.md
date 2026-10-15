@@ -6,7 +6,7 @@ Validate advertising, passive scanning, and targeted interference with recovery.
 
 ## Build
 
-The Docker test image includes this group's firmware. The commands below are for native Linux builds.
+The recommended [Docker test image](../../../../../docker/README.md#run-tests) includes this group's firmware. Use its suite-selection commands with `tests/integration/zephyr/samples/broadcast_observe`. The commands below are for native Linux builds.
 
 Prepare Zephyr, BabbleSim, and the Virtual Controller from the parent README's [environment setup](../README.md#environment-setup), retaining the workspace and build variables. These commands build the two upstream samples used by this group:
 

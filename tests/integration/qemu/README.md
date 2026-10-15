@@ -21,7 +21,9 @@ The Buildroot and package versions are pinned by the validated Buildroot revisio
 
 ## Prepare the Environment
 
-The Docker test image includes QEMU, the kernel, and rootfs. The steps below are for native Linux builds. First build BabbleSim from [README build instructions](../../../README.md#build-and-test) and the [Controller](../../../components/bt_virt_controller/README.md), retaining `BSWORLD_ROOT`, `BSIM_OUT_PATH`, and `BSIM_COMPONENTS_PATH`.
+We recommend the [published Docker image](../../../docker/README.md#run-tests), which includes QEMU, the kernel, and rootfs. Select the QEMU suites with `pytest tests/integration/qemu`.
+
+The steps below are for native Linux builds. First build BabbleSim from [README build instructions](../../../README.md#build-and-test) and the [Controller](../../../components/bt_virt_controller/README.md), retaining `BSWORLD_ROOT`, `BSIM_OUT_PATH`, and `BSIM_COMPONENTS_PATH`.
 
 Native Linux builds can follow the official [QEMU build documentation](https://www.qemu.org/docs/master/devel/build-system.html) and [Buildroot manual](https://buildroot.org/downloads/manual/manual.html). Use the BabbleSim-aware QEMU fork. Example environment preparation:
 

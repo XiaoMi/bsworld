@@ -363,7 +363,9 @@ COPY --from=buildroot /opt/buildroot/output-bsworld-linux/images/Image /opt/firm
 COPY --from=buildroot /opt/buildroot/output-bsworld-linux/images/rootfs.cpio /opt/firmware/qemu/rootfs.cpio
 COPY --from=bsworld --chown=$BUILD_UID:$BUILD_GID /opt/venv /opt/venv
 
+# Make tests.integration helpers importable through the pytest console command.
 ENV PATH="/opt/venv/bin:$PATH" \
+    PYTHONPATH=/workspace \
     LANG=C.UTF-8 LC_ALL=C.UTF-8 PYTHONUNBUFFERED=1 \
     BSWORLD_ROOT=/workspace \
     BSWORLD_BSIM_DIR=/opt/babblesim/build \

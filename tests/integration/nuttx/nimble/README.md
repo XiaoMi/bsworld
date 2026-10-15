@@ -41,6 +41,8 @@ The test waits for the stock NuttX examples' connection, service discovery, and 
 
 ## Run
 
+We recommend the [Docker test image](../../../../docker/README.md#select-a-suite), using `tests/integration/nuttx/nimble` as the pytest target.
+
 For native Linux, compile with [source/README.md](source/README.md), retain the BabbleSim and Controller variables, then switch back to the BSWorld Python environment and run:
 
 ```sh

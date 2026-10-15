@@ -16,9 +16,7 @@ BSWorld 自有代码使用 Apache License 2.0。引入或复用的第三方组�
 
 ## 搭建开发环境
 
-先按 README 的[本地 Linux 环境搭建](README.md#本地-linux)准备 Python 环境。开发检查和覆盖率命令见[开发和单元测试](development.md)。
-
-集成测试可以使用 [Docker 测试镜像](../../docker/README.zh-CN.md#运行测试)，或按照 README 的[构建说明](README.md#构建与测试)及各平台 README，在本机编译 BabbleSim、虚拟 Controller 和相应业务程序。
+推荐使用 [Docker 测试镜像](../../docker/README.zh-CN.md#运行测试)，将仓库挂载到 `/workspace`，执行静态检查、单元测试和集成测试。修改固件或构建配置时，[自行构建镜像](../../docker/README.zh-CN.md#构建)。
 
 ## 修改代码
 
@@ -32,10 +30,10 @@ BSWorld 自有代码使用 Apache License 2.0。引入或复用的第三方组�
 
 ## 验证修改
 
-运行与修改范围相符的检查。框架代码至少应通过：
+以下检查在挂载当前仓库的 [Docker 终端](../../docker/README.zh-CN.md#容器终端)或本机 Python 环境中执行。框架代码至少应通过：
 
 ```sh
-ruff check src tests
+ruff check --no-cache src tests
 pytest tests/unit/
 ```
 

@@ -15,7 +15,7 @@
 
 ## 环境准备
 
-使用 Docker 测试镜像时可以直接执行各套件的 pytest 命令。以下准备步骤用于本机 Linux 构建。
+推荐使用[已发布的 Docker 镜像](../../../../docker/README.zh-CN.md#运行测试)，其中已包含全部八个 Zephyr 示例。选择 Zephyr 套件时使用 `pytest tests/integration/zephyr/samples`。以下准备步骤用于本机 Linux 构建。
 
 先按照 [Zephyr 工作区说明](common/source/README.zh-CN.md)准备源码和 SDK，并按[README 构建说明](../../../../docs/zh-CH/README.md#构建与测试)编译 BabbleSim，再按[虚拟 Controller README](../../../../components/bt_virt_controller/README.zh-CN.md)编译 Controller。
 

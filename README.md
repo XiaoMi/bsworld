@@ -123,7 +123,26 @@ Apache NimBLE provides a complete example of one Host stack using BSWorld across
 
 ## Quick Start
 
-BSWorld supports building and testing on Linux/x86_64, using a local Python environment or Docker. The native setup below uses Ubuntu 24.04.
+BSWorld runs on Linux/x86_64. We recommend the published Docker image, which includes Python, BSWorld, and all firmware needed by the integration tests. You can also build the image from the Dockerfile or prepare a native Linux environment.
+
+### Docker (Recommended)
+
+Install Docker Engine using the official [Ubuntu instructions](https://docs.docker.com/engine/install/ubuntu/), then pull the image and run its integration tests:
+
+```sh
+sudo docker pull ghcr.io/xiaomi/bsworld:latest
+mkdir -p .cache/docker-results
+# The published image runs as UID/GID 1000.
+sudo chown 1000:1000 .cache/docker-results
+sudo docker run --rm \
+  -e PYTHONPATH=/workspace \
+  --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
+  ghcr.io/xiaomi/bsworld:latest
+```
+
+These commands run the integration tests packaged in the image and save `pytest.xml`, logs, and captures under `.cache/docker-results` in the current directory. `latest` selects the most recent environment image published from `main` after passing CI tests.
+
+To test your current checkout, mount the repository root at `/workspace`; firmware uses the compiled artifacts in the image. Mounting instructions, suite selection, unit tests, lint, and image build commands are described in the [Docker guide](docker/README.md).
 
 ### Local Linux
 
@@ -182,52 +201,6 @@ cd "$BSWORLD_ROOT"
 source .venv/bin/activate
 pytest tests/integration -n auto
 ```
-
-### Docker
-
-See the [Docker guide](docker/README.md) for build options, test commands, logs, and CI usage.
-
-The [Dockerfile](docker/Dockerfile) builds all test firmware and produces a test image containing BSWorld, pytest, BabbleSim runtime components, the Controller, Zephyr samples, NuttX images, and QEMU / Linux Guest artifacts. The final image keeps the programs, firmware, trace converter, and libraries required to run tests.
-
-Build from the repository root:
-
-```sh
-sudo docker build --progress=plain -f docker/Dockerfile \
-  --build-arg BUILD_UID="$(id -u)" --build-arg BUILD_GID="$(id -g)" \
-  --build-arg BUILD_JOBS=4 \
-  -t bsworld:dev .
-```
-
-The image sets the firmware environment variables and runs integration tests by default. Save reports and logs on the host:
-
-```sh
-mkdir -p .cache/docker-results
-sudo docker run --rm \
-  --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  bsworld:dev
-```
-
-To test the current checkout, mount it at `/workspace`; firmware remains under `/opt`:
-
-```sh
-sudo docker run --rm \
-  --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
-  --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  bsworld:dev
-```
-
-Pass a pytest command after the image name to select a suite:
-
-```sh
-sudo docker run --rm \
-  --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
-  --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  bsworld:dev \
-  pytest tests/integration/zephyr/samples/heart_rate -n 2 \
-    --out-dir /output --junitxml=/output/heart-rate.xml
-```
-
-The [GitHub Actions workflow](.github/workflows/ci.yml) first runs Ruff and unit tests on the runner. Once both pass, it runs integration tests with the current checkout in the matching Docker environment, building a candidate if needed, then publishes tested images from `main` to GHCR. Reports and logs are uploaded even when tests fail.
 
 ## Documentation
 

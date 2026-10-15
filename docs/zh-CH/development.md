@@ -2,11 +2,21 @@
 
 [English](../development.md) | [中文](development.md)
 
-本机开发先按 README 的[本地 Linux 环境搭建](README.md#本地-linux)准备依赖并安装 BSWorld，再执行本文命令。容器中的测试命令见 [Docker 文档](../../docker/README.zh-CN.md#运行测试)。
+推荐使用[已发布的 Docker 镜像](../../docker/README.zh-CN.md#使用已发布镜像)执行开发检查和集成测试。将仓库挂载到 `/workspace` 即可检查当前代码，命令见 [Docker 测试说明](../../docker/README.zh-CN.md#运行测试)。需要本机 Python 环境时，按 README 的[本地 Linux 环境搭建](README.md#本地-linux)配置。
 
 ## 运行单元测试
 
-在仓库根目录运行：
+使用已发布镜像，在仓库根目录运行：
+
+```sh
+sudo docker run --rm \
+  --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
+  --env PYTHONDONTWRITEBYTECODE=1 \
+  -e PYTHONPATH=/workspace \
+  ghcr.io/xiaomi/bsworld:latest pytest tests/unit -q -p no:cacheprovider
+```
+
+使用本机 Python 环境时：
 
 ```sh
 cd "$BSWORLD_ROOT"
@@ -14,39 +24,38 @@ source .venv/bin/activate
 pytest tests/unit -q
 ```
 
-## 单元测试覆盖的核心行为
+## 单元测试覆盖与组织
 
-单元测试重点验证 README 中承诺的以下行为：
+`tests/unit/` 按子系统组织测试，每个测试聚焦一项稳定的对外行为，名称应描述所验证的行为。
 
-- 命令行参数、输出目录、xdist 运行标识共享和 `--no-hci-dump`：`tests/unit/test_plugin.py`
-- 环境变量指定产物路径、BabbleSim 程序与动态模型检查，以及原生程序就绪检查：`tests/unit/test_env.py`、`tests/unit/test_artifact_paths.py`、`tests/unit/test_dependency_readiness.py`
-- 虚拟 Controller 初始化、业务程序登记、设备编号分配和拓扑生命周期：`tests/unit/test_topology.py`、`tests/unit/test_babblesim_backend.py`
-- 与 asyncio 兼容的离散时间、回调和 I/O 执行顺序、时钟协议与 FIFO 日志读取：`tests/unit/test_scheduler.py` 和 `tests/unit/test_runtime.py`
-- 虚拟 Controller BTSnoop socket 抓包：`tests/unit/test_hci.py`
-- RF 干扰和路径衰减配置：`tests/unit/test_interference.py`、`tests/unit/test_babblesim_backend.py`
+| 测试文件 | 覆盖内容 |
+|---|---|
+| `test_plugin.py` | pytest 插件参数、输出目录、xdist 运行标识共享和 `--no-hci-dump` |
+| `test_env.py` | 环境变量读取、产物路径解析和运行环境识别 |
+| `test_artifact_paths.py` | Zephyr、NuttX 和 QEMU 测试使用环境变量指定的产物路径 |
+| `test_dependency_readiness.py` | BabbleSim 程序与动态模型、Controller 文件和执行权限检查 |
+| `test_topology.py` | 测试拓扑生命周期、业务程序登记、通用进程管理和 Controller 分配 |
+| `test_babblesim_backend.py` | BabbleSim 进程参数、设备编号与 Controller 初始化、RF 干扰与路径衰减、跟踪文件转换和清理 |
+| `test_hci.py` | 虚拟 Controller BTSnoop socket 抓包 |
+| `test_scheduler.py` | 离散仿真时间、标准 asyncio 原语、回调和 I/O 执行顺序 |
+| `test_bsim_clock.py` | FIFO 注册、二进制消息编码、连接与应答超时、不完整读写和断连处理 |
+| `test_runtime.py` | FIFO 日志采集、完整行匹配和 `wait_log` |
+| `test_interference.py` | RF 干扰与路径衰减配置校验 |
 
 业务程序行为、RF 传播本身，以及端到端 Bluetooth LE 示例，由 `tests/integration/*` 下的仿真测试覆盖。
-
-## 单元测试组织
-
-单元测试应该覆盖稳定的对外行为，而不是偶然形成的内部控制流。每个测试尽量只验证一项明确行为，并按子系统分组：
-
-- `tests/unit/test_plugin.py`：pytest 插件参数和测试会话环境。
-- `tests/unit/test_topology.py`：测试拓扑编排、通用进程生命周期和 Controller 分配。
-- `tests/unit/test_babblesim_backend.py`：BabbleSim 进程参数、设备编号分配、干扰、跟踪文件转换和清理。
-- `tests/unit/test_hci.py`：虚拟 Controller BTSnoop socket 抓包。
-- `tests/unit/test_scheduler.py`：事件循环时间切换、标准 asyncio 原语和 I/O 执行顺序。
-- `tests/unit/test_bsim_clock.py`：FIFO 注册、二进制消息编码、连接与应答超时、不完整读写和断连处理。
-- `tests/unit/test_runtime.py`：FIFO 日志采集和完整行匹配。
-- `tests/unit/test_interference.py`：RF 配置校验。
-
-`tests/integration/babblesim/test_babblesim_clock.py` 使用真实 PHY 验证 Python 时钟，覆盖资源清理、PHY 断连、无应答超时，以及连接前 PHY 被强杀的情况。该测试需要构建 BabbleSim，但不依赖业务程序或 Controller 镜像。
-
-不要编写仅用于固定私有回退顺序或内部表项顺序的测试。如果某项行为确实重要，测试名称应直接描述它所验证的外部可见约定。
 
 ## 静态检查
 
 使用 [Ruff](https://docs.astral.sh/ruff/) 执行 Python 静态检查：
+
+```sh
+sudo docker run --rm \
+  --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
+  -e PYTHONPATH=/workspace \
+  ghcr.io/xiaomi/bsworld:latest ruff check --no-cache src tests
+```
+
+使用本机 Python 环境时，可执行检查或自动修复：
 
 ```sh
 ruff check src tests
@@ -76,6 +85,8 @@ ruff check --fix src tests
 
 分支覆盖率由 [coverage.py](https://coverage.readthedocs.io/) 统计，并在 `pyproject.toml` 的 `[tool.coverage.run]` 中启用。
 
+以下命令在本机 Python 环境中执行：
+
 ```sh
 # 只统计单元测试覆盖率，速度快，不需要固件或 BabbleSim
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
@@ -83,7 +94,7 @@ python -m coverage run -m pytest \
   -p pytest_asyncio.plugin -p bsworld.plugin tests/unit
 python -m coverage report
 
-# 手动准备运行依赖；仿真测试不插入覆盖率探针
+# Native integration tests after compiling the required firmware
 pytest tests/integration/ -n auto
 ```
 
