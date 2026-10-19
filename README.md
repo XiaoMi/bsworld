@@ -156,6 +156,8 @@ sudo apt-get install -y \
   gcc-multilib g++-multilib coreutils findutils grep sed
 ```
 
+`gcc-multilib` and `g++-multilib` provide the 32-bit toolchain BabbleSim and Zephyr `nrf52_bsim` targets need.
+
 For a new checkout:
 
 ```sh
@@ -171,6 +173,8 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
 ```
+
+This `.venv` is for BSWorld: `pip install -e .`, pytest, and `ruff`. Zephyr uses a second virtual environment, `$ZEPHYR_WORKSPACE/.venv`, only for `west` and `west build`. The [Zephyr workspace guide](tests/integration/zephyr/samples/common/source/README.md) creates it. Activate the environment that owns the next command. Activation changes `PATH` and leaves exported `BSWORLD_*` and BabbleSim variables set.
 
 For development checks:
 
@@ -199,6 +203,24 @@ export BSWORLD_BSIM_DIR="$BSIM_OUT_PATH"
 ```
 
 Then follow the README commands for the [Controller](components/bt_virt_controller/README.md), [Zephyr samples](tests/integration/zephyr/samples/README.md), [NuttX](tests/integration/nuttx/README.md), and [QEMU / Buildroot](tests/integration/qemu/README.md).
+
+#### Prebuilt binaries
+
+A [release archive](https://github.com/XiaoMi/bsworld/releases/download/v0.3.9/bsworld-prebuilt-v0.3.9.zip) supplies Exodus-packaged firmware (Virtual Controller, eight Zephyr samples, NuttX BTSak and NimBLE) for native Linux tests without a Zephyr or NuttX toolchain. BabbleSim still has to be built as shown [above](#build-and-test); the archive has no QEMU assets. Choose the release that matches your checkout (`build-info.txt` lists its commits).
+
+```sh
+ver=v0.3.9
+curl -fL -o "/tmp/bsworld-prebuilt-${ver}.zip" \
+  "https://github.com/XiaoMi/bsworld/releases/download/${ver}/bsworld-prebuilt-${ver}.zip"
+unzip -qo "/tmp/bsworld-prebuilt-${ver}.zip" -d /tmp
+rsync -a --prune-empty-dirs --include='*/' --include='**/prebuilt/***' --exclude='*' \
+  "/tmp/dist/bsworld-prebuilt-${ver}/" "$BSWORLD_ROOT/"
+export BSWORLD_BT_VIRT_CONTROLLER_BIN="$BSWORLD_ROOT/components/bt_virt_controller/prebuilt/bt_virt_controller/exodus/bin/bt_virt_controller"
+export BSWORLD_ZEPHYR_BROADCASTER_BIN="$BSWORLD_ROOT/tests/integration/zephyr/samples/broadcast_observe/prebuilt/broadcaster/exodus/bin/zephyr.exe"
+export BSWORLD_ZEPHYR_OBSERVER_BIN="$BSWORLD_ROOT/tests/integration/zephyr/samples/broadcast_observe/prebuilt/observer/exodus/bin/zephyr.exe"
+# Same prebuilt/<name>/exodus/bin/<launcher> path for BSWORLD_ZEPHYR_{PERIPHERAL_HR,CENTRAL_HR,PERIODIC_ADV,PERIODIC_SYNC,MESH,MESH_PROVISIONER}_BIN and BSWORLD_NUTTX_{BTSAK,NIMBLE}_BIN.
+pytest tests/integration/zephyr/samples/broadcast_observe -q --no-ellisys
+```
 
 ```sh
 cd "$BSWORLD_ROOT"

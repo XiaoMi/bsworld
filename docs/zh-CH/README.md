@@ -156,6 +156,8 @@ sudo apt-get install -y \
   gcc-multilib g++-multilib coreutils findutils grep sed
 ```
 
+`gcc-multilib` 和 `g++-multilib` 提供 BabbleSim 与 Zephyr `nrf52_bsim` 目标所需的 32 位工具链。
+
 首次使用时，先获取仓库：
 
 ```sh
@@ -171,6 +173,8 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
 ```
+
+这个 `.venv` 用于 BSWorld 自身：`pip install -e .`、pytest 和 `ruff`。Zephyr 使用另一个虚拟环境 `$ZEPHYR_WORKSPACE/.venv`，只运行 `west` 和 `west build`。创建方法见 [Zephyr 工作区说明](../../tests/integration/zephyr/samples/common/source/README.zh-CN.md)。运行命令前先激活对应环境。激活只会改变 `PATH`，已经导出的 `BSWORLD_*` 和 BabbleSim 变量会保留。
 
 开发检查：
 
@@ -199,6 +203,24 @@ export BSWORLD_BSIM_DIR="$BSIM_OUT_PATH"
 ```
 
 然后按各目录 README 的命令配置和编译 [Controller](../../components/bt_virt_controller/README.zh-CN.md)、[Zephyr 示例](../../tests/integration/zephyr/samples/README.zh-CN.md)、[NuttX](../../tests/integration/nuttx/README.zh-CN.md)及 [QEMU / Buildroot](../../tests/integration/qemu/README.zh-CN.md)。
+
+#### 预编译二进制
+
+[Release 压缩包](https://github.com/XiaoMi/bsworld/releases/download/v0.3.9/bsworld-prebuilt-v0.3.9.zip)提供已经用 Exodus 打包的固件（虚拟 Controller、八个 Zephyr 示例，以及 NuttX BTSak 和 NimBLE），供本机 Linux 在没有 Zephyr 或 NuttX 工具链时运行测试。压缩包不含 BabbleSim，仍需按上面的[构建与测试](#构建与测试)自行编译，也不含 QEMU 相关文件。请选择与检出对应的 Release（`build-info.txt` 记录了对应提交）。
+
+```sh
+ver=v0.3.9
+curl -fL -o "/tmp/bsworld-prebuilt-${ver}.zip" \
+  "https://github.com/XiaoMi/bsworld/releases/download/${ver}/bsworld-prebuilt-${ver}.zip"
+unzip -qo "/tmp/bsworld-prebuilt-${ver}.zip" -d /tmp
+rsync -a --prune-empty-dirs --include='*/' --include='**/prebuilt/***' --exclude='*' \
+  "/tmp/dist/bsworld-prebuilt-${ver}/" "$BSWORLD_ROOT/"
+export BSWORLD_BT_VIRT_CONTROLLER_BIN="$BSWORLD_ROOT/components/bt_virt_controller/prebuilt/bt_virt_controller/exodus/bin/bt_virt_controller"
+export BSWORLD_ZEPHYR_BROADCASTER_BIN="$BSWORLD_ROOT/tests/integration/zephyr/samples/broadcast_observe/prebuilt/broadcaster/exodus/bin/zephyr.exe"
+export BSWORLD_ZEPHYR_OBSERVER_BIN="$BSWORLD_ROOT/tests/integration/zephyr/samples/broadcast_observe/prebuilt/observer/exodus/bin/zephyr.exe"
+# Same prebuilt/<name>/exodus/bin/<launcher> path for BSWORLD_ZEPHYR_{PERIPHERAL_HR,CENTRAL_HR,PERIODIC_ADV,PERIODIC_SYNC,MESH,MESH_PROVISIONER}_BIN and BSWORLD_NUTTX_{BTSAK,NIMBLE}_BIN.
+pytest tests/integration/zephyr/samples/broadcast_observe -q --no-ellisys
+```
 
 ```sh
 cd "$BSWORLD_ROOT"

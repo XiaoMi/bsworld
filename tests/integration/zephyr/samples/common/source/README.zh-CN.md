@@ -6,7 +6,11 @@
 
 ## 准备工作区
 
-先按仓库 README 的[本地 Linux 环境搭建](../../../../../../docs/zh-CH/README.md#本地-linux)安装 BSWorld，再参考 Zephyr 官方[入门文档](https://docs.zephyrproject.org/latest/develop/getting_started/index.html)安装额外依赖，并创建以下工作区。源码版本与 Dockerfile 一致：
+先按仓库 README 的[本地 Linux 环境搭建](../../../../../../docs/zh-CH/README.md#本地-linux)安装 BSWorld，再参考 Zephyr 官方[入门文档](https://docs.zephyrproject.org/latest/develop/getting_started/index.html)安装额外依赖，并创建以下工作区。源码版本与 Dockerfile 一致。
+
+`$ZEPHYR_WORKSPACE/.venv` 只用于 `west` 和 `west build`。`$BSWORLD_ROOT/.venv` 仍然是 `pip install -e .` 和 pytest 的环境。下面的命令会显式激活 Zephyr 环境；运行 pytest 前再激活 `$BSWORLD_ROOT/.venv`。`source .../bin/activate` 只会改变 `PATH`，已经导出的 `BSWORLD_*` 和 BabbleSim 变量会保留。
+
+本地 Linux 环境会安装 `gcc-multilib` 和 `g++-multilib`，因为 BabbleSim 和 `nrf52_bsim` 开发板需要 32 位主机工具链。
 
 ```sh
 export ZEPHYR_WORKSPACE="$HOME/zephyrproject"
