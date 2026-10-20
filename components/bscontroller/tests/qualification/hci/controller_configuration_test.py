@@ -17,14 +17,14 @@ from bscontroller.linklayer import (
     ControlOpcode,
     LlId,
 )
-from tests.cases import (
+from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.peer import establish
-from tests.tester import (
+from tests.qualification.peer import establish
+from tests.qualification.tester import (
     create_connection,
     extended_parameters,
 )

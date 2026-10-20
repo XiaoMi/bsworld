@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import select
 import selectors
 import socket
@@ -60,7 +59,7 @@ class RadioSelector(selectors.BaseSelector):
         step_us = (
             self.max_step_us
             if timeout is None
-            else min(self.max_step_us, math.ceil(max(0, timeout) * PHY_TIME_UNITS_PER_SECOND))
+            else min(self.max_step_us, round(max(0, timeout) * PHY_TIME_UNITS_PER_SECOND))
         )
         if step_us > 0:
             before = self.clock.now_us
@@ -76,24 +75,26 @@ class RadioEventLoop(asyncio.SelectorEventLoop):
 
     def __init__(self, max_step_us: int = DEFAULT_MAX_STEP_US):
         self.radio_selector = self.selector_type(selectors.DefaultSelector(), max_step_us)
-        self._time_offset = 0.0
         super().__init__(selector=self.radio_selector)
+        self._wall_clock_resolution = self._clock_resolution
 
     def time(self) -> float:
         clock = self.radio_selector.clock
-        return self._time_offset + (clock.now_us / PHY_TIME_UNITS_PER_SECOND if clock is not None else time.monotonic())
+        return time.monotonic() if clock is None else clock.now_us / PHY_TIME_UNITS_PER_SECOND
 
     def bind_clock(self, clock: RadioClock) -> None:
         if self.radio_selector.clock is not None:
             raise RuntimeError('a radio clock is already bound')
-        current_time = self.time()
+        # Wall-time deadlines must not cross into the simulation time domain.
+        if any(not timer.cancelled() for timer in self._scheduled):
+            raise RuntimeError('cannot bind a radio clock with active timers')
         self.radio_selector.clock = clock
-        self._time_offset = current_time - clock.now_us / PHY_TIME_UNITS_PER_SECOND
+        # Allow float roundoff at a due timer without admitting the next tick.
+        self._clock_resolution = 0.5 / PHY_TIME_UNITS_PER_SECOND
 
     def unbind_clock(self) -> None:
-        current_time = self.time()
         self.radio_selector.clock = None
-        self._time_offset = current_time - time.monotonic()
+        self._clock_resolution = self._wall_clock_resolution
 
     def run_forever(self) -> None:
         try:
@@ -119,7 +120,7 @@ class ControllerSelector(RadioSelector):
             return ready
         start_us, admitted = self.pending
         deadline = (
-            self.clock.now_us + math.ceil(timeout * PHY_TIME_UNITS_PER_SECOND)
+            self.clock.now_us + round(timeout * PHY_TIME_UNITS_PER_SECOND)
             if self.clock is not None and timeout is not None
             else None
         )

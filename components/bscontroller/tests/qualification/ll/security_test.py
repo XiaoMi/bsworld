@@ -30,31 +30,31 @@ from bscontroller.linklayer import (
     ControlOpcode,
     LlId,
 )
-from tests.cases import (
+from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.link import (
+from tests.qualification.link import (
     _EncryptedPeer,
     check_connection_silent,
 )
-from tests.peer import (
+from tests.qualification.peer import (
     establish,
     exchange_features,
     host_send,
     peer_send,
     received_acl,
 )
+from tests.qualification.tester import (
+    LOWER_CENTRAL_PUBLIC_ADDRESS,
+    LOWER_PERIPHERAL_PUBLIC_ADDRESS,
+)
 from tests.support import (
     AUTHENTICATED_PAYLOAD_TIMEOUT_DEFAULT,
     AUTHENTICATED_PAYLOAD_TIMEOUT_UNIT_US,
     CONTROLLER_COMPANY_IDENTIFIER,
-)
-from tests.tester import (
-    LOWER_CENTRAL_PUBLIC_ADDRESS,
-    LOWER_PERIPHERAL_PUBLIC_ADDRESS,
 )
 
 ErrorCode = hci.HCI_ErrorCode

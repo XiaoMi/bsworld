@@ -6,18 +6,18 @@
 import pytest
 
 from bscontroller import hci
-from tests.cases import (
+from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.hci.device_discovery_test import (
+from tests.qualification.hci.device_discovery_test import (
     _start_scanning,
 )
-from tests.ll import security_test as security
-from tests.peer import host_send
-from tests.tester import create_connection, create_sync
+from tests.qualification.ll import security_test as security
+from tests.qualification.peer import host_send
+from tests.qualification.tester import create_connection, create_sync
 
 ErrorCode = hci.HCI_ErrorCode
 ReportDataStatus = hci.HCI_LE_Periodic_Advertising_Report_Event.DataStatus

@@ -41,7 +41,7 @@ Successful labelled executions produce a pytest pass and a protocol `PARTIAL` ve
 
 ## Test Infrastructure
 
-The suite owns its wire encoders and HCI probes (`tester.py`), raw connection peer and ACL helpers (`peer.py`), shared lower-tester link operations (`link.py`), periodic advertiser/observer (`periodic.py`), and case registration and verdict logging (`cases.py`). Protocol procedures and chapter-local helpers live in the corresponding `hci/` or `ll/` chapter file. Controller implementation tests live in `unit/`; they do not test this suite's encoders, registrations or verdict algorithms.
+The suite owns its wire encoders and HCI probes (`tester.py`), raw connection peer and ACL helpers (`peer.py`), shared lower-tester link operations (`link.py`), periodic advertiser/observer (`periodic.py`), and case registration and verdict logging (`cases.py`). Protocol procedures and chapter-local helpers live in the corresponding `hci/` or `ll/` chapter file. Controller implementation tests live in `../unit/`; they do not test this suite's encoders, registrations or verdict algorithms.
 
 Both HCI and LL chapters use `PROCEDURES |= procedure_cases(...)`. Each variant contains its workbook description and procedure arguments. Use `pytest.param(..., marks=...)` for per-case execution marks. The Test Purpose is a comment immediately above its registration; the implementation docstring retains initial conditions, numbered steps, expected outcomes and specification references. Collection and execution depend only on these test definitions.
 
@@ -51,25 +51,22 @@ The original workbook and review/test-plan documents are not runtime inputs. Cas
 
 ```sh
 export BSIM_OUT_PATH=/path/to/bsim/build
-python -m pytest tests/hci tests/ll -v -rs
+python -m pytest tests/qualification -n auto --dist worksteal -v -rs
 
 # Protocol tests and implementation unit tests.
-python -m pytest tests/ -v -rs
-
-# Optional parallel execution after installing pytest-xdist.
-python -m pytest tests/hci tests/ll -n auto --dist worksteal -q -rs
+python -m pytest tests/ -n auto --dist worksteal -v -rs
 
 # Precision-only cases must execute when the native PHY is available.
-python -m pytest tests/hci tests/ll -m 'limited and not source_conflict' -v
+python -m pytest tests/qualification -m 'limited and not source_conflict' -v
 
 # Includes source-only and mixed cases; unresolved source paths may skip.
-python -m pytest tests/hci tests/ll -m source_conflict -v -rs
+python -m pytest tests/qualification -m source_conflict -v -rs
 
 ```
 
 `BSIM_SCAN_MAX_CODED_RANGE_M` declares the simulated `TSPX_scan_max_coded_range` in meters for the Coded latest-scanner case. Its default is 0 for colocated simulated endpoints. The stimulus applies the source's half-us range-delay floor before rounding the combined response delay to whole microseconds, and records the declaration in the protocol log.
 
-Parallel cases have independent PHY processes, simulation IDs, FIFOs and log directories. Identical channels in different simulations cannot interfere. Workers share host resources; some source procedures remain long because they require repeated complete packet observations or simulated silence windows. Parallel scheduling leaves each case's steps, simulation timing and verdict requirements unchanged. See [parallel execution](README.md#parallel-execution) for installation and worker selection.
+Parallel cases have independent PHY processes, simulation IDs, FIFOs and log directories. Identical channels in different simulations cannot interfere. Workers share host resources; some source procedures remain long because they require repeated complete packet observations or simulated silence windows. Parallel scheduling leaves each case's steps, simulation timing and verdict requirements unchanged. See [parallel execution](../README.md#parallel-execution) for installation and worker selection.
 
 ## Procedure Requirements
 
@@ -79,4 +76,4 @@ Each registration documents Test Purpose and each case's description. Each metho
 
 ## License
 
-Copyright 2026 Xiaomi Corporation. Licensed under Apache License 2.0; see [LICENSE](../LICENSE).
+Copyright 2026 Xiaomi Corporation. Licensed under Apache License 2.0; see [LICENSE](../../LICENSE).

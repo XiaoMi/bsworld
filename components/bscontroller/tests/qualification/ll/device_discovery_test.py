@@ -72,13 +72,13 @@ from bscontroller.radio.base import (
     PHY_TIME_UNITS_PER_SECOND,
     Phy,
 )
-from tests.cases import (
+from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.link import (
+from tests.qualification.link import (
     ADVERTISING_SID,
     AUXILIARY_CHANNEL,
     AUXILIARY_OFFSET_US,
@@ -95,21 +95,13 @@ from tests.link import (
     _ScanRound,
     _start_scanning,
 )
-from tests.peer import PeerLink
-from tests.periodic import (
+from tests.qualification.peer import PeerLink
+from tests.qualification.periodic import (
     PeriodicAdvertiser,
     PeriodicTrain,
     subevent_channels,
 )
-from tests.support import (
-    AD_CHANNEL_MAP_UPDATE_INDICATION,
-    AD_COMPLETE_LOCAL_NAME,
-    AD_PERIODIC_RESPONSE_TIMING_INFORMATION,
-)
-from tests.support import (
-    advertising_data as build_advertising_data,
-)
-from tests.tester import (
+from tests.qualification.tester import (
     DUT_ADDRESS,
     LOWER_CENTRAL_PUBLIC_ADDRESS,
     LOWER_DATA_ACCESS_ADDRESS,
@@ -133,6 +125,14 @@ from tests.tester import (
     request_pdu,
     scan_parameters,
     set_extended_data,
+)
+from tests.support import (
+    AD_CHANNEL_MAP_UPDATE_INDICATION,
+    AD_COMPLETE_LOCAL_NAME,
+    AD_PERIODIC_RESPONSE_TIMING_INFORMATION,
+)
+from tests.support import (
+    advertising_data as build_advertising_data,
 )
 
 ErrorCode = hci.HCI_ErrorCode

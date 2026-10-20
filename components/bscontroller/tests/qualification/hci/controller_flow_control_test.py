@@ -9,13 +9,13 @@ import pytest
 
 from bscontroller import hci
 from bscontroller.linklayer import PDU_DATA_PAYLOAD_SIZE_MAX
-from tests.cases import (
+from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.peer import establish, host_send
+from tests.qualification.peer import establish, host_send
 from tests.support import L2CAP_LE_U_DYNAMIC_CID_RANGE_START
 
 # The configured DUT declares eight 251-octet HCI ACL buffers.

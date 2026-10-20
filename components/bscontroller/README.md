@@ -110,7 +110,7 @@ The Host exchanges an H4 HCI byte stream over the Unix socket. The service accep
 
 ## Threads, clocks, and resource ownership
 
-Create `RadioController` inside the Host's running event loop. On startup, it constructs and runs its Controller in a dedicated thread. Host input enters a thread-safe queue as immutable H4 packets and is consumed between radio steps; enqueuing input does not interrupt an outstanding PHY request. Controller output returns to the Host event loop through `call_soon_threadsafe`. The Host and worker do not share mutable protocol state.
+Create `RadioController` inside the Host's running event loop. On startup, it constructs and runs its Controller in a dedicated thread. Startup returns after FIFO connection so the session can start other PHY participants. Host input enters a thread-safe queue as immutable H4 packets and is consumed after the initial PHY grant and between radio steps; enqueuing input does not interrupt an outstanding PHY request. Controller output returns to the Host event loop through `call_soon_threadsafe`. The Host and worker do not share mutable protocol state.
 
 RF time uses integer microseconds. Each worker maintains its own clock endpoint and synchronizes with the common simulation timeline through PHY requests and responses. A standalone Host can use an additional clock endpoint, with a PHY device identity distinct from every Controller.
 
@@ -129,6 +129,8 @@ Once existing I/O and ready work have been handled, `RadioEventLoop` converts id
 
 Public exports include `RadioController`, `RadioSession`, `RadioEventLoop`, `Radio`, `Phy`, `Received`, and `hci`. For a direct connection, send complete H4 packets with `controller.on_packet(packet)` and register an output sink with `controller.set_packet_sink(sink)` before starting the worker. The sink must implement `on_packet(packet: bytes)`.
 
+For an external Host, pass `hci_socket` to `RadioController`. The worker owns socket reads, H4 parsing, and replies in its Controller thread. Startup returns once the socket is listening; commands wait until the worker has received its initial PHY grant at time zero and bound its clock. Socket mode does not use the cross-thread packet queue or HCI polling timer.
+
 This example joins a PHY already started by the caller. The PHY must use the same `sim_id` and have two devices: identity `0` for the Controller and `1` for the Host clock.
 
 ```python
@@ -136,15 +138,14 @@ import asyncio
 from pathlib import Path
 
 from bscontroller import RadioController, RadioEventLoop, RadioSession
-from bscontroller.hci.transport import H4Server
 
 
 async def main():
-    controller = RadioController("controller", "F0:F1:F2:F3:F4:01")
-    # H4Server attaches the HCI output sink before the worker starts.
-    async with H4Server(controller, Path("/tmp/radio.sock")) as endpoint:
-        async with RadioSession("example", [(0, controller)], clock_dev_id=1):
-            await endpoint.finished
+    controller = RadioController(
+        "controller", "F0:F1:F2:F3:F4:01", hci_socket=Path("/tmp/radio.sock")
+    )
+    async with RadioSession("example", [(0, controller)], clock_dev_id=1):
+        await controller.terminated
 
 
 with asyncio.Runner(loop_factory=RadioEventLoop) as runner:
@@ -171,14 +172,16 @@ with asyncio.Runner(loop_factory=RadioEventLoop) as runner:
     │   ├── linklayer/
     │   ├── radio/
     │   └── runtime/
-    ├── hci/                # HCI protocol cases
-    └── ll/                 # Link-layer protocol cases
+    ├── qualification/      # Protocol cases, lower testers, and case registration
+    │   ├── hci/
+    │   └── ll/
+    └── support.py          # Shared wire values and payload builders
 ```
 
 ```sh
 python -m pip install -e '.[test]'
-python -m pytest tests/unit -q
-python -m pytest tests/hci tests/ll -n 4 -q
+python -m pytest tests/unit -n auto --dist worksteal -q
+python -m pytest tests/qualification -n auto --dist worksteal -v -rs
 python -m build
 ```
 

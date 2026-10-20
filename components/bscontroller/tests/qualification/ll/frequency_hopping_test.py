@@ -24,15 +24,15 @@ from bscontroller.linklayer import (
     ControlOpcode,
     LlId,
 )
-from tests.cases import (
+from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.link import check_advertising_stopped
-from tests.peer import establish, exchange_features
-from tests.tester import (
+from tests.qualification.link import check_advertising_stopped
+from tests.qualification.peer import establish, exchange_features
+from tests.qualification.tester import (
     LOWER_CENTRAL_PUBLIC_ADDRESS,
     LOWER_DATA_ACCESS_ADDRESS,
     LOWER_PERIPHERAL_PUBLIC_ADDRESS,

@@ -43,13 +43,13 @@ from bscontroller.linklayer import (
 )
 from bscontroller.linklayer.timing import LL_CLOCK_JITTER_US, LL_LOCAL_SCA_PPM
 from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND, Phy
-from tests.cases import (
+from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.link import (
+from tests.qualification.link import (
     ADVERTISING_SID,
     AUXILIARY_CHANNEL,
     AUXILIARY_OFFSET_US,
@@ -66,8 +66,8 @@ from tests.link import (
     _ScanRound,
     _wire_event,
 )
-from tests.peer import establish
-from tests.tester import (
+from tests.qualification.peer import establish
+from tests.qualification.tester import (
     DUT_ADDRESS,
     LOWER_CENTRAL_PUBLIC_ADDRESS,
     LOWER_DATA_ACCESS_ADDRESS,

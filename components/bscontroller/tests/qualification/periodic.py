@@ -30,7 +30,7 @@ from bscontroller.linklayer import (
     AdvertisingPduType,
 )
 from bscontroller.radio.base import Phy
-from tests.tester import (
+from tests.qualification.tester import (
     LOWER_PERIPHERAL_PUBLIC_ADDRESS,
     PEER_ADDRESS,
     LinkParameters,

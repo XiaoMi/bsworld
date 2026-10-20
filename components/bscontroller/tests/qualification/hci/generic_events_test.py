@@ -8,16 +8,16 @@ import random
 import pytest
 
 from bscontroller import hci
-from tests.cases import (
+from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.hci.controller_information_test import (
+from tests.qualification.hci.controller_information_test import (
     EXPECTED_COMMANDS,
 )
-from tests.tester import (
+from tests.qualification.tester import (
     create_connection,
     create_sync,
     extended_enable,

@@ -338,6 +338,10 @@ class BabbleSimRadio:
         self._connection().controller_loop = loop
         loop.bind_clock(_ControllerClock(self))
 
+    async def synchronize(self) -> None:
+        """Acquire the PHY grant at the current time without advancing it."""
+        self.now_us = await self._connection().wait(self.now_us)
+
     @staticmethod
     def params(channel: int, phy: Phy = Phy.LE_1M) -> tuple[int, int]:
         if channel in PHY_ADV_CHANNEL_FREQUENCIES_MHZ:

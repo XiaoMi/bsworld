@@ -44,26 +44,18 @@ class Worker:
         self.started = asyncio.Event()
         self.terminated = asyncio.get_running_loop().create_future()
         self.closed = False
-        self.packets = []
         self.instances.append(self)
-
-    def set_packet_sink(self, sink):
-        self.sink = sink
-
-    def on_packet(self, packet):
-        self.packets.append(packet)
-        self.sink.on_packet(bytes.fromhex("040e0401030c00"))
 
     async def start(self, sim_id, dev_id):
         self.identity = (sim_id, dev_id)
         self.started.set()
-        if self.failure is not None:
-            raise self.failure
 
     async def close(self):
         self.closed = True
         if not self.terminated.done():
             self.terminated.set_result(None)
+        if self.failure is not None:
+            raise self.failure
 
 
 @pytest.fixture
@@ -99,7 +91,7 @@ def test_python_controller_rejects_invalid_worker_interval(tmp_path, interval):
         _python_controller(tmp_path, max_step_us=interval)
 
 
-async def test_python_controller_exposes_h4_and_releases_socket(tmp_path, worker):
+async def test_python_controller_delegates_h4_and_capture_to_worker(tmp_path, worker):
     ctl = _python_controller(tmp_path, public_address="c0:ff:ee:00:00:01", max_step_us=250)
     await ctl.start(ProcessManager(), SimpleNamespace(), log_dir=tmp_path)
     instance = worker.instances[0]
@@ -108,31 +100,19 @@ async def test_python_controller_exposes_h4_and_releases_socket(tmp_path, worker
     assert instance.address == "C0:FF:EE:00:00:01"
     assert instance.max_step_us == 250
     assert instance.options["hci_snoop_file"] == ctl.hci_snoop_file
+    assert instance.options["hci_socket"] == ctl.hci_sock
     assert ctl.hci_snoop_file == tmp_path / "bscontroller" / "hci0.snoop"
-    reader, writer = await asyncio.open_unix_connection(ctl.hci_sock)
-    try:
-        # Fragmented H:4 input must become exactly one Controller packet.
-        writer.write(bytes.fromhex("0103"))
-        await writer.drain()
-        writer.write(bytes.fromhex("0c00"))
-        await writer.drain()
-        assert await reader.readexactly(7) == bytes.fromhex("040e0401030c00")
-        assert instance.packets == [bytes.fromhex("01030c00")]
-    finally:
-        writer.close()
-        await writer.wait_closed()
-        await ctl.stop()
+    await ctl.stop()
     assert instance.closed
     assert not ctl.hci_sock.exists()
     await ctl.stop()
 
 
-async def test_python_controller_stop_before_worker_task_runs(tmp_path, worker):
+async def test_python_controller_uses_worker_defaults(tmp_path, worker):
     ctl = _python_controller(tmp_path)
     await ctl.start(ProcessManager(), SimpleNamespace(), log_dir=tmp_path)
-    # There is no event-loop yield between task creation and cancellation.
     await ctl.stop()
-    assert worker.instances[0].options == {"hci_snoop_file": ctl.hci_snoop_file}
+    assert worker.instances[0].options == {"hci_snoop_file": ctl.hci_snoop_file, "hci_socket": ctl.hci_sock}
     assert worker.instances[0].max_step_us == 1750
     assert worker.instances[0].closed
     assert not ctl.hci_sock.exists()
@@ -155,14 +135,18 @@ async def test_python_controller_passes_application_capture_path(tmp_path, worke
     ctl = _python_controller(tmp_path, hci_snoop_file=path)
     try:
         await ctl.start(ProcessManager(), SimpleNamespace(), log_dir=tmp_path)
-        assert worker.instances[0].options == {"hci_snoop_file": path}
+        assert worker.instances[0].options == {"hci_snoop_file": path, "hci_socket": ctl.hci_sock}
     finally:
         await ctl.stop()
 
 
-async def test_python_controller_start_failure_preserves_existing_path(tmp_path, worker):
+async def test_python_controller_start_failure_preserves_existing_path(tmp_path, worker, monkeypatch):
     ctl = _python_controller(tmp_path)
     ctl.hci_sock.write_text("owned by another endpoint")
+    async def fail_start(self, sim_id, dev_id):
+        raise FileExistsError(ctl.hci_sock)
+
+    monkeypatch.setattr(worker, "start", fail_start)
     with pytest.raises(FileExistsError):
         await ctl.start(ProcessManager(), SimpleNamespace(), log_dir=tmp_path)
     assert ctl.hci_sock.read_text() == "owned by another endpoint"

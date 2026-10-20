@@ -6,13 +6,13 @@
 import pytest
 
 from bscontroller import hci
-from tests.cases import (
+from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.tester import (
+from tests.qualification.tester import (
     PEER_ADDRESS,
     adv_pdu,
     scan_parameters,

@@ -35,17 +35,17 @@ from bscontroller.linklayer import (
     PDU_HEADER_SIZE,
     LlId,
 )
-from tests.cases import (
+from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.link import ErrorCode, Opcode
-from tests.ll import connection_test as connection
-from tests.ll import security_test as security
-from tests.peer import establish, exchange_features
-from tests.tester import (
+from tests.qualification.link import ErrorCode, Opcode
+from tests.qualification.ll import connection_test as connection
+from tests.qualification.ll import security_test as security
+from tests.qualification.peer import establish, exchange_features
+from tests.qualification.tester import (
     LOWER_CENTRAL_PUBLIC_ADDRESS,
     LOWER_DATA_ACCESS_ADDRESS,
     LOWER_PERIPHERAL_PUBLIC_ADDRESS,

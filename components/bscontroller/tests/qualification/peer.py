@@ -35,7 +35,7 @@ from bscontroller.linklayer import (
     LlId,
 )
 from bscontroller.radio.base import Phy
-from tests.tester import (
+from tests.qualification.tester import (
     DUT_ADDRESS,
     PEER_ADDRESS,
     LinkParameters,

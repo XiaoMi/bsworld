@@ -108,7 +108,7 @@ Host 通过 Unix socket 收发 H4 HCI 字节流。服务接受一个 Host，Host
 
 ## 线程、时钟与资源生命周期
 
-`RadioController` 在 Host 的运行中事件循环内创建，启动后在自己的线程中构建并运行 Controller。Host 输入以不可变 H4 字节包进入线程安全队列，worker 在射频步骤之间处理；输入入队不会打断正在等待结果的 PHY 请求。Controller 输出通过 `call_soon_threadsafe` 返回 Host 事件循环，Host 与 worker 不共享可变协议状态。
+`RadioController` 在 Host 的运行中事件循环内创建，启动后在自己的线程中构建并运行 Controller。启动在 FIFO 连接后返回，让会话能够继续启动其他 PHY 参与者。Host 输入以不可变 H4 字节包进入线程安全队列，worker 在首次 PHY 同步完成后、射频步骤之间处理；输入入队不会打断正在等待结果的 PHY 请求。Controller 输出通过 `call_soon_threadsafe` 返回 Host 事件循环，Host 与 worker 不共享可变协议状态。
 
 射频时间以整数微秒表示。每个 worker 维护自己的时钟端点，通过 PHY 请求与响应同步到共同的仿真时间线。独立 Host 可以使用额外的时钟端点；Host 时钟与 Controller 时钟各自占用不同的 PHY 设备编号。
 
@@ -127,6 +127,8 @@ Host 通过 Unix socket 收发 H4 HCI 字节流。服务接受一个 Host，Host
 
 公开入口包括 `RadioController`、`RadioSession`、`RadioEventLoop`、`Radio`、`Phy`、`Received` 和 `hci`。直接接入时，调用 `controller.on_packet(packet)` 发送完整的 H4 包，并在启动 worker 之前使用 `controller.set_packet_sink(sink)` 注册输出接收器；接收器需实现 `on_packet(packet: bytes)`。
 
+外部 Host 接入时，向 `RadioController` 传入 `hci_socket`。worker 在 Controller 线程内完成 socket 读写、H4 解析与回复。启动在 socket 开始监听后返回；HCI 命令会等到零时刻的 PHY 同步完成并绑定时钟后才处理。socket 模式不使用跨线程报文队列和 HCI 轮询定时器。
+
 以下示例连接已由调用方启动的 PHY。PHY 使用相同的 `sim_id`，配置两个设备，设备编号 `0` 为 Controller，`1` 为 Host 时钟：
 
 ```python
@@ -134,15 +136,14 @@ import asyncio
 from pathlib import Path
 
 from bscontroller import RadioController, RadioEventLoop, RadioSession
-from bscontroller.hci.transport import H4Server
 
 
 async def main():
-    controller = RadioController("controller", "F0:F1:F2:F3:F4:01")
-    # H4Server 在启动 worker 前注册 HCI 输出接收器。
-    async with H4Server(controller, Path("/tmp/radio.sock")) as endpoint:
-        async with RadioSession("example", [(0, controller)], clock_dev_id=1):
-            await endpoint.finished
+    controller = RadioController(
+        "controller", "F0:F1:F2:F3:F4:01", hci_socket=Path("/tmp/radio.sock")
+    )
+    async with RadioSession("example", [(0, controller)], clock_dev_id=1):
+        await controller.terminated
 
 
 with asyncio.Runner(loop_factory=RadioEventLoop) as runner:
@@ -169,14 +170,16 @@ with asyncio.Runner(loop_factory=RadioEventLoop) as runner:
     │   ├── linklayer/
     │   ├── radio/
     │   └── runtime/
-    ├── hci/                # HCI 协议用例
-    └── ll/                 # 链路层协议用例
+    ├── qualification/      # 协议用例、下位测试器与用例注册
+    │   ├── hci/
+    │   └── ll/
+    └── support.py          # 两套测试共用的线格式常量与载荷构造
 ```
 
 ```sh
 python -m pip install -e '.[test]'
-python -m pytest tests/unit -q
-python -m pytest tests/hci tests/ll -n 4 -q
+python -m pytest tests/unit -n auto --dist worksteal -q
+python -m pytest tests/qualification -n auto --dist worksteal -v -rs
 python -m build
 ```
 

@@ -262,6 +262,25 @@ async def test_wait_packet_and_fragmented_ack(endpoints):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('now_us', [0, 1234])
+async def test_synchronize_waits_for_ack_without_advancing_time(endpoints, now_us):
+    device, phy = endpoints
+    radio = BabbleSimRadio()
+    radio.connection = device
+    radio.now_us = now_us
+
+    async def respond():
+        assert await phy.receive(12) == HEADER.pack(WAIT) + TIME.pack(now_us)
+        assert radio.now_us == now_us
+        for byte in HEADER.pack(WAIT_END):
+            await phy.send(bytes([byte]))
+            await asyncio.sleep(0)
+
+    await asyncio.gather(radio.synchronize(), respond())
+    assert radio.now_us == now_us
+
+
+@pytest.mark.asyncio
 async def test_blocking_clock_handles_fragmented_ack(endpoints):
     device, phy = endpoints
 

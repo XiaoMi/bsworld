@@ -16,17 +16,17 @@ from bscontroller.linklayer import (
     AdvertisingPduType,
 )
 from bscontroller.radio.base import Phy
-from tests.cases import (
+from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.periodic import (
+from tests.qualification.periodic import (
     PeriodicAdvertiser,
     PeriodicTrain,
 )
-from tests.tester import (
+from tests.qualification.tester import (
     PEER_ADDRESS,
     LinkParameters,
     adv_pdu,

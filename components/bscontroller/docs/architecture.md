@@ -68,8 +68,8 @@ All paths below are relative to `src/bscontroller/`.
 | `radio/babblesim.py` | BabbleSim registration, FIFO requests/responses, RF parameters, and radio time grants. This is a simulator adapter, not another Bluetooth protocol layer. |
 | `runtime/__init__.py` | Runtime process helper exports. |
 | `runtime/event_loop.py` | Simulation-time event loops and PHY I/O admission; runtime policy. |
-| `runtime/worker.py` | Construct and run a Controller in its owning thread, transferring immutable HCI packets; runtime policy. |
+| `runtime/worker.py` | Construct and run a Controller and its H4 socket in the owning thread; retain immutable packet handoff for in-process Hosts; runtime policy. |
 | `runtime/session.py` | Worker/session lifecycle and optional caller clock endpoint; runtime policy. |
 | `runtime/phy.py` | Locate, launch, and stop the BabbleSim PHY executable; runtime policy. |
 
-Unit test paths follow the source paths: `linklayer/bitstream.py` is tested in `tests/unit/linklayer/bitstream_test.py`, and `runtime/session.py` in `tests/unit/runtime/session_test.py`. Tests use fixtures and doubles from the test tree. HCI/LL procedure verdicts live in `tests/hci/` and `tests/ll/`.
+Unit test paths follow the source paths: `linklayer/bitstream.py` is tested in `tests/unit/linklayer/bitstream_test.py`, and `runtime/session.py` in `tests/unit/runtime/session_test.py`. Tests use fixtures and doubles from the test tree. HCI/LL procedure verdicts live in `tests/qualification/hci/` and `tests/qualification/ll/`.

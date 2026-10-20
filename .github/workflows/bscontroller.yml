@@ -46,8 +46,8 @@ jobs:
       - name: Run unit tests
         run: |
           mkdir -p "$RUNNER_TEMP/bscontroller-results"
-          python -m pytest tests/unit -q \
-            -p pytest_asyncio.plugin -p no:cacheprovider \
+          python -m pytest tests/unit -n auto --dist worksteal -q \
+            -p pytest_asyncio.plugin -p xdist.plugin -p no:cacheprovider \
             --junitxml="$RUNNER_TEMP/bscontroller-results/unit.xml"
 
       - name: Install BabbleSim build tools
@@ -74,8 +74,8 @@ jobs:
 
       - name: Run HCI and Link Layer protocol tests
         run: |
-          python -m pytest tests/hci tests/ll -v -rs \
-            -p pytest_asyncio.plugin -p no:cacheprovider \
+          python -m pytest tests/qualification -n auto --dist worksteal -v -rs \
+            -p pytest_asyncio.plugin -p xdist.plugin -p no:cacheprovider \
             --basetemp="$RUNNER_TEMP/bscontroller-results/protocol" \
             --junitxml="$RUNNER_TEMP/bscontroller-results/protocol.xml"
 

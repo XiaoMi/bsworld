@@ -17,7 +17,7 @@ from bscontroller.hci.controller import Controller
 from bscontroller.radio.babblesim import BabbleSimRadio
 from bscontroller.runtime.phy import find_phy
 from bscontroller.runtime.worker import RadioControllerWorker
-from tests.tester import (
+from tests.qualification.tester import (
     DUT_ADDRESS,
     AirTester,
     HciProbe,

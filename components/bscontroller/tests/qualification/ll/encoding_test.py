@@ -26,20 +26,20 @@ from bscontroller.linklayer import (
     LlId,
 )
 from bscontroller.radio.base import PHY_OCTET_BITS
-from tests.cases import (
+from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.link import (
+from tests.qualification.link import (
     CONNECTION_IFS_TOLERANCE_US,
     ErrorCode,
     _pending_connection,
     check_advertising_stopped,
 )
-from tests.peer import establish
-from tests.tester import (
+from tests.qualification.peer import establish
+from tests.qualification.tester import (
     DUT_ADDRESS,
     LOWER_CENTRAL_PUBLIC_ADDRESS,
     LOWER_DATA_ACCESS_ADDRESS,

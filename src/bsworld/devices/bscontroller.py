@@ -16,8 +16,6 @@
 
 from __future__ import annotations
 
-import asyncio
-from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -28,15 +26,12 @@ from .controller import Controller
 
 if TYPE_CHECKING:
     from bscontroller import RadioController
-    from bscontroller.hci.transport import H4Server
 
 
 @dataclass(eq=False, repr=False)
 class BSController(Controller):
     max_step_us: int | None = None
     _worker: RadioController | None = field(default=None, init=False, repr=False)
-    _endpoint: H4Server | None = field(default=None, init=False, repr=False)
-    _task: asyncio.Task | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -45,14 +40,13 @@ class BSController(Controller):
 
     async def start(self, pm: ProcessManager, env: Env, *, log_dir: Path) -> None:
         from bscontroller import RadioController
-        from bscontroller.hci.transport import H4Server
 
         if self._worker is not None:
             raise RuntimeError("BSController is already started")
         self.hci_snoop_file = (
             self.hci_snoop_file or log_dir / "bscontroller" / f"hci{self.controller_dev_id}.snoop"
         ).resolve()
-        options = {"hci_snoop_file": self.hci_snoop_file}
+        options = {"hci_snoop_file": self.hci_snoop_file, "hci_socket": self.hci_sock}
         if self.max_step_us is not None:
             options["max_step_us"] = self.max_step_us
         self._worker = RadioController(
@@ -63,34 +57,18 @@ class BSController(Controller):
             ),
             **options,
         )
-        self._endpoint = H4Server(self._worker, self.hci_sock)
         try:
-            await self._endpoint.__aenter__()
+            await self._worker.start(self.sim_id, self.controller_dev_id)
         except BaseException:
-            await self._worker.close()
-            self._worker = None
-            self._endpoint = None
+            try:
+                await self._worker.close()
+            finally:
+                self._worker = None
             raise
-        # Other Controllers, applications and the framework clock still need
-        # to register before a worker can finish its PHY connection.
-        self._task = asyncio.create_task(self._run(), name=f"bscontroller:hci{self.controller_dev_id}")
-
-    async def _run(self) -> None:
-        await self._worker.start(self.sim_id, self.controller_dev_id)
-        await self._worker.terminated
 
     async def stop(self) -> None:
-        if self._task is not None:
+        if self._worker is not None:
             try:
-                async with AsyncExitStack() as cleanup:
-                    cleanup.push_async_callback(self._endpoint.__aexit__, None, None, None)
-                    cleanup.push_async_callback(self._worker.close)
-                    self._task.cancel()
-                    try:
-                        await self._task
-                    except asyncio.CancelledError:
-                        pass
+                await self._worker.close()
             finally:
-                self._task = None
-                self._endpoint = None
                 self._worker = None

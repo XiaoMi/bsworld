@@ -8,14 +8,14 @@ import pytest
 from bscontroller import hci
 from bscontroller.linklayer import LL_ADV_PRIMARY_CHANNELS
 from bscontroller.radio.base import Phy
-from tests.cases import (
+from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.peer import establish
-from tests.tester import (
+from tests.qualification.peer import establish
+from tests.qualification.tester import (
     PEER_ADDRESS,
     adv_pdu,
     create_connection,

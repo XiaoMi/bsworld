@@ -9,18 +9,18 @@ import pytest
 
 from bscontroller import hci
 from bscontroller.linklayer import PDU_DATA_LLID_MASK, PDU_DATA_SN_MASK, PDU_HEADER_SIZE, LlId
-from tests.cases import (
+from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.peer import establish, peer_send
-from tests.support import L2CAP_LE_U_DYNAMIC_CID_RANGE_START
-from tests.tester import (
+from tests.qualification.peer import establish, peer_send
+from tests.qualification.tester import (
     LOWER_CENTRAL_PUBLIC_ADDRESS,
     LOWER_PERIPHERAL_PUBLIC_ADDRESS,
 )
+from tests.support import L2CAP_LE_U_DYNAMIC_CID_RANGE_START
 
 
 class _FrameReceiver:

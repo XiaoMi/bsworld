@@ -13,14 +13,14 @@ from bscontroller.linklayer import (
     AdvertisingPduType,
     LlId,
 )
-from tests.cases import (
+from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.peer import establish, host_send, peer_send
-from tests.tester import (
+from tests.qualification.peer import establish, host_send, peer_send
+from tests.qualification.tester import (
     adv_pdu,
     create_connection,
     legacy_parameters,

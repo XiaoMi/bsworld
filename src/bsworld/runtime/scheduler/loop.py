@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import selectors
 import time
 from typing import Any
@@ -84,11 +83,7 @@ class BsimSelector(selectors.BaseSelector):
         if ready or timeout == 0:
             return ready
 
-        timeout_us = (
-            self.max_step_us
-            if timeout is None
-            else math.ceil(max(0.0, timeout) * 1_000_000)
-        )
+        timeout_us = self.max_step_us if timeout is None else round(max(0.0, timeout) * 1_000_000)
         step_us = min(self.max_step_us, timeout_us)
         if step_us <= 0:
             return ready
@@ -118,8 +113,8 @@ class BsimEventLoop(asyncio.SelectorEventLoop):
             selectors.DefaultSelector(),
             max_step_us=max_step_us,
         )
-        self._time_offset = 0.0
         super().__init__(selector=self.bsim_selector)
+        self._wall_clock_resolution = self._clock_resolution
 
     @property
     def discrete_clock(self) -> DiscreteClock | None:
@@ -127,15 +122,16 @@ class BsimEventLoop(asyncio.SelectorEventLoop):
 
     def time(self) -> float:
         clock = self.discrete_clock
-        source_time = time.monotonic() if clock is None else clock.now_us / 1_000_000
-        return self._time_offset + source_time
+        return time.monotonic() if clock is None else clock.now_us / 1_000_000
 
     def bind_clock(self, clock: DiscreteClock) -> None:
-        current_time = self.time()
+        # Wall-time deadlines must not cross into the simulation time domain.
+        if any(not timer.cancelled() for timer in self._scheduled):
+            raise RuntimeError("cannot bind a discrete clock with active timers")
         self.bsim_selector.bind_clock(clock)
-        self._time_offset = current_time - clock.now_us / 1_000_000
+        # Allow float roundoff at a due timer without admitting the next tick.
+        self._clock_resolution = 0.5 / 1_000_000
 
     def unbind_clock(self, clock: DiscreteClock | None = None) -> None:
-        current_time = self.time()
         self.bsim_selector.unbind_clock(clock)
-        self._time_offset = current_time - time.monotonic()
+        self._clock_resolution = self._wall_clock_resolution

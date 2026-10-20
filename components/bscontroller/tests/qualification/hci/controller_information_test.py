@@ -6,14 +6,14 @@
 import pytest
 
 from bscontroller import hci
-from tests.cases import (
+from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.peer import establish
-from tests.tester import LOWER_PERIPHERAL_PUBLIC_ADDRESS
+from tests.qualification.peer import establish
+from tests.qualification.tester import LOWER_PERIPHERAL_PUBLIC_ADDRESS
 
 ErrorCode = hci.HCI_ErrorCode
 RADIO_CASES = {'HCI/CIN/BV-14-C'}

@@ -49,16 +49,18 @@ class H4Parser:
 class H4Server:
     """Serve one Host, terminating on disconnect or transport failure."""
 
-    def __init__(self, controller, path: Path, *, queue_size: int = 128):
+    def __init__(self, controller, path: Path, *, queue_size: int = 128, ready: asyncio.Event | None = None):
         if queue_size < 1:
             raise ValueError('queue_size must be positive')
         self.controller = controller
         self.path = Path(path)
+        self.ready = ready
         self.queue = asyncio.Queue(maxsize=queue_size)
         self.finished = asyncio.get_running_loop().create_future()
         self.server = None
         self.writer = None
         self.task = None
+        self._closing = False
         controller.set_packet_sink(self)
 
     async def __aenter__(self):
@@ -89,14 +91,17 @@ class H4Server:
             raise ValueError('Host disconnected during an H4 packet')
 
     async def _accept(self, reader, writer):
-        if self.writer is not None or self.finished.done():
+        if self._closing or self.writer is not None or self.finished.done():
             writer.close()
             await writer.wait_closed()
             return
         self.writer = writer
         self.task = asyncio.current_task()
-        tasks = [asyncio.create_task(self._read(reader)), asyncio.create_task(self._write())]
+        tasks = []
         try:
+            if self.ready is not None:
+                await self.ready.wait()
+            tasks = [asyncio.create_task(self._read(reader)), asyncio.create_task(self._write())]
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in done:
                 task.result()
@@ -119,6 +124,9 @@ class H4Server:
                 pass
 
     async def __aexit__(self, exc_type, exc, traceback):
+        # A connection accepted by asyncio may still have its callback queued.
+        # Reject it when that callback runs during server.wait_closed().
+        self._closing = True
         if self.server is not None:
             self.server.close()
         if self.task is not None and not self.task.done():

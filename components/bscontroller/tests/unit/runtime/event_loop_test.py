@@ -35,7 +35,7 @@ class Clock:
 
 
 @pytest.mark.parametrize(
-    'timeout,target', [(None, 1000), (0.002, 1000), (0.0000011, 2)]
+    'timeout,target', [(None, 1000), (0.002, 1000), (0.0000011, 1), (0.0000017, 2)]
 )
 def test_idle_selector_advances_bounded_simulation_time(timeout, target):
     delegate = Mock(spec=selectors.BaseSelector)
@@ -101,9 +101,8 @@ def test_event_loop_sleep_timeout_and_socket_use_standard_asyncio(loop_factory):
     clock = Clock()
     with asyncio.Runner(loop_factory=loop_factory) as runner:
         loop = runner.get_loop()
-        before = loop.time()
         loop.bind_clock(clock)
-        assert loop.time() == pytest.approx(before, abs=0.001)
+        assert loop.time() == 0
         with pytest.raises(RuntimeError, match='already bound'):
             loop.bind_clock(Clock())
 
@@ -130,9 +129,8 @@ def test_event_loop_sleep_timeout_and_socket_use_standard_asyncio(loop_factory):
                 writer.close()
 
         runner.run(exercise())
-        current = loop.time()
         loop.unbind_clock()
-        assert loop.time() == pytest.approx(current, abs=0.001)
+        assert loop.time() == pytest.approx(time.monotonic(), abs=0.001)
 
 
 @requires_runner
@@ -293,3 +291,124 @@ def test_controller_phy_io_watchdog_and_closed_loop_interrupt():
     finally:
         reader.close()
         writer.close()
+
+
+@pytest.fixture(params=[RadioEventLoop, ControllerEventLoop])
+def simulation_loop(request, monkeypatch):
+    loop = request.param()
+    clock = Clock()
+    clock.now_us = 1234567
+    loop.bind_clock(clock)
+    select = loop.radio_selector.select
+    polls = 0
+
+    def checked_select(timeout=None):
+        nonlocal polls
+        polls += 1
+        assert polls < 100, 'timer made no progress after rounding to microseconds'
+        return select(timeout)
+
+    monkeypatch.setattr(loop.radio_selector, 'select', checked_select)
+    try:
+        yield loop, clock
+    finally:
+        loop.unbind_clock()
+        loop.close()
+
+
+@pytest.mark.parametrize('delay_us', [1, 2])
+def test_sleep_uses_integer_microseconds_without_accumulating_error(simulation_loop, delay_us):
+    loop, clock = simulation_loop
+    start_us = clock.now_us
+
+    async def scenario():
+        observed = []
+        for _ in range(5):
+            await asyncio.sleep(delay_us / 1_000_000)
+            observed.append(clock.now_us - start_us)
+        return observed
+
+    assert loop.run_until_complete(scenario()) == [delay_us * n for n in range(1, 6)]
+
+
+@pytest.mark.parametrize('delay', [0, 1])
+def test_clock_binding_rejects_active_timers_without_changing_them(simulation_loop, delay):
+    loop, clock = simulation_loop
+    loop.unbind_clock()
+    cancelled = loop.call_later(0, pytest.fail, 'cancelled wall timer fired')
+    cancelled.cancel()
+    timer = loop.call_later(delay, pytest.fail, 'wall timer crossed clock binding')
+    deadline = timer.when()
+
+    with pytest.raises(RuntimeError, match='active timers'):
+        loop.bind_clock(clock)
+    assert loop.radio_selector.clock is None
+    assert timer.when() == deadline
+    assert not timer.cancelled()
+
+    timer.cancel()
+    loop.bind_clock(clock)
+    assert loop.time() == clock.now_us / 1_000_000
+
+
+def test_timer_fires_at_deadline_with_large_simulation_time(simulation_loop):
+    loop, clock = simulation_loop
+    # At this magnitude asyncio's default nanosecond due window rounds to zero.
+    clock.now_us = 33_554_432_000_000
+    start_us = clock.now_us
+    done = loop.create_future()
+    timer = loop.call_later(0.000001, done.set_result, None)
+    try:
+        loop.run_until_complete(done)
+        assert clock.now_us == start_us + 1
+    finally:
+        timer.cancel()
+
+
+def test_ready_work_does_not_run_the_next_microsecond_timer_early(simulation_loop):
+    loop, clock = simulation_loop
+    observed = []
+    start_us = clock.now_us
+    done = loop.create_future()
+    loop.call_at(loop.time() + 0.000001, lambda: done.set_result(clock.now_us))
+    loop.call_soon(lambda: observed.append(clock.now_us))
+
+    assert loop.run_until_complete(done) == start_us + 1
+    assert observed == [start_us]
+
+
+def test_timeout_and_cancellation_use_integer_microseconds(simulation_loop):
+    loop, clock = simulation_loop
+    start_us = clock.now_us
+    cancelled = loop.call_later(0.000001, pytest.fail, 'cancelled timer fired')
+    cancelled.cancel()
+
+    async def scenario():
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(asyncio.Event().wait(), 0.000001)
+        assert clock.now_us == start_us + 1
+        await asyncio.sleep(0.000002)
+        assert clock.now_us == start_us + 3
+
+    loop.run_until_complete(scenario())
+
+
+@requires_runner
+@pytest.mark.parametrize('delay_us,expected_events,expected_limit', [(500, [500], None), (501, [], 501)])
+def test_controller_gate_uses_the_same_rounded_deadline_as_timers(delay_us, expected_events, expected_limit):
+    clock = Clock()
+    with asyncio.Runner(loop_factory=ControllerEventLoop) as runner:
+        loop = runner.get_loop()
+        loop.bind_clock(clock)
+        events = []
+
+        async def scenario():
+            timer = loop.call_later(delay_us / 1_000_000, lambda: events.append(clock.now_us))
+            try:
+                assert await loop.before_phy_request(start_us=501) == expected_limit
+                assert events == expected_events
+            finally:
+                timer.cancel()
+                loop.unbind_clock()
+
+        runner.run(scenario())

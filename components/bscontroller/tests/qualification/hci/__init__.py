@@ -3,7 +3,7 @@
 
 """HCI test procedures organized by normative source chapter."""
 
-from tests.cases import ProcedureMap
+from tests.qualification.cases import ProcedureMap
 
 from . import (
     connection_management_test,

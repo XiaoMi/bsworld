@@ -11,7 +11,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from bscontroller import RadioController, RadioEventLoop, RadioSession, hci
-from bscontroller.hci.transport import H4Server
 from bscontroller.runtime import PhyProcess
 
 
@@ -132,12 +131,9 @@ class MockHost:
 async def run(sim_id, hci_socket):
     # A second Controller supplies actual RF advertisements for the scanner.
     advertiser = RadioController('advertiser', 'F0:F1:F2:F3:F4:01')
-    scanner = RadioController('scanner', 'F0:F1:F2:F3:F4:02')
+    scanner = RadioController('scanner', 'F0:F1:F2:F3:F4:02', hci_socket=hci_socket)
     advertising_host = HciClient(advertiser)
-    async with (
-        H4Server(scanner, hci_socket),
-        RadioSession(sim_id, [(0, advertiser), (1, scanner)], clock_dev_id=2),
-    ):
+    async with RadioSession(sim_id, [(0, advertiser), (1, scanner)], clock_dev_id=2):
         print(f'Controller H4 HCI socket: {hci_socket}')
         reader, writer = await asyncio.open_unix_connection(hci_socket)
         host = MockHost(reader, writer)

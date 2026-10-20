@@ -38,8 +38,8 @@ from bscontroller.linklayer import (
     LlId,
 )
 from bscontroller.radio.base import Phy
-from tests.peer import PeerLink
-from tests.tester import (
+from tests.qualification.peer import PeerLink
+from tests.qualification.tester import (
     DUT_ADDRESS,
     LOWER_CENTRAL_PUBLIC_ADDRESS,
     LOWER_DATA_ACCESS_ADDRESS,

@@ -1,6 +1,6 @@
 # BSController unit tests
 
-The `hci/`, `linklayer/`, `radio/`, and `runtime/` directories mirror `src/bscontroller/`. Each test file uses its implementation module's name with the `_test.py` suffix; for example, `linklayer/scheduler_test.py` exercises `src/bscontroller/linklayer/scheduler.py`. Shared fixtures and RF doubles remain in this directory's `conftest.py` and `helpers.py`. HCI and on-air procedure verdicts belong to `../hci/` and `../ll/`.
+The `hci/`, `linklayer/`, `radio/`, and `runtime/` directories mirror `src/bscontroller/`. Each test file uses its implementation module's name with the `_test.py` suffix; for example, `linklayer/scheduler_test.py` exercises `src/bscontroller/linklayer/scheduler.py`. Shared fixtures and RF doubles remain in this directory's `conftest.py` and `helpers.py`. HCI and on-air procedure verdicts belong to `../qualification/hci/` and `../qualification/ll/`.
 
 | Module tests | Invariants protected |
 |---|---|
@@ -20,7 +20,7 @@ The `hci/`, `linklayer/`, `radio/`, and `runtime/` directories mirror `src/bscon
 Avoid constant-by-constant mirrors, encode/decode self-consistency when a fixed wire vector is available, repeated protocol scenarios and Cartesian products whose rows all exercise the same condition. Use explicit expected values for algorithm boundaries. Add no test file solely to cover a forwarding property or an otherwise fully exercised initialization wrapper.
 
 ```sh
-python -m pytest tests/unit -q
+python -m pytest tests/unit -n auto --dist worksteal -q
 ```
 
 The test module is named for the implementation it exercises. HCI frame decoding belongs to `hci/controller_test.py`, CRC and Access Address vectors to `linklayer/bitstream_test.py`, CSA vectors to `linklayer/channel_selection_test.py`, and simulation sessions to `runtime/session_test.py`. Shared Host payload builders are in `../support.py`; no LocalLink fallback is exercised.

@@ -2,14 +2,14 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-"""Thread-owned Controllers with packet-only HCI handoff to the Host loop."""
+"""Thread-owned Controllers and H4 sockets, with optional in-process HCI handoff."""
 
 from __future__ import annotations
 
 import asyncio
 import sys
 from concurrent.futures import Future
-from contextlib import ExitStack
+from contextlib import AsyncExitStack, ExitStack
 from functools import partial
 from pathlib import Path
 from queue import Empty, SimpleQueue
@@ -18,6 +18,7 @@ from threading import Event, Thread
 from bscontroller.hci.backend import RadioBackend
 from bscontroller.hci.controller import Controller
 from bscontroller.hci.snoop import BtsnoopWriter
+from bscontroller.hci.transport import H4Server
 from bscontroller.radio.babblesim import BabbleSimRadio
 from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND
 from bscontroller.runtime.event_loop import DEFAULT_MAX_STEP_US, ControllerEventLoop
@@ -39,8 +40,8 @@ RADIO_WORKER_JOIN_TIMEOUT_SECONDS = 5.0
 class RadioControllerWorker:
     """An HCI source/sink whose Controller is constructed and used in one thread.
 
-    Host input is consumed only between radio steps. Enqueuing a packet does not
-    wake the Controller out of a pending PHY request.
+    Socket mode owns H4 reads and writes in the Controller loop. Without a socket,
+    in-process Host input is consumed between radio steps through a packet queue.
     """
 
     def __init__(
@@ -50,6 +51,7 @@ class RadioControllerWorker:
         *,
         max_step_us: int = DEFAULT_MAX_STEP_US,
         hci_snoop_file: Path | None = None,
+        hci_socket: Path | None = None,
     ):
         if max_step_us <= 0:
             raise ValueError('max_step_us must be positive')
@@ -57,8 +59,9 @@ class RadioControllerWorker:
         self.public_address = public_address
         self.max_step_us = max_step_us
         self.hci_snoop_file = hci_snoop_file
+        self.hci_socket = Path(hci_socket) if hci_socket is not None else None
         self.sink = None
-        self._input: SimpleQueue[bytes] = SimpleQueue()
+        self._input: SimpleQueue[bytes] | None = SimpleQueue() if self.hci_socket is None else None
         self._ready: Future[None] = Future()
         self._result: Future[None] = Future()
         self._stopping = Event()
@@ -69,14 +72,19 @@ class RadioControllerWorker:
         self.terminated: asyncio.Future[None] = self._host_loop.create_future()
 
     def set_packet_sink(self, sink) -> None:
+        if self.hci_socket is not None:
+            raise RuntimeError('socket Controllers use their H4 endpoint')
         if self._thread is not None:
             raise RuntimeError('attach the Host before starting the Controller')
         self.sink = sink
 
     def on_packet(self, packet: bytes) -> None:
+        if self._input is None:
+            raise RuntimeError('socket Controllers receive HCI through their H4 endpoint')
         self._input.put(bytes(packet))
 
     async def start(self, sim_id: str, dev_id: int) -> None:
+        """Wait for socket listening, or FIFO connection for an in-process Host."""
         if self._thread is not None:
             raise RuntimeError('Controller worker is already started')
         self._thread = Thread(target=self._run, args=(sim_id, dev_id), name=f'radio:{self.name}')
@@ -110,6 +118,7 @@ class RadioControllerWorker:
             self.terminated.set_result(None)
 
     def _handle_input(self, controller: Controller) -> None:
+        assert self._input is not None
         while True:
             try:
                 packet = self._input.get_nowait()
@@ -121,6 +130,10 @@ class RadioControllerWorker:
         while True:
             await asyncio.sleep(self.max_step_us / PHY_TIME_UNITS_PER_SECOND)
             self._handle_input(controller)
+
+    async def _advance_radio(self, radio: BabbleSimRadio, backend: RadioBackend) -> None:
+        while True:
+            await backend.link.advance_to_us(radio.now_us + self.max_step_us)
 
     async def _drive(self, sim_id: str, dev_id: int) -> None:
         loop = self._loop
@@ -139,26 +152,46 @@ class RadioControllerWorker:
                 self.name,
                 backend=backend,
                 public_address=self.public_address,
-                host_sink=_ControllerOutput(self),
+                host_sink=_ControllerOutput(self) if self.hci_socket is None else None,
                 snoop=snoop,
             )
-            try:
+            async with AsyncExitStack() as endpoints:
                 if self._stopping.is_set():
                     raise asyncio.CancelledError
-                await radio.connect(sim_id, dev_id)
-                radio.bind_loop(loop)
-                self._ready.set_result(None)
-                async with asyncio.TaskGroup() as tasks:
-                    input_task = tasks.create_task(self._receive_hci(controller))
-                    try:
-                        while True:
-                            self._handle_input(controller)
-                            await backend.link.advance_to_us(radio.now_us + self.max_step_us)
-                    finally:
-                        input_task.cancel()
-            finally:
-                if loop.radio_selector.clock is not None:
-                    loop.unbind_clock()
+                endpoint = None
+                radio_ready = asyncio.Event()
+                if self.hci_socket is not None:
+                    endpoint = await endpoints.enter_async_context(H4Server(controller, self.hci_socket, ready=radio_ready))
+                    # Listen before PHY connection: external Hosts must be able
+                    # to start and register while this worker is connecting.
+                    self._ready.set_result(None)
+                try:
+                    await radio.connect(sim_id, dev_id)
+                    if endpoint is None:
+                        # The session must start every participant before the
+                        # PHY can acknowledge this worker's startup barrier.
+                        self._ready.set_result(None)
+                    await radio.synchronize()
+                    radio.bind_loop(loop)
+                    radio_ready.set()
+                    async with asyncio.TaskGroup() as tasks:
+                        if endpoint is not None:
+                            radio_task = tasks.create_task(self._advance_radio(radio, backend))
+                            try:
+                                await endpoint.finished
+                            finally:
+                                radio_task.cancel()
+                        else:
+                            input_task = tasks.create_task(self._receive_hci(controller))
+                            try:
+                                while True:
+                                    self._handle_input(controller)
+                                    await backend.link.advance_to_us(radio.now_us + self.max_step_us)
+                            finally:
+                                input_task.cancel()
+                finally:
+                    if loop.radio_selector.clock is not None:
+                        loop.unbind_clock()
 
     async def close(self) -> None:
         if self._thread is None:
