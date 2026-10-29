@@ -16,7 +16,7 @@
 
 ## 准备环境
 
-[已发布的 Docker 镜像](../../../docker/README.zh-CN.md#运行测试)已包含 QEMU、kernel 和 rootfs，使用 `pytest tests/integration/qemu` 运行。以下步骤用于本机 Linux 构建，先按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim 和[虚拟 Controller](../../../components/bt_virt_controller/README.zh-CN.md)。
+[已发布的 Docker 镜像](../../../docker/README.zh-CN.md#运行测试)已包含 QEMU、kernel 和 rootfs，使用 `pytest tests/integration/qemu` 运行。以下步骤用于本机 Linux 构建，先按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim 和[虚拟 Controller](../../../docs/zh-CH/controllers.md#编译-zephyr-controller)。
 
 安装系统依赖（Ubuntu 24.04）：
 

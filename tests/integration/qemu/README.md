@@ -16,7 +16,7 @@ Runs a Buildroot AArch64 Linux guest with BlueZ and Apache NimBLE in a single-vC
 
 ## Prepare the Environment
 
-The [published Docker image](../../../docker/README.md#run-tests) already includes QEMU, the kernel and rootfs; select the suites with `pytest tests/integration/qemu`. The steps below are for native Linux builds. Build BabbleSim using the [repository instructions](../../../README.md#build-and-test) and the [Controller](../../../components/bt_virt_controller/README.md) first.
+The [published Docker image](../../../docker/README.md#run-tests) already includes QEMU, the kernel and rootfs; select the suites with `pytest tests/integration/qemu`. The steps below are for native Linux builds. Build BabbleSim using the [repository instructions](../../../README.md#build-and-test) and the [Controller](../../../docs/controllers.md#building-the-zephyr-controller) first.
 
 Install the system dependencies (Ubuntu 24.04):
 

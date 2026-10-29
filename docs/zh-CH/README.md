@@ -83,7 +83,7 @@ export BSIM_BUILD_FAIL_ASAP=1
 make -j"$(nproc)" everything
 ```
 
-按照 [Zephyr Controller](../../components/bt_virt_controller/README.zh-CN.md)、[Zephyr shell](../../tests/integration/zephyr/shell/README.zh-CN.md)、[NuttX](../../tests/integration/nuttx/README.zh-CN.md)或 [QEMU / Buildroot](../../tests/integration/qemu/README.zh-CN.md) 的说明构建所需 Host 和 Controller 二进制，然后运行集成测试：
+按照 [Zephyr Controller](controllers.md#编译-zephyr-controller)、[Zephyr shell](../../tests/integration/zephyr/shell/README.zh-CN.md)、[NuttX](../../tests/integration/nuttx/README.zh-CN.md)或 [QEMU / Buildroot](../../tests/integration/qemu/README.zh-CN.md) 的说明构建所需 Host 和 Controller 二进制，然后运行集成测试：
 
 ```sh
 cd "$BSWORLD_ROOT"

@@ -45,6 +45,9 @@ class ZephyrController(Controller):
             binary,
             f"-s={self.sim_id}",
             f"-d={self.controller_dev_id}",
+            # Resynchronize with the PHY every 1 ms of simulated time, matching
+            # the 1 ms HCI socket poll; the board default is 1 s.
+            "-mro=1000",
             # Real AES-CCM/ECB; the HW models default to plaintext and a dummy MIC.
             "-RealEncryption=1",
             f"-hci-socket={self.hci_sock}",

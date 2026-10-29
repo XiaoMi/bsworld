@@ -107,7 +107,7 @@ RUN install -d -o "$BUILD_UID" -g "$BUILD_GID" /opt/zephyrproject /opt/zephyr-sd
 USER bsworld
 
 # Match the typed-address and periodic-sync command interfaces used by the shells.
-ARG ZEPHYR_REVISION=a915b2f12675b48b16d56653ea145dcd8f20cbbf
+ARG ZEPHYR_REVISION=f545c1ca45bd0e5cb767d01996f5806f9f1e50be
 
 # The workspace lives outside /workspace so mounting the BSWorld checkout keeps it available.
 ENV ZEPHYR_WORKSPACE=/opt/zephyrproject \
@@ -148,15 +148,16 @@ RUN . "$ZEPHYR_WORKSPACE/.venv/bin/activate" \
     && west sdk install --install-base "$ZEPHYR_SDK_INSTALL_DIR" \
         --gnu-toolchains ${ZEPHYR_SDK_TOOLCHAINS}
 
-# Compile the BSWorld Controller and upstream Host-only shells.
-COPY --chown=$BUILD_UID:$BUILD_GID components/bt_virt_controller /opt/bsworld-build/bt_virt_controller
+# Compile the upstream hci_virt Controller and Host-only shells.
+COPY --chown=$BUILD_UID:$BUILD_GID components/hci_virt_overlay.conf /opt/bsworld-build/hci_virt_overlay.conf
 ARG BUILD_JOBS=4
 RUN . "$ZEPHYR_WORKSPACE/.venv/bin/activate" \
     && export CMAKE_BUILD_PARALLEL_LEVEL="$BUILD_JOBS" \
     && cd "$ZEPHYR_WORKSPACE" \
     && west build -p always -b nrf52_bsim \
         -d "$ZEPHYR_WORKSPACE/build/bsworld_bt_virt_controller" \
-        /opt/bsworld-build/bt_virt_controller \
+        "$ZEPHYR_BASE/samples/bluetooth/hci_virt" \
+        -- -DEXTRA_CONF_FILE=/opt/bsworld-build/hci_virt_overlay.conf \
     && strip --strip-unneeded "$ZEPHYR_WORKSPACE/build/bsworld_bt_virt_controller/zephyr/zephyr.exe"
 COPY --chown=$BUILD_UID:$BUILD_GID tests/integration/zephyr/shell/source /opt/bsworld-build/zephyr/shell
 RUN . "$ZEPHYR_WORKSPACE/.venv/bin/activate" \

@@ -83,7 +83,7 @@ export BSIM_BUILD_FAIL_ASAP=1
 make -j"$(nproc)" everything
 ```
 
-Build the required Host and Controller binaries using the guides for the [Zephyr Controller](components/bt_virt_controller/README.md), [Zephyr shell](tests/integration/zephyr/shell/README.md), [NuttX](tests/integration/nuttx/README.md), or [QEMU / Buildroot](tests/integration/qemu/README.md). Then run the integration tests:
+Build the required Host and Controller binaries using the guides for the [Zephyr Controller](docs/controllers.md#building-the-zephyr-controller), [Zephyr shell](tests/integration/zephyr/shell/README.md), [NuttX](tests/integration/nuttx/README.md), or [QEMU / Buildroot](tests/integration/qemu/README.md). Then run the integration tests:
 
 ```sh
 cd "$BSWORLD_ROOT"

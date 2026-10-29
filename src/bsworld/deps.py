@@ -47,7 +47,7 @@ _BABBLESIM_OUTPUTS = (
 
 _CONTROLLER_HINT = (
     "Build the Virtual Controller and export BSWORLD_BT_VIRT_CONTROLLER_BIN "
-    "as the path to zephyr.exe. See components/bt_virt_controller/README.md."
+    "as the path to zephyr.exe. See docs/controllers.md."
 )
 
 

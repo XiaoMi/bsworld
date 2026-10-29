@@ -46,7 +46,7 @@ git clone "$NUTTX_APPS_DIR" "$NUTTX_NIMBLE_APPS_DIR"
 
 ## 编译与运行
 
-先按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim，并构建[虚拟 Controller](../../../components/bt_virt_controller/README.zh-CN.md)。
+先按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim，并构建[虚拟 Controller](../../../docs/zh-CH/controllers.md#编译-zephyr-controller)。
 
 | 套件 | 编译说明 | 测试产物变量 |
 |---|---|---|

@@ -8,7 +8,7 @@ BSWorld ships two implementations:
 
 | | `ZephyrController` | `BSController` |
 |---|---|---|
-| Implementation | Zephyr Bluetooth Controller built for `nrf52_bsim` ([bt_virt_controller](../components/bt_virt_controller/README.md)) | Python Controller ([bscontroller](../components/bscontroller/README.md)) |
+| Implementation | Zephyr's upstream `hci_virt` sample, built for `nrf52_bsim` ([details](#using-a-zephyr-controller)) | Python Controller ([bscontroller](../components/bscontroller/README.md)) |
 | Runs as | Native simulator process, one per Controller | Worker thread inside the pytest process |
 | Needs | `BSWORLD_BT_VIRT_CONTROLLER_BIN` (prebuilt in the Docker image) | Nothing beyond the BSWorld installation |
 | Configuration | Fixed by the Zephyr build | Per Controller: buffers, list sizes, limits, version ([below](#configuring-bscontroller)) |
@@ -81,4 +81,47 @@ peripheral = topo.add_controller(
 
 ## Using a Zephyr Controller
 
-`ZephyrController` starts `$BSWORLD_BT_VIRT_CONTROLLER_BIN` once per Controller. The Docker image includes it; to build it, see the [bt_virt_controller guide](../components/bt_virt_controller/README.md). Its output is written to `bt_virt_controller/bt_virt_controller_hciN.log` in the test log directory.
+The Zephyr Controller is Zephyr's upstream [`samples/bluetooth/hci_virt`](https://github.com/zephyrproject-rtos/zephyr/tree/main/samples/bluetooth/hci_virt), built for [nrf52_bsim](https://docs.zephyrproject.org/latest/boards/native/nrf_bsim/doc/nrf52_bsim.html). It runs the Zephyr Bluetooth Controller and exposes H4 HCI over a Unix socket. BSWorld only adds the Kconfig overlay [hci_virt_overlay.conf](../components/hci_virt_overlay.conf).
+
+`ZephyrController` starts `$BSWORLD_BT_VIRT_CONTROLLER_BIN` once per Controller. Its output is written to `bt_virt_controller/bt_virt_controller_hciN.log` in the test log directory.
+
+### Command Line
+
+```text
+"$BSWORLD_BT_VIRT_CONTROLLER_BIN" \
+  -s=<sim_id> \
+  -d=<device_id> \
+  -mro=1000 \
+  -RealEncryption=1 \
+  -hci-socket=<hci_socket_path> \
+  -btsnoop-file=<btsnoop_file_path> \
+  [-bd-addr=<AA:BB:CC:DD:EE:FF>]
+```
+
+- `-s` and `-d`: BabbleSim simulation ID and device number.
+- `-mro`: PHY maximum resynchronization offset in µs, matching the sample's 1 ms HCI socket poll.
+- `-RealEncryption`: real AES-CCM; requires `lib/libCryptov1.so` in `BSIM_OUT_PATH`.
+- `-hci-socket`: H4 HCI socket.
+- `-btsnoop-file`: BTSnoop capture file.
+- `-bd-addr`: Controller public address.
+
+### Building the Zephyr Controller
+
+The [Docker test image](../docker/README.md#use-a-published-image) already includes the Controller. For native Linux builds, build BabbleSim using the [repository instructions](../README.md#build-and-test) and prepare the [Zephyr workspace](../tests/integration/zephyr/shell/README.md#prepare-the-zephyr-workspace).
+
+Build the sample with the BSWorld overlay:
+
+```sh
+source "$ZEPHYR_WORKSPACE/.venv/bin/activate"
+cd "$ZEPHYR_WORKSPACE"
+west build -p always -b nrf52_bsim \
+  -d "$ZEPHYR_WORKSPACE/build/bsworld_bt_virt_controller" \
+  "$ZEPHYR_WORKSPACE/zephyr/samples/bluetooth/hci_virt" -- \
+  -DEXTRA_CONF_FILE="$BSWORLD_ROOT/components/hci_virt_overlay.conf"
+```
+
+Point BSWorld at the executable:
+
+```sh
+export BSWORLD_BT_VIRT_CONTROLLER_BIN="$ZEPHYR_WORKSPACE/build/bsworld_bt_virt_controller/zephyr/zephyr.exe"
+```

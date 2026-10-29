@@ -30,7 +30,7 @@ python -m pip install west
 ```sh
 git init "$ZEPHYR_WORKSPACE/zephyr"
 git -C "$ZEPHYR_WORKSPACE/zephyr" remote add origin https://github.com/zephyrproject-rtos/zephyr
-git -C "$ZEPHYR_WORKSPACE/zephyr" fetch --depth=1 origin a915b2f12675b48b16d56653ea145dcd8f20cbbf
+git -C "$ZEPHYR_WORKSPACE/zephyr" fetch --depth=1 origin f545c1ca45bd0e5cb767d01996f5806f9f1e50be
 git -C "$ZEPHYR_WORKSPACE/zephyr" checkout --detach FETCH_HEAD
 ```
 
@@ -51,7 +51,7 @@ cd "$ZEPHYR_WORKSPACE/zephyr"
 west sdk install --gnu-toolchains x86_64-zephyr-elf
 ```
 
-还需要按[仓库构建说明](../../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim，并构建 [Zephyr 虚拟 Controller](../../../../components/bt_virt_controller/README.zh-CN.md)。
+还需要按[仓库构建说明](../../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim，并构建 [Zephyr 虚拟 Controller](../../../../docs/zh-CH/controllers.md#编译-zephyr-controller)。
 
 ## 构建与运行
 

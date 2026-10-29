@@ -47,10 +47,10 @@ BSWorld 使用公开的 Python 和 HCI transport 接口，不修改 Bumble Host 
 ## Zephyr Project
 
 - 源码：https://github.com/zephyrproject-rtos/zephyr
-- 用途：[虚拟 Controller](../../components/bt_virt_controller/README.zh-CN.md) 和 [Bluetooth、Mesh shell](../../tests/integration/zephyr/shell/README.zh-CN.md)
+- 用途：[虚拟 Controller](controllers.md#使用-zephyr-controller) 和 [Bluetooth、Mesh shell](../../tests/integration/zephyr/shell/README.zh-CN.md)
 - 许可证：Apache License 2.0
 
-虚拟 Controller 的接入代码由 BSWorld 维护，shell 应用使用外部 Zephyr 源码。
+虚拟 Controller 使用 Zephyr 的 `samples/bluetooth/hci_virt`，BSWorld 只提供 Kconfig overlay；shell 应用使用外部 Zephyr 源码。
 
 ## QEMU
 

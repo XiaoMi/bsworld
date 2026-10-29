@@ -8,7 +8,7 @@ BSWorld 提供两种实现：
 
 | | `ZephyrController` | `BSController` |
 |---|---|---|
-| 实现 | 为 `nrf52_bsim` 编译的 Zephyr 蓝牙 Controller（[bt_virt_controller](../../components/bt_virt_controller/README.zh-CN.md)） | Python Controller（[bscontroller](../../components/bscontroller/README.zh-CN.md)） |
+| 实现 | Zephyr 上游 `hci_virt` sample，编译目标为 `nrf52_bsim`（[说明](#使用-zephyr-controller)） | Python Controller（[bscontroller](../../components/bscontroller/README.zh-CN.md)） |
 | 运行方式 | 原生仿真进程，每个 Controller 一个进程 | pytest 进程内的 worker 线程 |
 | 依赖 | `BSWORLD_BT_VIRT_CONTROLLER_BIN`（Docker 镜像已内置） | 安装 BSWorld 即可，无其他依赖 |
 | 配置 | 由 Zephyr 编译配置决定 | 可按 Controller 分别设置缓冲、列表大小、上限、版本（见[下文](#配置-bscontroller)） |
@@ -81,4 +81,47 @@ peripheral = topo.add_controller(
 
 ## 使用 Zephyr Controller
 
-`ZephyrController` 会为每个 Controller 启动一次 `$BSWORLD_BT_VIRT_CONTROLLER_BIN`。Docker 镜像已包含该程序，编译方法见 [bt_virt_controller 指南](../../components/bt_virt_controller/README.zh-CN.md)。它的输出写在测试日志目录下的 `bt_virt_controller/bt_virt_controller_hciN.log`。
+Zephyr Controller 直接使用 Zephyr 上游的 [`samples/bluetooth/hci_virt`](https://github.com/zephyrproject-rtos/zephyr/tree/main/samples/bluetooth/hci_virt)，编译目标为 [nrf52_bsim](https://docs.zephyrproject.org/latest/boards/native/nrf_bsim/doc/nrf52_bsim.html)。它运行 Zephyr Bluetooth Controller，并通过 Unix socket 提供 H4 HCI。BSWorld 只额外提供 Kconfig overlay [hci_virt_overlay.conf](../../components/hci_virt_overlay.conf)。
+
+`ZephyrController` 会为每个 Controller 启动一次 `$BSWORLD_BT_VIRT_CONTROLLER_BIN`，输出写在测试日志目录下的 `bt_virt_controller/bt_virt_controller_hciN.log`。
+
+### 启动参数
+
+```text
+"$BSWORLD_BT_VIRT_CONTROLLER_BIN" \
+  -s=<sim_id> \
+  -d=<device_id> \
+  -mro=1000 \
+  -RealEncryption=1 \
+  -hci-socket=<hci_socket_path> \
+  -btsnoop-file=<btsnoop_file_path> \
+  [-bd-addr=<AA:BB:CC:DD:EE:FF>]
+```
+
+- `-s`、`-d`：BabbleSim 仿真标识和设备编号。
+- `-mro`：PHY 最大重同步偏移（µs），与 sample 1 ms 的 HCI socket 轮询周期一致。
+- `-RealEncryption`：使用真实 AES-CCM，需要 `BSIM_OUT_PATH` 下的 `lib/libCryptov1.so`。
+- `-hci-socket`：H4 HCI socket。
+- `-btsnoop-file`：BTSnoop 抓包文件。
+- `-bd-addr`：Controller 的 public address。
+
+### 编译 Zephyr Controller
+
+[Docker 测试镜像](../../docker/README.zh-CN.md#使用已发布镜像)已包含 Controller。本机构建先按[仓库构建说明](README.md#构建与测试)构建 BabbleSim，并准备 [Zephyr 工作区](../../tests/integration/zephyr/shell/README.zh-CN.md#准备-zephyr-工作区)。
+
+叠加 BSWorld overlay 编译 sample：
+
+```sh
+source "$ZEPHYR_WORKSPACE/.venv/bin/activate"
+cd "$ZEPHYR_WORKSPACE"
+west build -p always -b nrf52_bsim \
+  -d "$ZEPHYR_WORKSPACE/build/bsworld_bt_virt_controller" \
+  "$ZEPHYR_WORKSPACE/zephyr/samples/bluetooth/hci_virt" -- \
+  -DEXTRA_CONF_FILE="$BSWORLD_ROOT/components/hci_virt_overlay.conf"
+```
+
+让 BSWorld 使用该程序：
+
+```sh
+export BSWORLD_BT_VIRT_CONTROLLER_BIN="$ZEPHYR_WORKSPACE/build/bsworld_bt_virt_controller/zephyr/zephyr.exe"
+```

@@ -9,8 +9,7 @@
 !tests/**
 !components/
 !components/babblesim.xml
-!components/bt_virt_controller/
-!components/bt_virt_controller/**
+!components/hci_virt_overlay.conf
 !components/bscontroller/
 !components/bscontroller/pyproject.toml
 !components/bscontroller/LICENSE
