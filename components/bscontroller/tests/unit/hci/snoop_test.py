@@ -23,7 +23,7 @@ def test_empty_capture_and_completed_records_are_visible_before_close(tmp_path):
     Purpose: Verify ``BtsnoopWriter`` creates parent directories, writes the
     fixed BTSnoop header immediately, and appends each captured packet as a
     big-endian record (including the H4 type and a simulation-time timestamp)
-    that is visible before close, matching bt_virt_controller's format.
+    that is visible before close. Commands and events set flag bit 1.
 
     Steps:
         1. Open a writer at a nested path with a settable ``now_us`` clock.
@@ -41,15 +41,16 @@ def test_empty_capture_and_completed_records_are_visible_before_close(tmp_path):
         assert path.read_bytes() == HEADER
         command = bytes.fromhex('01030c00')
         snoop.capture(command, received=False)
-        # Matches bt_virt_controller's big-endian record, including H4 type.
+        # Big-endian record including the H4 type; flags: bit 0 Controller to
+        # Host, bit 1 command or event.
         expected = HEADER + bytes.fromhex(
-            '00000004 00000004 00000000 00000000 00dcddb30f2faaf8 01030c00'
+            '00000004 00000004 00000002 00000000 00dcddb30f2faaf8 01030c00'
         )
         assert path.read_bytes() == expected
         now_us = 12345
         event = bytes.fromhex('040e0401030c00')
         snoop.capture(event, received=True)
-        expected += struct.pack('>IIIIQ', 7, 7, 1, 0, EPOCH + now_us) + event
+        expected += struct.pack('>IIIIQ', 7, 7, 3, 0, EPOCH + now_us) + event
         assert path.read_bytes() == expected
     assert path.read_bytes() == expected
 
@@ -77,7 +78,8 @@ def test_capture_preserves_complete_h4_packets(tmp_path, received, packet):
 
     Expected:
         - The file equals the header plus a big-endian record carrying the
-          packet length twice, the direction flag, and EPOCH + now_us, followed
+          packet length twice, the direction flag with the command/event flag
+          clear, and EPOCH + now_us, followed
           by the packet bytes.
     """
     path = tmp_path / 'hci.snoop'
@@ -118,7 +120,7 @@ def test_partial_file_writes_are_completed_and_write_failures_propagate(
         packet = bytes.fromhex('01030c00')
         snoop.capture(packet, received=False)
         assert (tmp_path / 'hci.snoop').read_bytes() == HEADER + struct.pack(
-            '>IIIIQ', 4, 4, 0, 0, EPOCH
+            '>IIIIQ', 4, 4, 2, 0, EPOCH
         ) + packet
         monkeypatch.setattr(snoop._file, 'write', lambda data: 0)
         with pytest.raises(OSError, match='no progress'):
@@ -161,9 +163,9 @@ async def test_capture_precedes_host_loop_delivery_and_does_not_advance_time(tmp
         assert not delivered
         expected = (
             HEADER
-            + struct.pack('>IIIIQ', 4, 4, 0, 0, EPOCH + 123)
+            + struct.pack('>IIIIQ', 4, 4, 2, 0, EPOCH + 123)
             + bytes.fromhex('01030c00')
-            + struct.pack('>IIIIQ', 7, 7, 1, 0, EPOCH + 123)
+            + struct.pack('>IIIIQ', 7, 7, 3, 0, EPOCH + 123)
             + bytes.fromhex('040e0401030c00')
         )
         assert path.read_bytes() == expected

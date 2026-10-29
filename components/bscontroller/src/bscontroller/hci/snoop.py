@@ -12,13 +12,17 @@ from pathlib import Path
 _FILE_HEADER = struct.pack('>8sII', b'btsnoop\0', 1, 1002)
 _RECORD_HEADER = struct.Struct('>IIIIQ')
 _EPOCH_DELTA_US = 0x00DCDDB30F2F8000
+_FLAG_RECEIVED = 0x01
+_FLAG_COMMAND_EVENT = 0x02
+_H4_COMMAND_EVENT = (0x01, 0x04)
 
 
 class BtsnoopWriter:
     """Write complete records immediately, from the Controller's owner thread.
 
-    Direction flags match bt_virt_controller: 0 for Host to Controller, 1 for
-    Controller to Host. The supplied clock returns local simulation microseconds.
+    Packet flags follow BTSnoop v1: bit 0 is set for Controller to Host,
+    bit 1 for HCI commands and events. The supplied clock returns local
+    simulation microseconds.
     """
 
     def __init__(self, path: Path, clock: Callable[[], int]):
@@ -41,8 +45,11 @@ class BtsnoopWriter:
             remaining = remaining[written:]
 
     def capture(self, packet: bytes, *, received: bool) -> None:
+        flags = _FLAG_RECEIVED if received else 0
+        if packet[:1] and packet[0] in _H4_COMMAND_EVENT:
+            flags |= _FLAG_COMMAND_EVENT
         header = _RECORD_HEADER.pack(
-            len(packet), len(packet), int(received), 0, self.clock() + _EPOCH_DELTA_US
+            len(packet), len(packet), flags, 0, self.clock() + _EPOCH_DELTA_US
         )
         self._write_all(header + packet)
 

@@ -114,11 +114,12 @@ async def test_hci_runs_in_owner_thread_only_after_phy_ack(
         for direction, packet in enumerate(
             (bytes.fromhex('01030c00'), bytes.fromhex('040e0401030c00'))
         ):
+            # Flag bit 0 is the direction; bit 1 marks commands and events.
             expected += struct.pack(
                 '>IIIIQ',
                 len(packet),
                 len(packet),
-                direction,
+                direction | 0x02,
                 0,
                 0x00DCDDB30F2F8000 + max_step_us,
             )

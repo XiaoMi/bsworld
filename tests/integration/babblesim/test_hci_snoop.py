@@ -62,16 +62,12 @@ async def test_snoop_matches_live_h4_traffic_without_host_relay(
     assert ctl.hci_snoop_file.read_bytes() == before_stop
     assert before_stop[:16] == _FILE_HEADER
     offset = 16
-    # BSController records only the direction bit.
-    command_event_flag = (
-        _FLAG_COMMAND_EVENT if controller_type is ZephyrController else 0
-    )
     for index, packet in enumerate(packets):
         length, included, flags, drops, _ = _RECORD.unpack_from(before_stop, offset)
         offset += _RECORD.size
         assert length == included == len(packet)
         # Bit 0: Controller to Host; bit 1: every packet is a command or event.
-        assert flags == (index % 2) | command_event_flag
+        assert flags == (index % 2) | _FLAG_COMMAND_EVENT
         assert drops == 0
         assert before_stop[offset : offset + included] == packet
         offset += included
