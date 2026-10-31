@@ -31,18 +31,11 @@ _BABBLESIM_OUTPUTS = (
     "bin/bs_2G4_phy_v1",
     "bin/bs_device_2G4_burst_interf",
     "bin/bs_device_2G4_WLAN_actmod",
-    "bin/bs_device_2G4_playback",
-    "bin/bs_device_2G4_playbackv2",
     "lib/lib_2G4Channel_NtNcable.so",
     "lib/lib_2G4Channel_multiatt.so",
     "lib/lib_2G4Modem_BLE_simple.so",
-    "lib/lib_2G4Modem_Magic.so",
     # Real AES for the nRF HW models (-RealEncryption=1).
     "lib/libCryptov1.so",
-    "lib/libPhyComv1.so",
-    "lib/libPhyComv1.32.so",
-    "lib/libUtilv1.so",
-    "lib/libUtilv1.32.so",
 )
 
 _CONTROLLER_HINT = (
