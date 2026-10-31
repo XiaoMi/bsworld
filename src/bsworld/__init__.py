@@ -16,7 +16,14 @@
 
 from __future__ import annotations
 
+import sys
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
+
+# bsworld loads bscontroller from its source in this repository.
+_BSCONTROLLER_SRC = Path(__file__).parents[2] / "components" / "bscontroller" / "src"
+if _BSCONTROLLER_SRC.is_dir():
+    sys.path.insert(0, str(_BSCONTROLLER_SRC))
 
 try:
     __version__ = version("bsworld")

@@ -40,16 +40,8 @@ dependencies = [
 [project.entry-points.pytest11]
 bsworld = "bsworld.plugin"
 
-[project.scripts]
-bscontroller = "bscontroller.cli:main"
-
-# BSController is bundled so `pip install bsworld` provides the Python Controller.
-# components/bscontroller/ keeps its own pyproject.toml for standalone distribution.
 [tool.setuptools.packages.find]
-where = ["src", "components/bscontroller/src"]
-
-[tool.setuptools.package-data]
-bscontroller = ["py.typed"]
+where = ["src"]
 
 [tool.setuptools_scm]
 fallback_version = "0+unknown"
