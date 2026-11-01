@@ -319,7 +319,8 @@ jobs:
 
   release:
     name: Publish release tag
-    if: github.event_name == 'release'
+    # bscontroller-v* releases publish only the bscontroller package (pypi.yml).
+    if: github.event_name == 'release' && !startsWith(github.event.release.tag_name, 'bscontroller-')
     runs-on: [self-hosted, linux, x64, bsworld]
     timeout-minutes: 30
     permissions:
