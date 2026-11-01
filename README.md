@@ -1,6 +1,12 @@
-# BSWorld
+<div align="center">
 
-[English](README.md) | [简体中文](docs/zh-CH/README.md)
+<img src="docs/images/bsworld-logo.svg" alt="BSWorld" width="200">
+
+English | [简体中文](docs/zh-CH/README.md)
+
+[![CI](https://github.com/XiaoMi/bsworld/actions/workflows/bsworld.yml/badge.svg?branch=main)](https://github.com/XiaoMi/bsworld/actions/workflows/bsworld.yml) [![Release](https://img.shields.io/github/v/release/XiaoMi/bsworld?label=release&filter=v*)](https://github.com/XiaoMi/bsworld/releases/latest) [![PyPI bsworld](https://img.shields.io/pypi/v/bsworld?label=pypi%20bsworld)](https://pypi.org/project/bsworld/) [![PyPI bscontroller](https://img.shields.io/pypi/v/bscontroller?label=pypi%20bscontroller)](https://pypi.org/project/bscontroller/) [![License](https://img.shields.io/github/license/XiaoMi/bsworld)](LICENSE) [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/XiaoMi/bsworld/pulls)
+
+</div>
 
 BSWorld is a deterministic simulation framework for testing Bluetooth Hosts and Applications on Linux. A pytest scenario defines the device topology and expected behavior; BSWorld runs the participants on a shared BabbleSim radio and simulation clock, then archives logs and protocol traces.
 
