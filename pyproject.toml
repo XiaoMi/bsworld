@@ -46,9 +46,6 @@ test = [
 Homepage = "https://github.com/XiaoMi/bsworld"
 Issues = "https://github.com/XiaoMi/bsworld/issues"
 
-[project.entry-points.pytest11]
-bsworld = "bsworld.plugin"
-
 [tool.setuptools.packages.find]
 where = ["src"]
 
