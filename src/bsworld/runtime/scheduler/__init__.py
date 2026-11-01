@@ -15,9 +15,9 @@
 """Run BSWorld asyncio code against wall-clock or BabbleSim time.
 
 The discrete clock protocol and the selector that advances it live in
-bscontroller, which BSWorld bundles. Only the idle step size differs here: the
-pytest loop trades idle I/O latency for fewer PHY round trips, while each
-Controller worker keeps bscontroller's finer default.
+bscontroller. Only the idle step size differs here: the pytest loop trades
+idle I/O latency for fewer PHY round trips, while each Controller worker keeps
+bscontroller's finer default.
 """
 
 from bscontroller.runtime.event_loop import RadioEventLoop as BsimEventLoop

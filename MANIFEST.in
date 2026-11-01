@@ -1,0 +1,6 @@
+# bscontroller is released as its own package; CI and image files are not
+# part of the bsworld source distribution.
+prune components
+prune docker
+prune .github
+exclude .dockerignore

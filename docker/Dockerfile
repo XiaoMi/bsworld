@@ -35,31 +35,24 @@ ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 \
 WORKDIR /workspace
 CMD ["bash"]
 
-# BSWorld: only this branch depends on the project's Python dependencies.
-# Firmware builds reuse build-base even when pyproject.toml changes.
+# BSWorld: the CI reads the Git-derived version with setuptools-scm in this stage.
 FROM build-base AS bsworld
-COPY pyproject.toml /opt/bsworld-environment/pyproject.toml
-RUN python -c 'import subprocess, tomllib; \
-    config = tomllib.load(open("/opt/bsworld-environment/pyproject.toml", "rb")); \
-    dependencies = config["build-system"]["requires"] + config["project"]["dependencies"]; \
-    subprocess.check_call(["python", "-m", "pip", "install", *dependencies])'
+RUN python -m pip install "setuptools-scm>=9.2"
 
-# Install the project once for early Python checks and the final runtime image.
-# Keep this branch separate from firmware so Python changes reuse compiled outputs.
+# Install BSWorld from the checkout as README.md describes, for early Python
+# checks and the final runtime image. Keep this branch separate from firmware
+# so Python changes reuse compiled outputs.
 FROM bsworld AS python-test
 ENV PYTHONPATH=/workspace \
     PYTHONUNBUFFERED=1 \
     BSWORLD_ROOT=/workspace
-COPY --chown=$BUILD_UID:$BUILD_GID pyproject.toml /workspace/pyproject.toml
-COPY --chown=$BUILD_UID:$BUILD_GID src /workspace/src
-# BSController is bundled by the BSWorld distribution and installed with it.
-COPY --chown=$BUILD_UID:$BUILD_GID components/bscontroller /workspace/components/bscontroller
-COPY --chown=$BUILD_UID:$BUILD_GID tests /workspace/tests
+# docker/Dockerfile.dockerignore selects the files copied from the checkout.
+COPY --chown=$BUILD_UID:$BUILD_GID . /workspace/
 COPY LICENSE THIRD_PARTY_NOTICES.md /usr/share/doc/bsworld/
 # Git metadata is excluded from images; CI supplies the Git-derived version.
 ARG BSWORLD_VERSION=0+local
 RUN SETUPTOOLS_SCM_PRETEND_VERSION_FOR_BSWORLD="$BSWORLD_VERSION" \
-    python -m pip install --no-deps --no-build-isolation -e .
+    python -m pip install -e components/bscontroller -e '.[test]'
 
 # BabbleSim: native Linux compiler, linker, and Make-based build support.
 FROM build-base AS babblesim

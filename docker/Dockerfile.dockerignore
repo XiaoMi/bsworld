@@ -1,28 +1,10 @@
-# Include Python packages, tests and local firmware build inputs.
-**
-!pyproject.toml
-!LICENSE
-!THIRD_PARTY_NOTICES.md
-!src/
-!src/**
-!tests/
-!tests/**
-!components/
-!components/babblesim.xml
-!components/hci_virt_overlay.conf
-!components/bscontroller/
-!components/bscontroller/pyproject.toml
-!components/bscontroller/LICENSE
-!components/bscontroller/NOTICE
-!components/bscontroller/src/
-!components/bscontroller/src/**
+# Keep Git history, secrets and large local environments and build outputs
+# out of the build context and the published images.
 **/.git
+**/.env*
+**/.venv
 **/.cache
 **/build
+**/dist
 **/prebuilt
-**/__pycache__
-**/*.egg-info
-**/*.pyc
-**/README*
-!components/bscontroller/README.md
-**/.env*
+**/target

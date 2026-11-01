@@ -47,7 +47,13 @@ sudo apt-get install -y \
   gcc-multilib g++-multilib coreutils findutils grep sed
 ```
 
-获取并安装 BSWorld：
+从 PyPI 安装 BSWorld。测试中需要 Bumble Host 时，加上 `bumble` extra：
+
+```sh
+python3.12 -m pip install bsworld            # 或 'bsworld[bumble]'
+```
+
+开发 BSWorld 时，克隆仓库，并从源码安装 BSWorld 及仓库内的 bscontroller：
 
 ```sh
 git clone https://github.com/XiaoMi/bsworld.git
@@ -55,7 +61,7 @@ cd bsworld
 export BSWORLD_ROOT="$PWD"
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
+python -m pip install -e components/bscontroller -e '.[test]'
 ```
 
 运行开发检查：
