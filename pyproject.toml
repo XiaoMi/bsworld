@@ -60,6 +60,7 @@ describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match",
 [tool.pytest.ini_options]
 addopts = "-ra"
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 
 [tool.ruff]
