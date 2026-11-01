@@ -28,9 +28,14 @@
     <path d="M 44 170 Q 128 152 212 170"/>
   </g>
 
-  <!-- Bluetooth rune. -->
-  <path d="M 98 100 L 160 158 L 128 188 L 128 68 L 160 98 L 98 156" fill="none"
-        stroke="#ffffff" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- A radio transmitting in both directions. -->
+  <g fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round">
+    <path d="M 154 106.1 A 34 34 0 0 1 154 149.9"/>
+    <path d="M 102 149.9 A 34 34 0 0 1 102 106.1"/>
+    <path d="M 174 89.4 A 60 60 0 0 1 174 166.6"/>
+    <path d="M 82 166.6 A 60 60 0 0 1 82 89.4"/>
+  </g>
+  <circle cx="128" cy="128" r="13" fill="#ffffff"/>
 
   <use href="#orbit" clip-path="url(#front)"/>
   <circle cx="234.2" cy="106.7" r="11" fill="#ff6900" stroke="#ffffff" stroke-width="4"/>
