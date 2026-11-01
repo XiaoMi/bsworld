@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title">
+  <title id="title">BSWorld</title>
+  <defs>
+    <linearGradient id="globe" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2b8cff"/>
+      <stop offset="1" stop-color="#0a4bb5"/>
+    </linearGradient>
+    <clipPath id="sphere">
+      <circle cx="128" cy="128" r="92"/>
+    </clipPath>
+    <!-- The half of the orbit below its ends passes in front of the globe. -->
+    <clipPath id="front">
+      <polygon points="0,174.6 256,81.4 256,256 0,256"/>
+    </clipPath>
+    <ellipse id="orbit" cx="128" cy="128" rx="122" ry="34" transform="rotate(-20 128 128)"
+             fill="none" stroke="#ff6900" stroke-width="7"/>
+  </defs>
+
+  <use href="#orbit"/>
+
+  <circle cx="128" cy="128" r="92" fill="url(#globe)"/>
+  <g clip-path="url(#sphere)" fill="none" stroke="#ffffff" stroke-opacity="0.2"
+     stroke-width="4">
+    <ellipse cx="128" cy="128" rx="40" ry="92"/>
+    <ellipse cx="128" cy="128" rx="78" ry="92"/>
+    <line x1="36" y1="128" x2="220" y2="128"/>
+    <path d="M 44 86 Q 128 104 212 86"/>
+    <path d="M 44 170 Q 128 152 212 170"/>
+  </g>
+
+  <!-- A radio transmitting in both directions. -->
+  <g fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round">
+    <path d="M 154 106.1 A 34 34 0 0 1 154 149.9"/>
+    <path d="M 102 149.9 A 34 34 0 0 1 102 106.1"/>
+    <path d="M 174 89.4 A 60 60 0 0 1 174 166.6"/>
+    <path d="M 82 166.6 A 60 60 0 0 1 82 89.4"/>
+  </g>
+  <circle cx="128" cy="128" r="13" fill="#ffffff"/>
+
+  <use href="#orbit" clip-path="url(#front)"/>
+  <circle cx="234.2" cy="106.7" r="11" fill="#ff6900" stroke="#ffffff" stroke-width="4"/>
+  <circle cx="39.3" cy="180.5" r="11" fill="#ff6900" stroke="#ffffff" stroke-width="4"/>
+</svg>

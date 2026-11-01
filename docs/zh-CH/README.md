@@ -1,6 +1,12 @@
-# BSWorld
+<div align="center">
 
-[English](../../README.md) | [简体中文](README.md)
+<img src="../images/bsworld-logo.svg" alt="BSWorld" width="200">
+
+[English](../../README.md) | 简体中文
+
+[![CI](https://github.com/XiaoMi/bsworld/actions/workflows/bsworld.yml/badge.svg?branch=main)](https://github.com/XiaoMi/bsworld/actions/workflows/bsworld.yml) [![最新版本](https://img.shields.io/github/v/release/XiaoMi/bsworld?label=release&filter=v*)](https://github.com/XiaoMi/bsworld/releases/latest) [![PyPI bsworld](https://img.shields.io/pypi/v/bsworld?label=pypi%20bsworld)](https://pypi.org/project/bsworld/) [![PyPI bscontroller](https://img.shields.io/pypi/v/bscontroller?label=pypi%20bscontroller)](https://pypi.org/project/bscontroller/) [![许可证](https://img.shields.io/github/license/XiaoMi/bsworld)](../../LICENSE) [![欢迎 PR](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/XiaoMi/bsworld/pulls)
+
+</div>
 
 BSWorld 是一个在 Linux 上测试 Bluetooth Host 及其业务程序的确定性仿真框架。pytest 场景负责定义设备拓扑和预期行为；BSWorld 让所有参与者共享 BabbleSim 无线环境与仿真时钟，并归档日志和协议跟踪文件。
 
