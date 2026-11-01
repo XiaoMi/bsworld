@@ -5,6 +5,8 @@ name: Code style
 
 on:
   push:
+    # Branches only: a release tag points at a commit that was already tested.
+    branches: ['**']
   pull_request:
   workflow_dispatch:
 
