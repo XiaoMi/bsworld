@@ -46,14 +46,7 @@ sudo apt-get install -y \
   gcc-multilib g++-multilib coreutils findutils grep sed
 ```
 
-Install BSWorld from PyPI. Add the `bumble` extra to run Bumble Hosts in tests:
-
-```sh
-python3.12 -m pip install bsworld            # or 'bsworld[bumble]'
-```
-
-To develop BSWorld, clone it and install BSWorld and the bscontroller in the
-repository from source:
+Clone and install BSWorld:
 
 ```sh
 git clone https://github.com/XiaoMi/bsworld.git
