@@ -12,6 +12,10 @@ license = "Apache-2.0 AND ISC"
 license-files = ["LICENSE", "NOTICE"]
 dependencies = ["cryptography>=44.0.3"]
 
+[project.urls]
+Homepage = "https://github.com/XiaoMi/bsworld/tree/main/components/bscontroller"
+Issues = "https://github.com/XiaoMi/bsworld/issues"
+
 [project.optional-dependencies]
 test = ["pytest>=8.4", "pytest-asyncio>=1.4", "pytest-xdist>=3", "ruff==0.14.10", "build>=1"]
 

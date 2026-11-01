@@ -13,29 +13,38 @@
 # limitations under the License.
 #
 [build-system]
-requires = ["setuptools>=77", "setuptools-scm>=8"]
+requires = ["setuptools>=77", "setuptools-scm>=9.2"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "bsworld"
 dynamic = ["version"]
 description = "Deterministic simulation test framework for Bluetooth LE Applications"
-# The bundled BSController contributes the ISC-licensed terminal color utility.
-license = "Apache-2.0 AND ISC"
-license-files = ["LICENSE", "components/bscontroller/LICENSE", "components/bscontroller/NOTICE"]
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
     "pytest>=8.4",
-    "pytest-xdist>=3.0",
     "pytest-asyncio>=1.4",
+    "bscontroller>=0.1,<0.2",
+]
+
+[project.optional-dependencies]
+# Bumble Hosts in tests.
+bumble = ["bumble==0.0.235"]
+# BSWorld's own checks and test suites.
+test = [
     "bumble==0.0.235",
-    "cryptography>=44.0.3",
     "packaging>=24",
     "pytest-cov>=4.0",
+    "pytest-xdist>=3.0",
     "ruff==0.14.10",
-    "setuptools>=68",
-    "setuptools-scm>=8",
 ]
+
+[project.urls]
+Homepage = "https://github.com/XiaoMi/bsworld"
+Issues = "https://github.com/XiaoMi/bsworld/issues"
 
 [project.entry-points.pytest11]
 bsworld = "bsworld.plugin"
@@ -45,6 +54,11 @@ where = ["src"]
 
 [tool.setuptools_scm]
 fallback_version = "0+unknown"
+# Only v* tags version bsworld; bscontroller-v* tags version bscontroller.
+tag_regex = "^v(?P<version>\\d+(?:\\.\\d+)*)$"
+
+[tool.setuptools_scm.scm.git]
+describe_command = ["git", "describe", "--dirty", "--tags", "--long", "--match", "v[0-9]*"]
 
 [tool.pytest.ini_options]
 addopts = "-ra"
