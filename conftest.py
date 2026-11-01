@@ -13,11 +13,7 @@
 # limitations under the License.
 #
 """Top-level conftest. Adds src/ to sys.path so `cd bsworld && pytest` works
-without an editable install.
-
-The bsworld pytest plugin is registered via the pyproject.toml pytest11
-entry point when installed, or picked up automatically by pytest from
-sys.path when not installed.
+without an editable install, and enables the bsworld pytest plugin.
 """
 
 from __future__ import annotations
@@ -28,3 +24,5 @@ from pathlib import Path
 _SRC = Path(__file__).resolve().parent / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
+
+pytest_plugins = ["bsworld.plugin"]
