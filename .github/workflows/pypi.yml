@@ -1,0 +1,128 @@
+# Copyright 2026 Xiaomi Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+# Build and check the bsworld and bscontroller distributions on every change.
+# A GitHub release publishes one of them to PyPI with Trusted Publishing:
+#   v<version>              -> bsworld
+#   bscontroller-v<version> -> bscontroller
+
+name: PyPI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build ${{ matrix.package }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: bsworld
+            path: .
+            tag_prefix: v
+          - package: bscontroller
+            path: components/bscontroller
+            tag_prefix: bscontroller-v
+    env:
+      PACKAGE: ${{ matrix.package }}
+      PACKAGE_PATH: ${{ matrix.path }}
+    steps:
+      - name: Check out the commit under test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # setuptools-scm derives the bsworld version from the v* tags.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Install the build tools
+        run: python -m pip install build==1.6.1 twine==7.0.0
+
+      - name: Build the sdist and wheel
+        run: python -m build --outdir dist "$PACKAGE_PATH"
+
+      - name: Check the distributions
+        run: python -m twine check --strict dist/*
+
+      - name: Check that the release tag matches the version
+        if: github.event_name == 'release' && startsWith(github.event.release.tag_name, matrix.tag_prefix)
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          TAG_PREFIX: ${{ matrix.tag_prefix }}
+        run: |
+          wheel=(dist/*.whl)
+          version="$(basename "${wheel[0]}" | cut -d- -f2)"
+          if [[ "$RELEASE_TAG" != "$TAG_PREFIX$version" ]]; then
+            printf 'Release tag %s does not match %s version %s.\n' \
+              "$RELEASE_TAG" "$PACKAGE" "$version" >&2
+            exit 1
+          fi
+
+      - name: Upload the distributions
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.package }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-bscontroller:
+    name: Publish bscontroller to PyPI
+    needs: build
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'bscontroller-v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: pypi-bscontroller
+      url: https://pypi.org/project/bscontroller/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the distributions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist-bscontroller
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+
+  publish-bsworld:
+    name: Publish bsworld to PyPI
+    needs: build
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: pypi-bsworld
+      url: https://pypi.org/project/bsworld/
+    permissions:
+      id-token: write
+    steps:
+      - name: Download the distributions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist-bsworld
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
