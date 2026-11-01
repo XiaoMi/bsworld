@@ -44,11 +44,7 @@ def __getattr__(name: str):
 try:
     __version__ = version('bscontroller')
 except PackageNotFoundError:
-    try:
-        # Bundled inside the BSWorld distribution, which has no bscontroller metadata.
-        __version__ = version('bsworld')
-    except PackageNotFoundError:
-        __version__ = '0+unknown'
+    __version__ = '0+unknown'
 
 __all__ = [
     'Phy',
