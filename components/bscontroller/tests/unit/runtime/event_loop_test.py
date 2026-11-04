@@ -130,6 +130,106 @@ def test_invalid_step_and_clock_must_advance():
         selector.select(1)
 
 
+class WallClock:
+    def __init__(self, now=100.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+def realtime_selector(monkeypatch, wall, waits):
+    """A real-time selector whose delegate records waits and lets wall time pass."""
+
+    def select(timeout):
+        waits.append(timeout)
+        wall.now += timeout or 0
+        return []
+
+    monkeypatch.setattr('bscontroller.runtime.event_loop.time.monotonic', wall)
+    delegate = Mock(spec=selectors.BaseSelector)
+    delegate.select.side_effect = select
+    selector = RadioSelector(delegate, 1000, realtime=True)
+    selector.clock = Clock()
+    return selector
+
+
+def test_realtime_selector_holds_each_step_to_wall_clock(monkeypatch):
+    """A real-time selector waits on wall time before each simulation step.
+
+    Purpose: Verify that with ``realtime=True`` an idle select waits on the
+    delegate until wall-clock time reaches the next simulation time, then
+    advances the clock, so simulation time follows wall-clock time.
+
+    Steps:
+        1. Build a real-time selector with a 1000-us step over a delegate that
+           reports no I/O and lets the waited wall time pass.
+        2. Call ``select(None)`` three times.
+
+    Expected:
+        - The clock advanced to 1000, 2000 and 3000 us.
+        - Before each step the delegate waited 1 ms of wall time.
+    """
+    wall, waits = WallClock(), []
+    selector = realtime_selector(monkeypatch, wall, waits)
+    for _ in range(3):
+        assert selector.select(None) == []
+    assert selector.clock.targets == [1000, 2000, 3000]
+    assert [round(wait, 6) for wait in waits if wait] == [0.001] * 3
+
+
+def test_realtime_selector_does_not_catch_up_after_falling_behind(monkeypatch):
+    """A real-time selector that falls behind continues from now.
+
+    Purpose: Verify that when wall-clock time has already passed the next
+    simulation time, the selector advances without waiting and then paces later
+    steps from the current wall time, instead of running fast to catch up.
+
+    Steps:
+        1. Take one paced step, then move wall time 50 ms ahead.
+        2. Call ``select(None)`` twice more.
+
+    Expected:
+        - The late step advanced without a wall-clock wait.
+        - The following step waited a full 1 ms again.
+    """
+    wall, waits = WallClock(), []
+    selector = realtime_selector(monkeypatch, wall, waits)
+    selector.select(None)
+    wall.now += 0.05
+    waits.clear()
+    selector.select(None)
+    assert [wait for wait in waits if wait] == []
+    selector.select(None)
+    assert [round(wait, 6) for wait in waits if wait] == [0.001]
+    assert selector.clock.targets == [1000, 2000, 3000]
+
+
+def test_realtime_selector_returns_io_ready_during_the_wait(monkeypatch):
+    """I/O that becomes ready during the wall-clock wait runs at the current time.
+
+    Purpose: Verify that a real-time selector returns I/O that becomes ready
+    while it waits for wall-clock time, without advancing simulation time.
+
+    Steps:
+        1. Build a real-time selector whose delegate reports one ready event
+           during the wall-clock wait.
+        2. Call ``select(None)``.
+
+    Expected:
+        - ``select`` returns the ready event.
+        - The clock did not advance.
+    """
+    monkeypatch.setattr('bscontroller.runtime.event_loop.time.monotonic', WallClock())
+    event = (Mock(), selectors.EVENT_READ)
+    delegate = Mock(spec=selectors.BaseSelector)
+    delegate.select.side_effect = lambda timeout: [event] if timeout else []
+    selector = RadioSelector(delegate, 1000, realtime=True)
+    selector.clock = Clock()
+    assert selector.select(None) == [event]
+    assert selector.clock.targets == []
+
+
 @requires_runner
 def test_clock_failure_unbinds_loop_so_runner_can_finalize_tasks():
     """A clock failure unbinds the loop so the runner can finalize cleanly.

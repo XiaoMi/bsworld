@@ -8,7 +8,7 @@ import asyncio
 import logging
 import signal
 import uuid
-from contextlib import nullcontext
+from functools import partial
 from pathlib import Path
 
 from . import RadioController, RadioEventLoop, RadioSession, __version__
@@ -16,19 +16,42 @@ from .config import ControllerConfig
 from .runtime import PhyProcess
 
 
+def controller_addresses(first: str, count: int) -> list[str]:
+    """Return count public addresses, counting up from first."""
+    octets = first.split(':')
+    if len(octets) != 6 or not all(len(octet) == 2 for octet in octets):
+        raise ValueError(f'invalid Bluetooth address: {first}')
+    base = int(''.join(octets), 16)
+    if base + count > 1 << 48:
+        raise ValueError(
+            f'{count} addresses starting at {first} exceed FF:FF:FF:FF:FF:FF'
+        )
+    return [
+        ':'.join(f'{base + index:012X}'[i : i + 2] for i in range(0, 12, 2))
+        for index in range(count)
+    ]
+
+
 async def serve(args):
-    controller = RadioController(
-        args.name,
-        args.address,
-        hci_snoop_file=args.btsnoop_file,
-        hci_socket=args.hci_socket,
-        config=args.config,
-    )
+    addresses = controller_addresses(args.address, len(args.hci_socket))
+    controllers = [
+        RadioController(f'hci{index}', address, hci_socket=path, config=args.config)
+        for index, (path, address) in enumerate(zip(args.hci_socket, addresses))
+    ]
+    # Controllers take PHY devices 0..n-1 and the serve clock takes device n.
     async with RadioSession(
-        args.sim_id, [(args.dev_id, controller)], clock_dev_id=args.clock_id
+        args.sim_id, list(enumerate(controllers)), clock_dev_id=len(controllers)
     ):
-        print(f'HCI listening on {args.hci_socket}', flush=True)
-        await controller.terminated
+        for controller, address in zip(controllers, addresses):
+            print(f'{controller.name} {address} on {controller.hci_socket}', flush=True)
+        # Each Controller stops when its socket connection closes; serve ends with
+        # the last. terminated also completes when a worker fails, and only close()
+        # raises the error, so close each Controller as soon as it stops.
+        remaining = {controller.terminated: controller for controller in controllers}
+        while remaining:
+            done, _ = await asyncio.wait(remaining, return_when=asyncio.FIRST_COMPLETED)
+            for terminated in done:
+                await remaining.pop(terminated).close()
 
 
 async def run(args):
@@ -48,68 +71,63 @@ def main():
     commands.add_parser(
         'config', help='print a JSON configuration with every default value'
     )
-    for name, help_text in [('serve', 'serve H4 HCI over a Unix socket')]:
-        command = commands.add_parser(name, help=help_text)
-        command.add_argument(
-            '--bsim-dir',
-            type=Path,
-            help='BabbleSim build output (default: BSIM_OUT_PATH)',
-        )
-        command.add_argument('--sim-id', default=None)
-        command.add_argument('--log-dir', type=Path)
-    server = commands.choices['serve']
-    server.add_argument('--hci-socket', type=Path, required=True)
-    server.add_argument(
-        '--btsnoop-file',
-        type=Path,
-        help='write HCI BTSnoop using the Controller simulation clock',
+    server = commands.add_parser(
+        'serve', help='run Controllers on one PHY, each serving H4 HCI on a socket'
     )
-    server.add_argument('--address', default='F0:F1:F2:F3:F4:01')
     server.add_argument(
-        '--join', action='store_true', help='join a PHY managed by the caller'
+        '--bsim-dir',
+        type=Path,
+        help='BabbleSim build output (default: BSIM_OUT_PATH)',
+    )
+    server.add_argument('--sim-id', default=None)
+    server.add_argument('--log-dir', type=Path)
+    server.add_argument(
+        '--hci-socket',
+        type=Path,
+        nargs='+',
+        required=True,
+        help='Unix socket of each Controller; give several paths for several',
+    )
+    server.add_argument(
+        '--address',
+        default='F0:F1:F2:F3:F4:01',
+        help='public address of the first Controller; the others count up from it',
     )
     server.add_argument(
         '--config',
         type=Path,
-        help='JSON Controller configuration (see "bscontroller config")',
+        help='JSON Controller configuration (see "bscontroller config"); '
+        'Controllers are named hci0, hci1, ... in its "controllers" object',
     )
     server.add_argument(
-        '--name',
-        default='controller',
-        help='select this entry under "controllers" in --config',
+        '--realtime',
+        action='store_true',
+        help='keep simulation time at wall-clock time, for Hosts with real timers',
     )
-    server.add_argument('--dev-id', type=int, default=0)
-    server.add_argument('--clock-id', type=int, default=1)
     args = parser.parse_args()
     if args.command == 'config':
         print(ControllerConfig.template())
         return
-    if args.command == 'serve':
-        if args.dev_id < 0 or args.clock_id < 0 or args.dev_id == args.clock_id:
-            parser.error(
-                'Controller and clock IDs must be distinct nonnegative integers'
-            )
-        if args.join and args.sim_id is None:
-            parser.error('--join requires --sim-id and matching PHY device identities')
-        if not args.join and (args.dev_id, args.clock_id) != (0, 1):
-            parser.error('managed PHY mode uses --dev-id 0 and --clock-id 1')
-    args.sim_id = args.sim_id or ('bscontroller_' + uuid.uuid4().hex[:12])
-    args.log_dir = args.log_dir or Path('/tmp') / args.sim_id
-    logging.basicConfig(level=logging.WARNING)
+    if len(set(args.hci_socket)) != len(args.hci_socket):
+        parser.error('each Controller needs its own --hci-socket')
     if args.config is not None and not args.config.is_file():
         parser.error(f'configuration file not found: {args.config}')
     try:
-        owner = (
-            nullcontext()
-            if args.command == 'serve' and args.join
-            else PhyProcess(
-                args.sim_id,
-                2,
-                directory=args.bsim_dir,
-                log_dir=args.log_dir,
-            )
+        controller_addresses(args.address, len(args.hci_socket))
+    except ValueError as error:
+        parser.error(str(error))
+    args.sim_id = args.sim_id or ('bscontroller_' + uuid.uuid4().hex[:12])
+    args.log_dir = args.log_dir or Path('/tmp') / args.sim_id
+    logging.basicConfig(level=logging.WARNING)
+    try:
+        phy = PhyProcess(
+            args.sim_id,
+            len(args.hci_socket) + 1,
+            directory=args.bsim_dir,
+            log_dir=args.log_dir,
         )
-        with owner, asyncio.Runner(loop_factory=RadioEventLoop) as runner:
+        loop_factory = partial(RadioEventLoop, realtime=args.realtime)
+        with phy, asyncio.Runner(loop_factory=loop_factory) as runner:
             runner.run(run(args))
     except asyncio.CancelledError:
         return

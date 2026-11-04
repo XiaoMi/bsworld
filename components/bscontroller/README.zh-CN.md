@@ -39,24 +39,42 @@ python -m pip install .
 启动一个 Controller，再让你的 Host 连接它的 socket：
 
 ```sh
-bscontroller serve --hci-socket /tmp/radio.sock --btsnoop-file /tmp/hci.snoop
+bscontroller serve --hci-socket /tmp/radio.sock
 ```
 
-`serve` 会启动一个 BabbleSim PHY，并在 Unix socket 上提供 H4 HCI。它只接受一个 Host，Host 断开后退出；socket 路径不能已存在。`--btsnoop-file` 保存 HCI 报文，可用 Wireshark 打开。见 `bscontroller serve --help`。
+`serve` 会启动一个 BabbleSim PHY，并在 Unix socket 上提供 H4 HCI；
 
-Controller 按仿真时间运行，仿真时间会以机器允许的最快速度推进。使用墙钟时间的 Host 会看到 Controller 跑在前面，两边的定时器和超时对不上。
-
-要得到可复现的结果，Host 需要接入同一个离散时间调度。如果只是手动快速测试，可以加上 BabbleSim 的刹车设备 handbrake，它让仿真时间与墙钟时间保持接近。先多分配一个设备启动 PHY，再让 BSController 加入：
+给 `--hci-socket` 传入多个路径，可以在同一个 PHY 上运行多个 Controller。它们依次命名为 `hci0`、`hci1`……，公共地址从 `--address`（默认 `F0:F1:F2:F3:F4:01`）开始依次加一：
 
 ```sh
-cd "$BSIM_OUT_PATH/bin"
-./bs_2G4_phy_v1 -s=demo -D=3 &           # 0：Controller，1：serve 时钟，2：handbrake
-./bs_device_handbrake -s=demo -d=2 -r=1 &  # -r：仿真时间与墙钟时间之比
-bscontroller serve --join --sim-id demo --dev-id 0 --clock-id 1 \
-  --hci-socket /tmp/radio.sock --btsnoop-file /tmp/hci.snoop
+bscontroller serve --hci-socket /tmp/radio0.sock /tmp/radio1.sock
 ```
 
-此时时序仍会受主机负载影响，只适合探索性测试。
+
+默认情况下，仿真时间会以机器允许的最快速度推进。使用墙钟定时器的 Host 会看到 Controller 跑在前面，两边的定时器和超时对不上。加上 `--realtime`，让仿真时间与墙钟时间保持一致：
+
+```sh
+bscontroller serve --hci-socket /tmp/radio.sock --realtime
+```
+
+### 接入 BlueZ
+
+例如，让一个 BlueZ 扫描设备发现另一个广播设备，先启动两个 Controller：
+
+```sh
+bscontroller serve --hci-socket /tmp/radio0.sock /tmp/radio1.sock --realtime
+```
+
+等 `serve` 打印出两个 socket 后，再在各自的终端中运行后面四条命令：
+
+```sh
+socat PTY,link=/tmp/bscontroller-tty0,rawer UNIX-CONNECT:/tmp/radio0.sock
+socat PTY,link=/tmp/bscontroller-tty1,rawer UNIX-CONNECT:/tmp/radio1.sock
+sudo btattach -B "$(readlink -f /tmp/bscontroller-tty0)" -P h4
+sudo btattach -B "$(readlink -f /tmp/bscontroller-tty1)" -P h4
+```
+
+在 `bluetoothctl` 中先 `select F0:F1:F2:F3:F4:01` 并打开广播，再 `select F0:F1:F2:F3:F4:02` 并开始扫描。
 
 ## 在 Python 中使用
 
@@ -138,7 +156,7 @@ Host 有两种接入方式：
 
 ```sh
 bscontroller config > bsc.json        # 导出全部默认值，在此基础上修改
-bscontroller serve --hci-socket /tmp/radio.sock --config bsc.json --name hci0
+bscontroller serve --hci-socket /tmp/radio0.sock /tmp/radio1.sock --config bsc.json
 ```
 
 Python 中，把配置文件（或同样结构的 dict）传给 `RadioController`，每个 Controller 会按自己的名字选用 `controllers` 中的条目：
@@ -203,10 +221,6 @@ other = RadioController("x", "F0:F1:F2:F3:F4:03", config=ControllerConfig(max_co
 <div align="center"><img src="docs/images/radio_controller_arch.svg" alt="多个 Controller 共享 BabbleSim PHY" width="80%"><br><em>图 1：共享同一 PHY 的多个 Controller</em></div>
 
 在单个 Controller 内部，Link Layer 为每种角色（广播、扫描、发起连接、同步、连接）各维护一个管理器。每条 ACL 连接都有自己的控制流程状态、加密状态和连接事件执行器。所有角色共用一个射频调度器，由它决定这唯一的一个射频下一步做什么。
-
-![单个 Controller 的内部模块、状态归属与交互路径](docs/images/radio_controller_internal_arch.svg)
-
-*图 2：单个 Controller 内部结构。嵌套框表示归属关系；黑色箭头是调用，绿色虚线是回调，橙色是调度，蓝色是 PDU 和射频结果，灰色点线是运行时的组装关系。*
 
 **线程与时间。** 每个 `RadioController` 运行在独立线程中，有自己的事件循环和 PHY 连接。Host 线程和 Controller 线程之间不共享任何状态，只传递不可变的 H4 报文。射频时间以整数微秒计。每个 Controller，以及可选的 Host 时钟，都要先与 PHY 同步，仿真时间才会推进，所以时序与机器快慢无关。
 
