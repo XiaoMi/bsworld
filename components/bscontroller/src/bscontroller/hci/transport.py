@@ -127,27 +127,34 @@ class H4Server:
                 self.finished.set_result(None)
         finally:
             # Join both directions before releasing the writer so shutdown cannot
-            # leave an orphan task accessing a closed socket.
-            for task in tasks:
-                task.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
-            writer.close()
+            # leave an orphan task accessing a closed socket. A second cancellation
+            # can interrupt the join, so close the Host connection regardless.
             try:
-                await writer.wait_closed()
-            except OSError:
-                pass
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+            finally:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except OSError:
+                    pass
 
     async def __aexit__(self, exc_type, exc, traceback):
         # A connection accepted by asyncio may still have its callback queued.
         # Reject it when that callback runs during server.wait_closed().
         self._closing = True
-        if self.server is not None:
-            self.server.close()
-        if self.task is not None and not self.task.done():
-            self.task.cancel()
-            await asyncio.gather(self.task, return_exceptions=True)
-        if self.server is not None:
-            await self.server.wait_closed()
-            self.path.unlink(missing_ok=True)
+        try:
+            if self.server is not None:
+                self.server.close()
+            if self.task is not None and not self.task.done():
+                self.task.cancel()
+                await asyncio.gather(self.task, return_exceptions=True)
+            if self.server is not None:
+                await self.server.wait_closed()
+        finally:
+            # A worker shutdown can cancel these waits; still remove the socket.
+            if self.server is not None:
+                self.path.unlink(missing_ok=True)
         if self.finished.done() and not self.finished.cancelled():
             self.finished.exception()
