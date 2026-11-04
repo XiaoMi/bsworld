@@ -156,3 +156,83 @@ async def test_server_shutdown_closes_a_connected_host(tmp_path):
         if writer is not None:
             writer.close()
             await writer.wait_closed()
+
+
+async def test_cancelled_shutdown_still_removes_the_socket(tmp_path):
+    """A shutdown cancelled while it waits still removes the socket path.
+
+    Purpose: Verify that cancelling ``H4Server.__aexit__`` while it waits for the
+    listening server to close, as a worker shutdown can when a Host disconnects
+    at the same time, does not leave the socket path behind.
+
+    Steps:
+        1. Enter an ``H4Server`` and make its ``wait_closed`` block.
+        2. Run ``__aexit__`` in a task and cancel it while it blocks.
+
+    Expected:
+        - The task ends with ``CancelledError``.
+        - The socket path no longer exists.
+    """
+    path = tmp_path / 'hci.sock'
+    server = H4Server(SimpleNamespace(set_packet_sink=lambda sink: None), path)
+    await server.__aenter__()
+    wait_closed = server.server.wait_closed
+    blocked = asyncio.Event()
+
+    async def block():
+        blocked.set()
+        await asyncio.Event().wait()
+
+    server.server.wait_closed = block
+    closing = asyncio.create_task(server.__aexit__(None, None, None))
+    await asyncio.wait_for(blocked.wait(), 1)
+    closing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    assert not path.exists()
+    await wait_closed()
+
+
+async def test_cancelled_host_cleanup_still_closes_the_host(monkeypatch, tmp_path):
+    """A Host session cancelled during its cleanup still closes the Host.
+
+    Purpose: Verify that a second cancellation, arriving while a Host session
+    joins its read and write tasks, still closes that Host's connection.
+
+    Steps:
+        1. Make the read task keep waiting after its first cancellation.
+        2. Connect a Host, then run ``__aexit__``, which cancels the session.
+        3. Cancel ``__aexit__`` while the session waits for the read task.
+
+    Expected:
+        - The Host sees EOF.
+        - The socket path no longer exists.
+    """
+    reading = asyncio.Event()
+    joining = asyncio.Event()
+
+    async def read(self, reader):
+        try:
+            reading.set()
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            joining.set()
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(H4Server, '_read', read)
+    path = tmp_path / 'hci.sock'
+    server = H4Server(SimpleNamespace(set_packet_sink=lambda sink: None), path)
+    await server.__aenter__()
+    reader, writer = await asyncio.open_unix_connection(path)
+    try:
+        await asyncio.wait_for(reading.wait(), 1)
+        closing = asyncio.create_task(server.__aexit__(None, None, None))
+        await asyncio.wait_for(joining.wait(), 1)
+        closing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await closing
+        assert await asyncio.wait_for(reader.read(1), 1) == b''
+        assert not path.exists()
+    finally:
+        writer.close()
+        await writer.wait_closed()
