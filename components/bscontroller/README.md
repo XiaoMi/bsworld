@@ -39,24 +39,42 @@ python -m pip install .
 Start a Controller and connect your Host to its socket:
 
 ```sh
-bscontroller serve --hci-socket /tmp/radio.sock --btsnoop-file /tmp/hci.snoop
+bscontroller serve --hci-socket /tmp/radio.sock
 ```
 
-`serve` starts a BabbleSim PHY and serves H4 HCI on the Unix socket. It accepts one Host and exits when that Host disconnects; the socket path must not exist. `--btsnoop-file` saves the HCI traffic for Wireshark. See `bscontroller serve --help`.
+`serve` starts a BabbleSim PHY and serves H4 HCI on the Unix socket; 
 
-The Controller runs on simulation time, which advances as fast as the machine allows. A Host that uses wall-clock time sees the Controller run ahead, so timers and timeouts on the two sides disagree.
-
-For reproducible results, the Host must join the same discrete-time schedule. For a quick manual test, add BabbleSim's handbrake device instead, which holds simulation time close to wall-clock time. Start the PHY with one extra device, then join it:
+Give `--hci-socket` several paths to run several Controllers on the same PHY. They are named `hci0`, `hci1`, ..., and their public addresses count up from `--address` (default `F0:F1:F2:F3:F4:01`):
 
 ```sh
-cd "$BSIM_OUT_PATH/bin"
-./bs_2G4_phy_v1 -s=demo -D=3 &           # 0: Controller, 1: serve clock, 2: handbrake
-./bs_device_handbrake -s=demo -d=2 -r=1 &  # -r: simulation/wall-clock ratio
-bscontroller serve --join --sim-id demo --dev-id 0 --clock-id 1 \
-  --hci-socket /tmp/radio.sock --btsnoop-file /tmp/hci.snoop
+bscontroller serve --hci-socket /tmp/radio0.sock /tmp/radio1.sock
 ```
 
-Timing then still depends on host load, so use this only for exploration.
+
+By default, simulation time advances as fast as the machine allows. A Host that uses wall-clock timers sees the Controller run ahead, so timers and timeouts on the two sides disagree. Add `--realtime` to keep simulation time at wall-clock time:
+
+```sh
+bscontroller serve --hci-socket /tmp/radio.sock --realtime
+```
+
+### Using BSController with BlueZ
+
+For example, to let a scanning BlueZ adapter discover an advertising one, start two Controllers:
+
+```sh
+bscontroller serve --hci-socket /tmp/radio0.sock /tmp/radio1.sock --realtime
+```
+
+Once `serve` prints both sockets, run the four commands below, each in its own terminal:
+
+```sh
+socat PTY,link=/tmp/bscontroller-tty0,rawer UNIX-CONNECT:/tmp/radio0.sock
+socat PTY,link=/tmp/bscontroller-tty1,rawer UNIX-CONNECT:/tmp/radio1.sock
+sudo btattach -B "$(readlink -f /tmp/bscontroller-tty0)" -P h4
+sudo btattach -B "$(readlink -f /tmp/bscontroller-tty1)" -P h4
+```
+
+In `bluetoothctl`, `select F0:F1:F2:F3:F4:01` and turn on advertising, then `select F0:F1:F2:F3:F4:02` and start scanning.
 
 ## Using BSController from Python
 
@@ -138,7 +156,7 @@ On the command line:
 
 ```sh
 bscontroller config > bsc.json        # every default, ready to edit
-bscontroller serve --hci-socket /tmp/radio.sock --config bsc.json --name hci0
+bscontroller serve --hci-socket /tmp/radio0.sock /tmp/radio1.sock --config bsc.json
 ```
 
 In Python, pass the file (or an equivalent dict) to `RadioController`. Each Controller picks the `controllers` entry with its own name:
@@ -203,10 +221,6 @@ Each Controller contains an HCI layer, a Link Layer and a radio adapter. All Con
 <div align="center"><img src="docs/images/radio_controller_arch.svg" alt="Multiple Controllers sharing a BabbleSim PHY" width="80%"><br><em>Figure 1: Controllers on a shared PHY</em></div>
 
 Inside one Controller, the Link Layer keeps a manager for each role (advertising, scanning, initiating, synchronizing, connections). Every ACL connection has its own control-procedure state, encryption state and connection-event executor. All roles share one radio scheduler, which decides what the single radio does next.
-
-![Internal modules, state ownership and interaction paths of one Controller](docs/images/radio_controller_internal_arch.svg)
-
-*Figure 2: Inside one Controller. Nested boxes show ownership. Black arrows are calls, dashed green arrows are callbacks, orange marks scheduling, blue marks PDUs and radio results, and dotted gray marks runtime wiring.*
 
 **Threads and time.** Each `RadioController` runs in a dedicated thread with its own event loop and PHY connection. The Host thread and the Controller thread share no state; they only pass immutable H4 packets. Radio time is in integer microseconds. Every Controller, and an optional Host clock, synchronizes with the PHY before simulation time advances, so timing does not depend on how fast the machine is.
 

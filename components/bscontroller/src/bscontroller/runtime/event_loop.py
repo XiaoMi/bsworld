@@ -28,12 +28,17 @@ class RadioClock(Protocol):
 
 
 class RadioSelector(selectors.BaseSelector):
-    def __init__(self, selector: selectors.BaseSelector, max_step_us: int):
+    def __init__(
+        self, selector: selectors.BaseSelector, max_step_us: int, *, realtime=False
+    ):
         if max_step_us <= 0:
             raise ValueError('max_step_us must be positive')
         self.delegate = selector
         self.clock: RadioClock | None = None
         self.max_step_us = max_step_us
+        self.realtime = realtime
+        # Wall-clock time paired with a simulation time; set at the first step.
+        self._origin: tuple[float, int] | None = None
 
     def register(self, fileobj: Any, events: int, data: Any = None):
         return self.delegate.register(fileobj, events, data)
@@ -67,10 +72,25 @@ class RadioSelector(selectors.BaseSelector):
         )
         if step_us > 0:
             before = self.clock.now_us
+            if self.realtime and (ready := self._wait_for_wall_clock(before + step_us)):
+                return ready
             if self.clock.advance_to_us(before + step_us) <= before:
                 raise RuntimeError('BabbleSim clock did not advance')
         # A PHY grant can make socket/FIFO work ready; poll again at the new time.
         return self.delegate.select(0)
+
+    def _wait_for_wall_clock(self, target_us: int):
+        """Hold the clock until wall-clock time reaches target_us; return early I/O."""
+        now = time.monotonic()
+        if self._origin is None:
+            self._origin = (now, self.clock.now_us)
+        wall, simulated = self._origin
+        due = wall + (target_us - simulated) / PHY_TIME_UNITS_PER_SECOND
+        if due <= now:
+            # Behind wall-clock time: continue from now instead of catching up.
+            self._origin = (now, target_us)
+            return []
+        return self.delegate.select(due - now)
 
 
 class RadioEventLoop(asyncio.SelectorEventLoop):
@@ -78,9 +98,9 @@ class RadioEventLoop(asyncio.SelectorEventLoop):
 
     selector_type = RadioSelector
 
-    def __init__(self, max_step_us: int = DEFAULT_MAX_STEP_US):
+    def __init__(self, max_step_us: int = DEFAULT_MAX_STEP_US, *, realtime=False):
         self.radio_selector = self.selector_type(
-            selectors.DefaultSelector(), max_step_us
+            selectors.DefaultSelector(), max_step_us, realtime=realtime
         )
         super().__init__(selector=self.radio_selector)
         self._wall_clock_resolution = self._clock_resolution
@@ -100,6 +120,7 @@ class RadioEventLoop(asyncio.SelectorEventLoop):
         if any(not timer.cancelled() for timer in self._scheduled):
             raise RuntimeError('cannot bind a radio clock with active timers')
         self.radio_selector.clock = clock
+        self.radio_selector._origin = None
         # Allow float roundoff at a due timer without admitting the next tick.
         self._clock_resolution = 0.5 / PHY_TIME_UNITS_PER_SECOND
 
@@ -119,8 +140,10 @@ class RadioEventLoop(asyncio.SelectorEventLoop):
 class ControllerSelector(RadioSelector):
     """Admit a PHY transaction only after all current ready work has drained."""
 
-    def __init__(self, selector: selectors.BaseSelector, max_step_us: int):
-        super().__init__(selector, max_step_us)
+    def __init__(
+        self, selector: selectors.BaseSelector, max_step_us: int, *, realtime=False
+    ):
+        super().__init__(selector, max_step_us, realtime=realtime)
         self.pending: tuple[int, asyncio.Future[int | None]] | None = None
 
     def select(self, timeout: float | None = None):
