@@ -3,11 +3,9 @@
 
 name: BSController
 
+# The CI workflow runs these tests for pull requests and pushes to main.
 on:
-  push:
-    # Branches only: a release tag points at a commit that was already tested.
-    branches: ['**']
-  pull_request:
+  workflow_call:
   workflow_dispatch:
 
 permissions:
