@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType
@@ -70,11 +70,14 @@ class ProcessManager:
         stderr: int | None = None,
         log_fh: object | None = None,
         env: dict[str, str] | None = None,
+        pass_fds: Sequence[int] = (),
     ) -> Proc:
         """Spawn a background process.
 
         stdout/stderr can be pre-opened fds, such as a FIFO write end;
         if omitted, stdout+stderr are redirected into log_fh directly.
+        pass_fds keeps further descriptors open in the child, at the same
+        numbers.
         """
         if not Path(cmd[0]).exists():
             raise BSWorldSetupError(f"missing executable: {cmd[0]}")
@@ -106,6 +109,7 @@ class ProcessManager:
                 stderr=stderr,
                 start_new_session=True,
                 close_fds=True,
+                pass_fds=pass_fds,
                 env=env,
             )
         except Exception:
