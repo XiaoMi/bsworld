@@ -50,7 +50,7 @@ ruff check --select I --fix .
 ruff format .
 ```
 
-GitHub Actions 的 `Checks` 工作流在每次 push 和 pull request 时执行上述检查和单元测试，格式、静态规则或单元测试不通过时失败。检查覆盖检出版本中的全部 Python 代码，包括已有文件。
+GitHub Actions 的 `Checks` 工作流由 `CI` 在每个 pull request 和推送到 main 时运行，执行上述检查和单元测试，格式、静态规则或单元测试不通过时失败。检查覆盖检出版本中的全部 Python 代码，包括已有文件。
 
 ## 测试覆盖率
 

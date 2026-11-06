@@ -5,13 +5,13 @@
 # Builds bsworld-trouble from docker/trouble.Dockerfile and runs its tests.
 name: TrouBLE
 
+# The CI workflow calls this one; run it alone from the Actions tab.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      rebuild_image:
+        type: boolean
+        default: false
   workflow_dispatch:
     inputs:
       rebuild_image:
@@ -22,14 +22,9 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  # Replace obsolete PR checks, but keep every main commit eligible for a release.
-  group: trouble-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
 jobs:
-  trouble:
-    name: TrouBLE
+  image:
+    name: Image
     uses: ./.github/workflows/platform.yml
     permissions:
       contents: read

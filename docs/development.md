@@ -50,7 +50,7 @@ ruff check --select I --fix .
 ruff format .
 ```
 
-The `Checks` GitHub Actions workflow runs these checks and the unit tests on every push and pull request, and fails when formatting, lint, or a unit test fails. It checks all maintained Python files in the checkout, including existing files.
+The `Checks` GitHub Actions workflow, which `CI` runs for every pull request and push to main, runs these checks and the unit tests, and fails when formatting, lint, or a unit test fails. It checks all maintained Python files in the checkout, including existing files.
 
 ## Coverage
 

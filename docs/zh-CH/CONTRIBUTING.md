@@ -38,7 +38,7 @@ ruff format --check --no-cache .
 pytest tests/unit/
 ```
 
-遵循仓库的 Python [代码格式](development.md#代码格式)约定。`Checks` 工作流会在每次 push 和 pull request 时检查全部 Python 代码并运行单元测试。
+遵循仓库的 Python [代码格式](development.md#代码格式)约定。`Checks` 工作流属于 `CI`，会在每个 pull request 和推送到 main 时检查全部 Python 代码并运行单元测试。
 
 修改进程启动、调度、HCI、RF 行为、平台配置或测试业务程序时，还需要运行受影响的虚拟系统测试，例如：
 
