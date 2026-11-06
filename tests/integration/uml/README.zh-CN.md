@@ -84,6 +84,8 @@ Guest 的随机种子、起始时间（2026-01-01T00:00:00Z）和内核命令行
 
 在 [BlueZ](bluez/README.zh-CN.md) 或 [NimBLE](nimble/README.zh-CN.md) 目录中添加异步 pytest 测试。启动前通过 [common.py](common.py) 中的 `add_uml_controller(topo, ...)` 登记 Controller。`topo.start()` 之后，在 `AsyncExitStack` 中调用 `open_uml_guest(stack, topo, controller, ...)` 启动 Guest，stack 关闭时 Guest 随之停止。再通过 `guest.shell` 发送命令并用 `wait_log()` 验证。
 
+[unit/](unit) 下是 time-travel calendar 的协议测试，不需要内核和 BabbleSim：`pytest tests/integration/uml/unit`。它们也会随整个套件一起运行。
+
 ## 许可证
 
 - 测试和 `source/` 中的文件：Apache License 2.0。
