@@ -110,7 +110,7 @@ class UmlGuest:
         self._calendar = calendar
         try:
             calendar.listen()
-            self._pipe = LogCapture.open(log_dir / f"{self.label}.log")
+            pipe = self._pipe = LogCapture.open(log_dir / f"{self.label}.log")
             hci_fd = _connect_controller(self.controller.hci_sock)
             try:
                 self._proc = self.topo.pm.spawn(
@@ -119,9 +119,9 @@ class UmlGuest:
                     cwd=state_dir,
                     log_dir=log_dir,
                     stdin=subprocess.PIPE,
-                    stdout=self._pipe.write_fd,
-                    stderr=self._pipe.write_fd,
-                    log_fh=self._pipe.log_fh,
+                    stdout=pipe.write_fd,
+                    stderr=pipe.write_fd,
+                    log_fh=pipe.log_fh,
                     env={
                         **os.environ,
                         "LD_PRELOAD": str(self.getrandom_library),
@@ -133,7 +133,12 @@ class UmlGuest:
                 # The guest owns the Controller connection from here on.
                 os.close(hci_fd)
             self.shell.attach(self._proc)
-            calendar.connect(asyncio.get_running_loop(), clock, alive=self._proc.alive)
+            calendar.connect(
+                asyncio.get_running_loop(),
+                clock,
+                alive=self._proc.alive,
+                console=pipe,
+            )
         except BaseException:
             self.stop()
             raise
