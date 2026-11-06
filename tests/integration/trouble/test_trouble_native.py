@@ -15,7 +15,7 @@
 """Two native TrouBLE Hosts over H4 Unix sockets and BabbleSim time.
 
 Both Hosts are plain Linux processes that join the simulation directly, so no
-QEMU guest is involved. The Host stack and the Battery Service applications
+Linux guest is involved. The Host stack and the Battery Service applications
 come from the pinned upstream commit; the transport and executor live in
 `source/src/bsim/`.
 """

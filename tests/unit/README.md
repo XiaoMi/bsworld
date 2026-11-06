@@ -1,6 +1,6 @@
 # BSWorld unit tests
 
-The unit suite protects BSWorld's implementation contracts in isolation. It does not require a native BabbleSim build, firmware images, QEMU, or external Bluetooth applications. Tests for helpers under `tests/integration` live with the integration tree even when they run without native artifacts.
+The unit suite protects BSWorld's implementation contracts in isolation. It does not require a native BabbleSim build, firmware images, a UML kernel, or external Bluetooth applications. Tests for helpers under `tests/integration` live with the integration tree even when they run without native artifacts.
 
 | Area | Invariants protected |
 |---|---|

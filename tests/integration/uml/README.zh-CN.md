@@ -12,6 +12,8 @@
 
 ## 准备环境
 
+[Docker 镜像](../../../docker/README.zh-CN.md)不包含 UML 内核，这些测试在镜像中会被跳过，需要在原生 Linux 主机上运行。
+
 先按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim 和[虚拟 Controller](../../../docs/zh-CH/controllers.md#编译-zephyr-controller)。
 
 Guest 以只读方式挂载主机的根文件系统并运行其中的程序。64 位 UML 内核不能运行 32 位程序，因此 Guest 运行的程序都必须是 64 位，包括 [init.sh](source/init.sh) 启动的 `dbus-daemon`、`bluetoothd` 以及 `btattach`，可以用 `file /usr/bin/dbus-daemon` 检查。

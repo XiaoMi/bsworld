@@ -16,7 +16,7 @@
 
 ## 测试生命周期
 
-`topo` fixture 为每个测试提供一个 `BluetoothTopology`。测试声明参与者、连接关系和 RF 条件，不直接编排底层操作系统进程。原生业务程序由所在测试目录的创建函数描述为 `ProcessInstance`，获得日志等待和可选的 Shell 输入能力，并自动登记到传入的拓扑中；基于 asyncio 的 Python Host 协议栈则直接注册虚拟 Controller，并在拓扑启动后连接它的 HCI socket。
+`topo` fixture 为每个测试提供一个 `BluetoothTopology`。测试声明参与者、连接关系和 RF 条件，不直接编排底层操作系统进程。原生业务程序由所在测试目录的创建函数描述为 `ProcessInstance`，获得日志等待和可选的 Shell 输入能力，并自动登记到传入的拓扑中；基于 asyncio 的 Python Host 协议栈则直接注册虚拟 Controller，并在拓扑启动后连接它的 HCI socket。User Mode Linux Guest 同样只预先注册 Controller，在拓扑启动后再启动。
 
 一套拓扑依次经过四个阶段：
 
@@ -86,8 +86,8 @@ host.attach(topo.add_controller(
 |---|---|
 | Bumble | [Bumble 集成测试](../../tests/integration/bumble/README.zh-CN.md#添加场景) |
 | NuttX | [BTSak 与 NimBLE](../../tests/integration/nuttx/README.zh-CN.md#添加场景) |
-| QEMU Linux | [BlueZ 与 NimBLE](../../tests/integration/qemu/README.zh-CN.md#添加场景) |
 | TrouBLE | [原生 TrouBLE 测试](../../tests/integration/trouble/README.zh-CN.md#添加场景) |
+| UML Linux | [BlueZ 与 NimBLE](../../tests/integration/uml/README.zh-CN.md#添加场景) |
 | Zephyr | [Bluetooth shell](../../tests/integration/zephyr/shell/README.zh-CN.md#添加场景) |
 
 ## 完整固件

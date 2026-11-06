@@ -160,7 +160,7 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
           # Preserve the Python layers that just passed lint/unit, even on a rebuild.
-          no-cache-filters: ${{ inputs.rebuild_image && 'babblesim,zephyr,nuttx,qemu,trouble,buildroot,runtime' || '' }}
+          no-cache-filters: ${{ inputs.rebuild_image && 'babblesim,zephyr,nuttx,trouble,runtime' || '' }}
 
       - name: Record the candidate image
         id: image

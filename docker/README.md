@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-The image contains BSWorld, the tests and all compiled firmware. It needs a Linux/x86_64 host with [Docker Engine](https://docs.docker.com/engine/install/ubuntu/).
+The image contains BSWorld, the tests and the compiled firmware. It needs a Linux/x86_64 host with [Docker Engine](https://docs.docker.com/engine/install/ubuntu/). The [User Mode Linux tests](../tests/integration/uml/README.md) need a locally built kernel and are skipped in the image.
 
 ## Use a Published Image
 
@@ -146,9 +146,7 @@ build-base
 ├── babblesim
 │   ├── zephyr
 │   ├── nuttx
-│   ├── qemu
 │   └── trouble
-└── buildroot (guest kernel and rootfs)
 ```
 
 Run the local image:

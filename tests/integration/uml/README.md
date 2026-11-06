@@ -12,6 +12,8 @@ Runs a Linux guest in User Mode Linux (UML): a mainline Linux kernel built as an
 
 ## Prepare the Environment
 
+The [Docker image](../../../docker/README.md) does not include the UML kernel, so these tests are skipped there; run them on a native Linux host.
+
 Build BabbleSim and the [Virtual Controller](../../../docs/controllers.md#building-the-zephyr-controller) using the [repository instructions](../../../README.md#build-and-test) first.
 
 The guest mounts the host's root file system read-only and runs its programs. A 64-bit UML kernel cannot run 32-bit programs, so every program the guest runs must be 64-bit, including the `dbus-daemon` and `bluetoothd` that [init.sh](source/init.sh) starts and `btattach`; check with `file /usr/bin/dbus-daemon`.

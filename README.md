@@ -21,7 +21,7 @@ Use BSWorld to:
 
 ## Quick Start
 
-BSWorld runs on Linux/x86_64. The published Docker image includes Python, BSWorld, and the firmware required by the integration tests.
+BSWorld runs on Linux/x86_64. The published Docker image includes Python, BSWorld, and the firmware required by the integration tests. The [User Mode Linux tests](tests/integration/uml/README.md) need a locally built kernel and are skipped in the image.
 
 ### Docker (Recommended)
 
@@ -114,18 +114,18 @@ pytest tests/integration -n auto -v -k '[bscontroller]'
 |---|---|---|
 | Zephyr Bluetooth shell | Advertising and scanning, interference and recovery, connections and GATT, LL procedures, pairing and privacy, periodic advertising; complete firmware against Host-only shells on either Controller and against Bumble | [Zephyr tests](tests/integration/zephyr/README.md) |
 | Bumble Python Host | Advertising, scanning, connections, periodic advertising and synchronization | [Bumble tests](tests/integration/bumble/README.md) |
-| Linux and BlueZ under QEMU | Controller setup, advertising, scanning, connection and disconnection through the Linux Bluetooth subsystem | [BlueZ tests](tests/integration/qemu/bluez/README.md) |
+| Linux and BlueZ under User Mode Linux | Controller setup, advertising, scanning, connection and disconnection through the Linux Bluetooth subsystem | [BlueZ tests](tests/integration/uml/bluez/README.md) |
 | TrouBLE Rust Host | Advertising, connection, Battery Service discovery, reads and notifications | [TrouBLE tests](tests/integration/trouble/README.md) |
 | NuttX BTSak | Advertising, scanning, multiple advertisers, interference and recovery | [BTSak tests](tests/integration/nuttx/btsak/README.md) |
-| Apache NimBLE | Discovery, connection, GATT and subscription on NuttX; discovery and connection under QEMU | [NuttX tests](tests/integration/nuttx/nimble/README.md) · [QEMU tests](tests/integration/qemu/nimble/README.md) |
+| Apache NimBLE | Discovery, connection, GATT and subscription on NuttX; discovery and connection under User Mode Linux | [NuttX tests](tests/integration/nuttx/nimble/README.md) · [UML tests](tests/integration/uml/nimble/README.md) |
 
 ## Technical Architecture
 
-BSWorld keeps each Application and Host stack on its native interface. Every Host connects through standard HCI to an independent Zephyr Controller process or Python BSController worker. Complete Zephyr firmware includes its own Controller and radio and joins the PHY directly; see [Complete firmware](docs/writing-tests.md#complete-firmware). All Controllers, complete firmware and interference sources share the BabbleSim PHY and simulation clock.
+BSWorld keeps each Application and Host stack on its native interface. Every Host connects through standard HCI to an independent Zephyr Controller process or Python BSController worker. Complete Zephyr firmware includes its own Controller and radio and joins the PHY directly; see [Complete firmware](docs/writing-tests.md#complete-firmware). All Controllers, complete firmware and interference sources share the BabbleSim PHY and simulation clock. Native Hosts also join the PHY's clock, Bumble runs on the pytest event loop, and a User Mode Linux guest receives its clock from that loop through UML time-travel.
 
 <div align="center"><img src="docs/images/babblesim_arch.svg" alt="BSWorld participants connected through independent virtual Controllers or as complete firmware to a shared BabbleSim PHY" width="80%"><br><em>Figure 1: BSWorld architecture</em><br><br></div>
 
-The virtual Controllers implement HCI commands, events, ACL data, Link Layer procedures, and radio transmission and reception. A topology can mix RTOS, Python, QEMU-based Linux and complete Zephyr participants with either Controller implementation. See [Virtual Controllers](docs/controllers.md) to choose and configure them.
+The virtual Controllers implement HCI commands, events, ACL data, Link Layer procedures, and radio transmission and reception. A topology can mix RTOS, Python, User Mode Linux and complete Zephyr participants with either Controller implementation. See [Virtual Controllers](docs/controllers.md) to choose and configure them.
 
 HCI traffic is saved as `hciN.snoop` for Wireshark or another BTSnoop-capable tool. Radio traffic is saved as `babblesim/ellisys.bttrp` for Ellisys. See [Logs, traces, and captures](docs/artifacts.md) for locations and a recommended investigation order.
 

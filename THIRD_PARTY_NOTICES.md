@@ -23,7 +23,7 @@ NuttX source is obtained externally and is not vendored in this repository.
 ## Apache NimBLE
 
 - Source: https://github.com/apache/mynewt-nimble
-- Usage: Bluetooth Host stack for [NuttX](tests/integration/nuttx/README.md) and [Linux Guest tests](tests/integration/qemu/nimble/README.md)
+- Usage: Bluetooth Host stack for [NuttX](tests/integration/nuttx/README.md) and [Linux Guest tests](tests/integration/uml/nimble/README.md)
 - License: Apache License 2.0
 
 NimBLE source is obtained externally and is not vendored in this repository.
@@ -52,27 +52,18 @@ BSWorld uses the public Python and HCI transport APIs without modifying the Bumb
 
 The Virtual Controller is Zephyr's `samples/bluetooth/hci_virt` with a BSWorld Kconfig overlay. The complete and Host-only shells use external Zephyr sources.
 
-## QEMU
+## Linux
 
-- Upstream source: https://gitlab.com/qemu-project/qemu
-- BSWorld fork: https://github.com/LingaoM/qemu
-- Usage: [Linux Guest execution](tests/integration/qemu/README.md), with instruction-counting time synchronized to BabbleSim
-- License: GNU General Public License version 2 for QEMU as a whole; individual files may carry compatible licenses
+- Source: https://github.com/torvalds/linux
+- Usage: [Linux Guest execution](tests/integration/uml/README.md) as User Mode Linux, with time-travel synchronized to BabbleSim
+- License: GNU General Public License version 2; individual files may carry compatible licenses, as described by the upstream `COPYING` file
 
-QEMU is not vendored in this repository. BSWorld uses the modified fork linked above. Redistribution of its executable remains subject to the applicable corresponding-source and notice obligations.
-
-## Buildroot
-
-- Source: https://gitlab.com/buildroot.org/buildroot
-- Usage: builds the [Linux Guest environment](tests/integration/qemu/README.md)
-- License: GNU General Public License version 2 or later, with exceptions and per-file licenses described by the upstream `COPYING` file
-
-Only BSWorld's [external configuration](tests/integration/qemu/source/README.md) is maintained here. Buildroot's license does not replace the licenses of the assembled software. Review the package licenses, notices, and corresponding-source material in the actual build's `legal-info` output before distributing a Guest image.
+Linux is not vendored in this repository. The Guest kernel is built from an unmodified upstream commit with BSWorld's [configuration fragment](tests/integration/uml/source/linux.fragment).
 
 ## BlueZ
 
 - Source: https://git.kernel.org/pub/scm/bluetooth/bluez.git
-- Usage: Bluetooth Host stack and tools for [Linux Guest tests](tests/integration/qemu/bluez/README.md)
+- Usage: Bluetooth Host stack and tools for [Linux Guest tests](tests/integration/uml/bluez/README.md)
 - License: GNU General Public License version 2 or later and GNU Lesser General Public License version 2.1 or later, depending on the component
 
-The Guest also includes D-Bus, BusyBox, glibc, and other dependencies. Their licenses and notices are recorded in the corresponding Buildroot `legal-info` output.
+The Guest runs BlueZ, D-Bus, and other programs installed on the host. BSWorld does not distribute them; they keep the licenses of the host's packages.
