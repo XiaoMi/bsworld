@@ -1,0 +1,40 @@
+# Copyright 2026 Xiaomi Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+# BlueZ and NimBLE Linux in User Mode Linux guests.
+# Builds bsworld-linux from docker/linux.Dockerfile and runs its tests.
+name: Linux
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      rebuild_image:
+        description: Rebuild all image layers for validation without publishing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # Replace obsolete PR checks, but keep every main commit eligible for a release.
+  group: linux-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  linux:
+    name: Linux
+    uses: ./.github/workflows/platform.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      platform: linux
+      suites: tests/integration/uml
+      rebuild_image: ${{ inputs.rebuild_image || false }}

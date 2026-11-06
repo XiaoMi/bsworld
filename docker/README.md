@@ -2,13 +2,14 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Each platform has its own image with BSWorld, the tests, the Zephyr Controller and that platform's compiled firmware. The images need a Linux/x86_64 host with [Docker Engine](https://docs.docker.com/engine/install/ubuntu/). The [User Mode Linux tests](../tests/integration/uml/README.md) need a locally built kernel and are skipped in the images.
+Each platform has its own image with BSWorld, the tests, the Zephyr Controller and that platform's compiled firmware. The images need a Linux/x86_64 host with [Docker Engine](https://docs.docker.com/engine/install/ubuntu/).
 
 | Image | Firmware | Default suites |
 |---|---|---|
 | `ghcr.io/xiaomi/bsworld-zephyr` | Zephyr Bluetooth shells | `tests/integration/zephyr`, `tests/integration/bumble`, `tests/integration/babblesim` |
 | `ghcr.io/xiaomi/bsworld-nuttx` | NuttX BTSak and NimBLE | `tests/integration/nuttx` |
 | `ghcr.io/xiaomi/bsworld-trouble` | TrouBLE `ble_bas` | `tests/integration/trouble` |
+| `ghcr.io/xiaomi/bsworld-linux` | [User Mode Linux](../tests/integration/uml/README.md) kernel, Ubuntu BlueZ, NimBLE Linux | `tests/integration/uml` |
 
 Every image also includes Bumble, so any of them runs the Bumble suite, the unit tests and Ruff.
 
@@ -134,7 +135,7 @@ sudo docker run --rm --env PYTHONDONTWRITEBYTECODE=1 \
   bsworld:python-test python -m pytest tests/unit -q -p no:cacheprovider
 ```
 
-Build a platform image with [docker-bake.hcl](docker-bake.hcl), which links its Dockerfile to the stages it shares in [base.Dockerfile](base.Dockerfile). The targets are `zephyr`, `nuttx` and `trouble`:
+Build a platform image with [docker-bake.hcl](docker-bake.hcl), which links its Dockerfile to the stages it shares in [base.Dockerfile](base.Dockerfile). The targets are `zephyr`, `nuttx`, `trouble` and `linux`:
 
 ```sh
 sudo BUILD_UID="$(id -u)" BUILD_GID="$(id -g)" BUILD_JOBS=4 \
@@ -150,6 +151,7 @@ The image is tagged `bsworld-zephyr:dev`. `BUILD_JOBS` sets the compile parallel
 | `zephyr.Dockerfile` | `zephyr-shell`, `runtime-zephyr` |
 | `nuttx.Dockerfile` | `nuttx`, `runtime-nuttx` |
 | `trouble.Dockerfile` | `trouble`, `runtime-trouble` |
+| `linux.Dockerfile` | `uml` (kernel and seed library), `nimble-linux`, `runtime-linux` |
 
 Run the local image:
 

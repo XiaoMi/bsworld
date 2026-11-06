@@ -2,13 +2,14 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-每个平台有各自的镜像，包含 BSWorld、测试用例、Zephyr Controller 和该平台编译好的固件，需要安装了 [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) 的 Linux/x86_64 主机。[User Mode Linux 测试](../tests/integration/uml/README.zh-CN.md)需要在本地编译内核，在镜像中会被跳过。
+每个平台有各自的镜像，包含 BSWorld、测试用例、Zephyr Controller 和该平台编译好的固件，需要安装了 [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) 的 Linux/x86_64 主机。
 
 | 镜像 | 固件 | 默认测试套件 |
 |---|---|---|
 | `ghcr.io/xiaomi/bsworld-zephyr` | Zephyr Bluetooth shell | `tests/integration/zephyr`、`tests/integration/bumble`、`tests/integration/babblesim` |
 | `ghcr.io/xiaomi/bsworld-nuttx` | NuttX BTSak 与 NimBLE | `tests/integration/nuttx` |
 | `ghcr.io/xiaomi/bsworld-trouble` | TrouBLE `ble_bas` | `tests/integration/trouble` |
+| `ghcr.io/xiaomi/bsworld-linux` | [User Mode Linux](../tests/integration/uml/README.zh-CN.md) 内核、Ubuntu 的 BlueZ、NimBLE Linux | `tests/integration/uml` |
 
 每个镜像都包含 Bumble，因此任一镜像都能运行 Bumble 套件、单元测试和 Ruff。
 
@@ -134,7 +135,7 @@ sudo docker run --rm --env PYTHONDONTWRITEBYTECODE=1 \
   bsworld:python-test python -m pytest tests/unit -q -p no:cacheprovider
 ```
 
-用 [docker-bake.hcl](docker-bake.hcl) 构建平台镜像，它把各平台的 Dockerfile 与 [base.Dockerfile](base.Dockerfile) 中共用的阶段关联起来。可选 target 为 `zephyr`、`nuttx` 和 `trouble`：
+用 [docker-bake.hcl](docker-bake.hcl) 构建平台镜像，它把各平台的 Dockerfile 与 [base.Dockerfile](base.Dockerfile) 中共用的阶段关联起来。可选 target 为 `zephyr`、`nuttx`、`trouble` 和 `linux`：
 
 ```sh
 sudo BUILD_UID="$(id -u)" BUILD_GID="$(id -g)" BUILD_JOBS=4 \
@@ -150,6 +151,7 @@ sudo BUILD_UID="$(id -u)" BUILD_GID="$(id -g)" BUILD_JOBS=4 \
 | `zephyr.Dockerfile` | `zephyr-shell`、`runtime-zephyr` |
 | `nuttx.Dockerfile` | `nuttx`、`runtime-nuttx` |
 | `trouble.Dockerfile` | `trouble`、`runtime-trouble` |
+| `linux.Dockerfile` | `uml`（内核和随机种子库）、`nimble-linux`、`runtime-linux` |
 
 运行本地镜像：
 

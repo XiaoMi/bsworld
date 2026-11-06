@@ -27,7 +27,7 @@ BSWorld appends `run-<timestamp>/<uid>` beneath the selected root. [pytest-xdist
 
 The [Docker commands](../docker/README.md#run-tests) bind-mount `/output` at `.cache/docker-results` on the host. The default image command saves `pytest.xml` there, alongside the `run-<timestamp>/<uid>` directories containing per-test logs and captures.
 
-In GitHub Actions, the `Checks` workflow runs Ruff and the unit tests. The `Zephyr`, `NuttX`, and `TrouBLE` workflows each build their platform image and run its integration tests inside it, independently of each other. Open **Actions → the workflow → the run** to view a result. Each platform run uploads a `bsworld-results-<platform>-<run-id>-<attempt>` artifact with `integration.xml`, `integration.log`, the image tag and metadata, and per-test logs and captures under `integration/`. Reports and logs are uploaded on failure too and retained for 14 days.
+In GitHub Actions, the `Checks` workflow runs Ruff and the unit tests. The `Zephyr`, `NuttX`, `TrouBLE`, and `Linux` workflows each build their platform image and run its integration tests inside it, independently of each other. Open **Actions → the workflow → the run** to view a result. Each platform run uploads a `bsworld-results-<platform>-<run-id>-<attempt>` artifact with `integration.xml`, `integration.log`, the image tag and metadata, and per-test logs and captures under `integration/`. Reports and logs are uploaded on failure too and retained for 14 days.
 
 See the [Docker guide](../docker/README.md#use-a-published-image) to select an image by `latest`, source commit, or Release tag.
 

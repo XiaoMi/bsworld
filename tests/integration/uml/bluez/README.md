@@ -6,7 +6,7 @@ Runs the host's BlueZ in the [UML Linux guest](../README.md) and drives it throu
 
 | Program | Source | Executable variable |
 |---|---|---|
-| `bluetoothd`, `bluetoothctl`, `btattach` | Installed on the host; validated with `bluetoothd` 5.86 and `bluetoothctl` 5.64 | None |
+| `bluetoothd`, `bluetoothctl`, `btattach` | Installed on the host; validated with `bluetoothd` 5.86 and `bluetoothctl` 5.64. The Linux Docker image installs Ubuntu 24.04's BlueZ 5.72 | None |
 
 ## Prepare the Environment
 

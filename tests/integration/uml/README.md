@@ -12,7 +12,7 @@ Runs a Linux guest in User Mode Linux (UML): a mainline Linux kernel built as an
 
 ## Prepare the Environment
 
-The [Docker image](../../../docker/README.md) does not include the UML kernel, so these tests are skipped there; run them on a native Linux host.
+The [Linux Docker image](../../../docker/README.md#select-a-suite) includes the kernel, the seed library and `nimble-linux`, and sets the variables. Its guest runs the BlueZ and D-Bus packaged by Ubuntu 24.04. UML maps its memory from a file in `TMPDIR`, otherwise in `/dev/shm`, which Docker mounts noexec, so the image sets `TMPDIR=/tmp`. The steps below are for native Linux builds.
 
 Build BabbleSim and the [Virtual Controller](../../../docs/controllers.md#building-the-zephyr-controller) using the [repository instructions](../../../README.md#build-and-test) first.
 

@@ -8,6 +8,8 @@
 |---|---|---|
 | `nimble-linux` | `porting/examples/linux`，提交 `1e8ed60276f35a80ed4d4b4f8bb9d9c6fee53845` | `BSWORLD_UML_NIMBLE_BIN` |
 
+[Linux Docker 镜像](../../../../docker/README.zh-CN.md#选择测试套件)已包含该程序并设置好变量。以下步骤用于本机 Linux 构建。
+
 ## 准备环境
 
 先按 [UML 测试环境](../README.zh-CN.md#编译-linux-guest)编译内核和随机种子库。安装 mbedtls 头文件（Ubuntu）：
@@ -27,10 +29,11 @@ git -C "$NIMBLE_DIR" checkout --detach FETCH_HEAD
 
 ## 构建与运行
 
-Guest 直接从主机文件系统运行该示例。上游默认编译 32 位版本（`-m32`），因此为 64 位 Guest 清空这两个参数：
+Guest 直接从主机文件系统运行该示例。上游默认编译 32 位版本（`-m32`），因此为 64 位 Guest 清空这两个参数。上游 Makefile 通过 ccache 调用编译器，`CC` 和 `CXX` 改为直接调用：
 
 ```sh
-make -C "$NIMBLE_DIR/porting/examples/linux" NIMBLE_CFLAGS= NIMBLE_LDFLAGS= -j"$(nproc)"
+make -C "$NIMBLE_DIR/porting/examples/linux" CC=gcc CXX=g++ \
+  NIMBLE_CFLAGS= NIMBLE_LDFLAGS= -j"$(nproc)"
 export BSWORLD_UML_NIMBLE_BIN="$NIMBLE_DIR/porting/examples/linux/nimble-linux"
 ```
 
