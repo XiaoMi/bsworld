@@ -2,20 +2,19 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Runs a Linux guest in User Mode Linux (UML): a mainline Linux kernel built as an ordinary host program, running the BlueZ installed on the host. The guest's `/dev/ttyS0` connects to a Virtual Controller, and UML time-travel synchronizes the guest clock with BabbleSim simulation time.
+Runs a Linux guest in User Mode Linux (UML): a mainline Linux kernel built as an ordinary host program. The guest runs programs from the host's file system. Its `/dev/ttyS0` connects to a Virtual Controller, and UML time-travel synchronizes the guest clock with BabbleSim simulation time.
 
 ## Validated Versions
 
 | Component | Revision or version |
 |---|---|
 | Linux | `7.4-rc1` (`f66469d9905b39d2c260a15d7d6db450f4db67c1`) |
-| BlueZ (host) | `bluetoothd` 5.86, `bluetoothctl` 5.64 |
 
 ## Prepare the Environment
 
 Build BabbleSim and the [Virtual Controller](../../../docs/controllers.md#building-the-zephyr-controller) using the [repository instructions](../../../README.md#build-and-test) first.
 
-The guest mounts the host's root file system read-only and runs its programs, so the host needs 64-bit `bluetoothd`, `bluetoothctl`, `btattach` and `dbus-daemon`. A 64-bit UML kernel cannot run 32-bit programs; check with `file /usr/bin/dbus-daemon`.
+The guest mounts the host's root file system read-only and runs its programs. A 64-bit UML kernel cannot run 32-bit programs, so every program the guest runs must be 64-bit, including the `dbus-daemon` and `bluetoothd` that [init.sh](source/init.sh) starts and `btattach`; check with `file /usr/bin/dbus-daemon`.
 
 Fetch Linux:
 
@@ -60,6 +59,13 @@ test -x "$BSWORLD_UML_KERNEL"
 test -f "$BSWORLD_UML_GETRANDOM"
 ```
 
+## Compile and Run
+
+| Suite | Build instructions | Test artifact variable |
+|---|---|---|
+| BlueZ | [BlueZ tests](bluez/README.md#build-and-run) | None; runs the host's BlueZ |
+| NimBLE | [NimBLE tests](nimble/README.md#build-and-run) | `BSWORLD_UML_NIMBLE_BIN` |
+
 ## Runtime Data Path
 
 The test hands the Virtual Controller socket to the guest as its `/dev/ttyS0` and registers it as `hci0` with `btattach -B /dev/ttyS0 -P h4`. The line is a socket, so it needs no baud rate or flow control. The guest console is the process's stdin and stdout. [init.sh](source/init.sh) mounts memory file systems over `/tmp`, `/run` and `/var/lib/bluetooth`, starts D-Bus and `bluetoothd` with [main.conf](source/main.conf), and opens a root shell.
@@ -68,21 +74,17 @@ The kernel boots with `time-travel=ext`, so the pytest event loop grants every a
 
 The guest's random seed, wall-clock start (2026-01-01T00:00:00Z) and kernel command line are fixed, so the guest log, HCI captures and RF trace are identical on every run. The kernel mixes its command line into its random pool, so the Controller socket always reaches the guest as the highest descriptor the process may open (`ssl0=fd:N`, N = `ulimit -n` − 1).
 
-## Run the Tests
-
-See [BlueZ](bluez/README.md).
-
 ## Rebuild the Configuration
 
 After changing [linux.fragment](source/linux.fragment), rerun the configuration and build commands above in `$LINUX_DIR`.
 
 ## Adding Scenarios
 
-Add an async pytest test under [BlueZ](bluez/README.md). Register the Controller with `add_uml_controller(topo, ...)` from [common.py](common.py) before startup. After `topo.start()`, boot the guest with `open_uml_guest(stack, topo, controller, ...)` in an `AsyncExitStack`, so the guest stops when the stack closes. Then send guest commands through `guest.shell` and verify them with `wait_log()`.
+Add an async pytest test under [BlueZ](bluez/README.md) or [NimBLE](nimble/README.md). Register the Controller with `add_uml_controller(topo, ...)` from [common.py](common.py) before startup. After `topo.start()`, boot the guest with `open_uml_guest(stack, topo, controller, ...)` in an `AsyncExitStack`, so the guest stops when the stack closes. Then send guest commands through `guest.shell` and verify them with `wait_log()`.
 
 ## License
 
 - Tests and the files in `source/`: Apache License 2.0.
-- Linux and the host software the guest runs: retain their own licenses.
+- Linux and the programs the guest runs: retain their own licenses.
 
 See [Third-Party Notices](../../../THIRD_PARTY_NOTICES.md).
