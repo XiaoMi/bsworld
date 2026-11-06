@@ -4,7 +4,7 @@
 
 ## Prepare the Zephyr Workspace
 
-We recommend the [published Docker image](../../../docker/README.md#run-tests), which includes the Zephyr shell executables and the Zephyr Controller. Select the Zephyr suite with `pytest tests/integration/zephyr`.
+We recommend the [published Zephyr image](../../../docker/README.md#run-tests), `ghcr.io/xiaomi/bsworld-zephyr`, which includes the Zephyr shell executables and the Zephyr Controller. Select the Zephyr suite with `pytest tests/integration/zephyr`.
 
 The steps below are for native Linux builds. Prepare BSWorld using the [local Linux setup](../../../README.md#local-linux) and install the system dependencies from Zephyr's [Getting Started Guide](https://docs.zephyrproject.org/latest/develop/getting_started/index.html).
 
@@ -18,7 +18,7 @@ source "$ZEPHYR_WORKSPACE/.venv/bin/activate"
 python -m pip install west
 ```
 
-Fetch the Zephyr revision pinned by the Dockerfile:
+Fetch the Zephyr revision pinned by [base.Dockerfile](../../../docker/base.Dockerfile):
 
 ```sh
 git init "$ZEPHYR_WORKSPACE/zephyr"

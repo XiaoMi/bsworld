@@ -9,7 +9,7 @@ These tests build the upstream Zephyr Bluetooth shell in two forms and drive eac
 | Complete | `tests/bluetooth/shell` | Host, Controller and radio | `BSWORLD_ZEPHYR_FULL_SHELL_BIN` |
 | Host-only | `tests/bluetooth/shell` | Host; Controller over HCI | `BSWORLD_ZEPHYR_SHELL_BIN` |
 
-The [Docker runtime image](../../../../docker/README.md#select-a-suite) includes both executables and the Zephyr Controller, and sets the variables. The steps below are for native Linux builds.
+The [Zephyr Docker image](../../../../docker/README.md#select-a-suite) includes both executables and the Zephyr Controller, and sets the variables. The steps below are for native Linux builds.
 
 ## Prepare the Environment
 

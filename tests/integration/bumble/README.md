@@ -8,7 +8,7 @@ These tests run the [Bumble](https://github.com/google/bumble) Python Host insid
 |---|---|---|
 | Bumble | [google/bumble](https://github.com/google/bumble) | `bumble==0.0.235`, pinned in [pyproject.toml](../../../pyproject.toml) |
 
-The [Docker runtime image](../../../docker/README.md#select-a-suite) includes Bumble. The steps below are for native Linux.
+Every [Docker image](../../../docker/README.md#select-a-suite) includes Bumble; the Zephyr image runs this suite by default. The steps below are for native Linux.
 
 ## Prepare the Environment
 

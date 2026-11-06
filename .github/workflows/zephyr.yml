@@ -1,0 +1,41 @@
+# Copyright 2026 Xiaomi Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+# Zephyr Bluetooth shells; also the Bumble and BabbleSim suites, which need no
+# firmware of their own.
+# Builds bsworld-zephyr from docker/zephyr.Dockerfile and runs its tests.
+name: Zephyr
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      rebuild_image:
+        description: Rebuild all image layers for validation without publishing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # Replace obsolete PR checks, but keep every main commit eligible for a release.
+  group: zephyr-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  zephyr:
+    name: Zephyr
+    uses: ./.github/workflows/platform.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      platform: zephyr
+      suites: tests/integration/zephyr tests/integration/bumble tests/integration/babblesim
+      rebuild_image: ${{ inputs.rebuild_image || false }}

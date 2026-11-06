@@ -13,7 +13,7 @@ sudo docker run --rm \
   --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
   --env PYTHONDONTWRITEBYTECODE=1 \
   -e PYTHONPATH=/workspace \
-  ghcr.io/xiaomi/bsworld:latest pytest tests/unit -q -p no:cacheprovider
+  ghcr.io/xiaomi/bsworld-zephyr:latest pytest tests/unit -q -p no:cacheprovider
 ```
 
 使用本地虚拟环境：
@@ -50,7 +50,7 @@ ruff check --select I --fix .
 ruff format .
 ```
 
-GitHub Actions 的 `Code style` 工作流在每次 push 和 pull request 时执行上述检查，格式或静态规则不符合要求时失败。检查覆盖检出版本中的全部 Python 代码，包括已有文件。
+GitHub Actions 的 `Checks` 工作流在每次 push 和 pull request 时执行上述检查和单元测试，格式、静态规则或单元测试不通过时失败。检查覆盖检出版本中的全部 Python 代码，包括已有文件。
 
 ## 测试覆盖率
 

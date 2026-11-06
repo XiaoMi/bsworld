@@ -4,7 +4,7 @@
 
 ## 准备 Zephyr 工作区
 
-推荐使用[已发布的 Docker 镜像](../../../docker/README.zh-CN.md#运行测试)，其中已包含 Zephyr shell 程序和 Zephyr Controller。用 `pytest tests/integration/zephyr` 选择 Zephyr 测试。
+推荐使用[已发布的 Zephyr 镜像](../../../docker/README.zh-CN.md#运行测试) `ghcr.io/xiaomi/bsworld-zephyr`，其中已包含 Zephyr shell 程序和 Zephyr Controller。用 `pytest tests/integration/zephyr` 选择 Zephyr 测试。
 
 以下步骤用于本机 Linux 构建。先按[本地 Linux 环境搭建](../../../docs/zh-CH/README.md#本地-linux)准备 BSWorld，并按 Zephyr [Getting Started Guide](https://docs.zephyrproject.org/latest/develop/getting_started/index.html) 安装系统依赖。
 
@@ -18,7 +18,7 @@ source "$ZEPHYR_WORKSPACE/.venv/bin/activate"
 python -m pip install west
 ```
 
-拉取 Dockerfile 固定的 Zephyr 版本：
+拉取 [base.Dockerfile](../../../docker/base.Dockerfile) 固定的 Zephyr 版本：
 
 ```sh
 git init "$ZEPHYR_WORKSPACE/zephyr"

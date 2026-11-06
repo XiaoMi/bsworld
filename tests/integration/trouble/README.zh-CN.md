@@ -8,7 +8,7 @@
 |---|---|---|
 | `ble_bas` | `trouble-example-apps` 的 `ble_bas_central` / `ble_bas_peripheral` | `BSWORLD_TROUBLE_NATIVE_BIN`，默认 `source/target/debug/ble_bas` |
 
-[Docker 运行镜像](../../../docker/README.zh-CN.md#选择测试套件)已包含该程序并设置好变量。以下步骤用于本机 Linux 构建。
+[TrouBLE Docker 镜像](../../../docker/README.zh-CN.md#选择测试套件)已包含该程序并设置好变量。以下步骤用于本机 Linux 构建。
 
 ## 准备 Rust 工具链
 

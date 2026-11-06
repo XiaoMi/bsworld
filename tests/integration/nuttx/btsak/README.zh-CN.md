@@ -8,7 +8,7 @@
 |---|---|---|
 | BTSak | NuttX `sim:bthcisock` | `BSWORLD_NUTTX_BTSAK_BIN` |
 
-[Docker 运行镜像](../../../../docker/README.zh-CN.md#选择测试套件)已包含该程序并设置好变量。以下步骤用于本机 Linux 构建。
+[NuttX Docker 镜像](../../../../docker/README.zh-CN.md#选择测试套件)已包含该程序并设置好变量。以下步骤用于本机 Linux 构建。
 
 ## 准备环境
 
