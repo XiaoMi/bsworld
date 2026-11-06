@@ -8,7 +8,7 @@ These tests run the stock NuttX `btsak`. Each process connects to its own Virtua
 |---|---|---|
 | BTSak | NuttX `sim:bthcisock` | `BSWORLD_NUTTX_BTSAK_BIN` |
 
-The [Docker runtime image](../../../../docker/README.md#select-a-suite) includes the executable and sets the variable. The steps below are for native Linux builds.
+The [NuttX Docker image](../../../../docker/README.md#select-a-suite) includes the executable and sets the variable. The steps below are for native Linux builds.
 
 ## Prepare the Environment
 

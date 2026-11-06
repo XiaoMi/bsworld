@@ -1,7 +1,7 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-name: Code style
+name: Checks
 
 on:
   push:
@@ -14,10 +14,12 @@ permissions:
   contents: read
 
 jobs:
-  style:
-    name: Code style result
+  checks:
+    name: Lint and unit tests
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - name: Check out the commit under test
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,11 +31,16 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install pinned Python formatter
-        run: python -m pip install 'ruff==0.14.10'
+      - name: Install BSWorld and its test tools
+        # Includes the pinned Ruff; a shallow checkout uses the fallback version.
+        run: python -m pip install -e components/bscontroller -e '.[test]'
 
       - name: Check all Python source and imports
         run: python -m ruff check --no-cache .
 
       - name: Check Python formatting
         run: python -m ruff format --check --no-cache .
+
+      - name: Run unit tests
+        # Neither suite needs BabbleSim, firmware or other native artifacts.
+        run: python -m pytest tests/unit tests/integration/support -n auto -q -p no:cacheprovider

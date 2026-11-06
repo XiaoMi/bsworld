@@ -8,7 +8,7 @@ These tests run the [Apache NimBLE](https://github.com/apache/mynewt-nimble) exa
 |---|---|---|
 | NimBLE | NuttX `sim:nimble` with `nimble_bleprph` and `nimble_blecent` enabled | `BSWORLD_NUTTX_NIMBLE_BIN` |
 
-The [Docker runtime image](../../../../docker/README.md#select-a-suite) includes the executable and sets the variable. The steps below are for native Linux builds.
+The [NuttX Docker image](../../../../docker/README.md#select-a-suite) includes the executable and sets the variable. The steps below are for native Linux builds.
 
 ## Prepare the Environment
 

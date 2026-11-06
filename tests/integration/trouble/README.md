@@ -8,7 +8,7 @@ These tests run two [TrouBLE](https://github.com/embassy-rs/trouble) Rust Hosts 
 |---|---|---|
 | `ble_bas` | `trouble-example-apps` `ble_bas_central` / `ble_bas_peripheral` at `43a14413508eb63a114df672f9a93dab624b717d` | `BSWORLD_TROUBLE_NATIVE_BIN`, default `source/target/debug/ble_bas` |
 
-The [Docker runtime image](../../../docker/README.md#select-a-suite) includes the executable and sets the variable. The steps below are for native Linux builds.
+The [TrouBLE Docker image](../../../docker/README.md#select-a-suite) includes the executable and sets the variable. The steps below are for native Linux builds.
 
 ## Prepare the Rust Toolchain
 

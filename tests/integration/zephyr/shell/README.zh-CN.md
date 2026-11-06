@@ -9,7 +9,7 @@
 | 完整固件 | `tests/bluetooth/shell` | Host、Controller 和无线模型 | `BSWORLD_ZEPHYR_FULL_SHELL_BIN` |
 | Host-only | `tests/bluetooth/shell` | Host；Controller 经 HCI 连接 | `BSWORLD_ZEPHYR_SHELL_BIN` |
 
-[Docker 运行镜像](../../../../docker/README.zh-CN.md#选择测试套件)已包含这两个程序和 Zephyr Controller，并设置好变量。以下步骤用于本机 Linux 构建。
+[Zephyr Docker 镜像](../../../../docker/README.zh-CN.md#选择测试套件)已包含这两个程序和 Zephyr Controller，并设置好变量。以下步骤用于本机 Linux 构建。
 
 ## 准备环境
 

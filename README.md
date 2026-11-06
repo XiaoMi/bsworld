@@ -4,7 +4,7 @@
 
 English | [简体中文](docs/zh-CH/README.md)
 
-[![CI](https://github.com/XiaoMi/bsworld/actions/workflows/bsworld.yml/badge.svg?branch=main)](https://github.com/XiaoMi/bsworld/actions/workflows/bsworld.yml) [![Release](https://img.shields.io/github/v/release/XiaoMi/bsworld?label=release&filter=v*)](https://github.com/XiaoMi/bsworld/releases/latest) [![PyPI bsworld](https://img.shields.io/pypi/v/bsworld?label=pypi%20bsworld)](https://pypi.org/project/bsworld/) [![PyPI bscontroller](https://img.shields.io/pypi/v/bscontroller?label=pypi%20bscontroller)](https://pypi.org/project/bscontroller/) [![License](https://img.shields.io/github/license/XiaoMi/bsworld)](LICENSE) [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/XiaoMi/bsworld/pulls)
+[![Checks](https://github.com/XiaoMi/bsworld/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/XiaoMi/bsworld/actions/workflows/checks.yml) [![Zephyr](https://github.com/XiaoMi/bsworld/actions/workflows/zephyr.yml/badge.svg?branch=main)](https://github.com/XiaoMi/bsworld/actions/workflows/zephyr.yml) [![NuttX](https://github.com/XiaoMi/bsworld/actions/workflows/nuttx.yml/badge.svg?branch=main)](https://github.com/XiaoMi/bsworld/actions/workflows/nuttx.yml) [![TrouBLE](https://github.com/XiaoMi/bsworld/actions/workflows/trouble.yml/badge.svg?branch=main)](https://github.com/XiaoMi/bsworld/actions/workflows/trouble.yml) [![Release](https://img.shields.io/github/v/release/XiaoMi/bsworld?label=release&filter=v*)](https://github.com/XiaoMi/bsworld/releases/latest) [![PyPI bsworld](https://img.shields.io/pypi/v/bsworld?label=pypi%20bsworld)](https://pypi.org/project/bsworld/) [![PyPI bscontroller](https://img.shields.io/pypi/v/bscontroller?label=pypi%20bscontroller)](https://pypi.org/project/bscontroller/) [![License](https://img.shields.io/github/license/XiaoMi/bsworld)](LICENSE) [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/XiaoMi/bsworld/pulls)
 
 </div>
 
@@ -21,24 +21,24 @@ Use BSWorld to:
 
 ## Quick Start
 
-BSWorld runs on Linux/x86_64. The published Docker image includes Python, BSWorld, and the firmware required by the integration tests. The [User Mode Linux tests](tests/integration/uml/README.md) need a locally built kernel and are skipped in the image.
+BSWorld runs on Linux/x86_64. Each platform has a published Docker image with Python, BSWorld, and that platform's firmware; the [Docker guide](docker/README.md) lists them. The [User Mode Linux tests](tests/integration/uml/README.md) need a locally built kernel and are skipped in the images.
 
 ### Docker (Recommended)
 
-Install [Docker Engine](https://docs.docker.com/engine/install/ubuntu/), then run the packaged integration tests:
+Install [Docker Engine](https://docs.docker.com/engine/install/ubuntu/), then run the integration tests packaged in the Zephyr image:
 
 ```sh
-sudo docker pull ghcr.io/xiaomi/bsworld:latest
+sudo docker pull ghcr.io/xiaomi/bsworld-zephyr:latest
 mkdir -p .cache/docker-results
-# The published image runs as UID/GID 1000.
+# The published images run as UID/GID 1000.
 sudo chown 1000:1000 .cache/docker-results
 sudo docker run --rm \
   -e PYTHONPATH=/workspace \
   --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  ghcr.io/xiaomi/bsworld:latest
+  ghcr.io/xiaomi/bsworld-zephyr:latest
 ```
 
-Results are written to `.cache/docker-results`, including `pytest.xml`, process logs, HCI captures, and RF traces. See the [Docker guide](docker/README.md) to run a selected suite, test the current checkout, choose an image version, or build an image.
+Results are written to `.cache/docker-results`, including `pytest.xml`, process logs, HCI captures, and RF traces. See the [Docker guide](docker/README.md) for the NuttX and TrouBLE images, to run a selected suite, test the current checkout, choose an image version, or build an image.
 
 ### Local Linux
 

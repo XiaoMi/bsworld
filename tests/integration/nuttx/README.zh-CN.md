@@ -4,7 +4,7 @@
 
 ## 准备环境
 
-推荐使用[已发布的 Docker 镜像](../../../docker/README.zh-CN.md#运行测试)，其中已包含 BTSak 和 NimBLE 固件。选择 NuttX 套件时使用 `pytest tests/integration/nuttx`。
+推荐使用[已发布的 NuttX 镜像](../../../docker/README.zh-CN.md#运行测试) `ghcr.io/xiaomi/bsworld-nuttx`，其中已包含 BTSak 和 NimBLE 固件。选择 NuttX 套件时使用 `pytest tests/integration/nuttx`。
 
 以下步骤用于本机 Linux 构建。先按[本地 Linux 环境搭建](../../../docs/zh-CH/README.md#本地-linux)准备 BSWorld，再参考 NuttX [安装文档](https://nuttx.apache.org/docs/latest/quickstart/install.html)安装依赖。Ubuntu 24.04：
 
@@ -28,7 +28,7 @@ export NUTTX_NIMBLE_DIR="$HOME/nuttx-nimble"
 export NUTTX_NIMBLE_APPS_DIR="$HOME/nuttx-nimble-apps"
 ```
 
-按 Dockerfile 固定的版本克隆 NuttX 及其 Applications：
+按 [nuttx.Dockerfile](../../../docker/nuttx.Dockerfile) 固定的版本克隆 NuttX 及其 Applications：
 
 ```sh
 git clone https://github.com/apache/nuttx.git "$NUTTX_DIR"

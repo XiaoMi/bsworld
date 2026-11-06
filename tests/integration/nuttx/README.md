@@ -4,7 +4,7 @@
 
 ## Prepare the Environment
 
-We recommend the [published Docker image](../../../docker/README.md#run-tests), which includes BTSak and NimBLE firmware. Select the NuttX suite with `pytest tests/integration/nuttx`.
+We recommend the [published NuttX image](../../../docker/README.md#run-tests), `ghcr.io/xiaomi/bsworld-nuttx`, which includes BTSak and NimBLE firmware. Select the NuttX suite with `pytest tests/integration/nuttx`.
 
 The steps below are for native Linux builds. Prepare BSWorld using the [local Linux setup](../../../README.md#local-linux), then install the dependencies from the NuttX [installation guide](https://nuttx.apache.org/docs/latest/quickstart/install.html). On Ubuntu 24.04:
 
@@ -28,7 +28,7 @@ export NUTTX_NIMBLE_DIR="$HOME/nuttx-nimble"
 export NUTTX_NIMBLE_APPS_DIR="$HOME/nuttx-nimble-apps"
 ```
 
-Clone NuttX and its Applications at the revisions pinned by the Dockerfile:
+Clone NuttX and its Applications at the revisions pinned by [nuttx.Dockerfile](../../../docker/nuttx.Dockerfile):
 
 ```sh
 git clone https://github.com/apache/nuttx.git "$NUTTX_DIR"

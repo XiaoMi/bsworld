@@ -2,7 +2,7 @@
 
 [English](development.md) | [简体中文](zh-CH/development.md)
 
-Run BSWorld's unit tests, lint checks, and coverage from the repository root. The [published Docker image](../docker/README.md#run-tests) is the shortest setup; use the README's [local Linux setup](../README.md#local-linux) when you need a native Python environment.
+Run BSWorld's unit tests, lint checks, and coverage from the repository root. A [published Docker image](../docker/README.md#run-tests) is the shortest setup; use the README's [local Linux setup](../README.md#local-linux) when you need a native Python environment.
 
 ## Unit Tests
 
@@ -13,7 +13,7 @@ sudo docker run --rm \
   --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
   --env PYTHONDONTWRITEBYTECODE=1 \
   -e PYTHONPATH=/workspace \
-  ghcr.io/xiaomi/bsworld:latest pytest tests/unit -q -p no:cacheprovider
+  ghcr.io/xiaomi/bsworld-zephyr:latest pytest tests/unit -q -p no:cacheprovider
 ```
 
 With the local virtual environment:
@@ -50,7 +50,7 @@ ruff check --select I --fix .
 ruff format .
 ```
 
-The `Code style` GitHub Actions workflow runs these checks on every push and pull request and fails when formatting or lint differs. It checks all maintained Python files in the checkout, including existing files.
+The `Checks` GitHub Actions workflow runs these checks and the unit tests on every push and pull request, and fails when formatting, lint, or a unit test fails. It checks all maintained Python files in the checkout, including existing files.
 
 ## Coverage
 

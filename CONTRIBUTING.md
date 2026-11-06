@@ -38,7 +38,7 @@ ruff format --check --no-cache .
 pytest tests/unit/
 ```
 
-Follow the repository's Python [code style](docs/development.md#code-style). The `Code style` workflow checks all maintained Python code on every push and pull request.
+Follow the repository's Python [code style](docs/development.md#code-style). The `Checks` workflow checks all maintained Python code and runs the unit tests on every push and pull request.
 
 Run the affected virtual-system suite when changing process startup, scheduling, HCI, RF behavior, platform configuration, or test Applications. For example:
 
