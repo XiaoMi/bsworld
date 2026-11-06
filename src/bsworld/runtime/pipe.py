@@ -73,6 +73,19 @@ class LogCapture:
     def write_fd(self) -> int:
         return self.log_fh.fileno()
 
+    @property
+    def read_fd(self) -> int | None:
+        """The FIFO's read side, for select(); None once stopped."""
+        return self._fifo_read_fd
+
+    def drain(self) -> None:
+        """Record whatever the FIFO holds now, without the event loop.
+
+        For callers that block the loop while the child writes, so the child
+        never stalls on a full FIFO.
+        """
+        self._drain_fifo()
+
     def stop(self) -> None:
         loop = self._loop
         self._loop = None

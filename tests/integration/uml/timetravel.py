@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING
 from bsworld.log import warn
 
 if TYPE_CHECKING:
+    from bsworld.runtime.pipe import LogCapture
     from bsworld.runtime.scheduler import BsimClock
 
 # op, seq, time in nanoseconds, in the host's byte order.
@@ -62,6 +63,10 @@ class TimeTravelCalendar:
 
     The guest only talks while it runs. Its serial line and console have no
     time-travel interrupt, so a waiting guest sends nothing until RUN.
+
+    The calendar holds the event loop while the guest runs, so it also drains
+    the guest's console: UML writes its output blocking in this mode, and a
+    guest that fills the console FIFO would otherwise never wait again.
     """
 
     def __init__(self, path: Path) -> None:
@@ -70,6 +75,7 @@ class TimeTravelCalendar:
         self._conn: socket.socket | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._clock: BsimClock | None = None
+        self._console: LogCapture | None = None
         # The guest's clock: the last time it was given, in nanoseconds.
         self._guest_ns = 0
         self._request_ns: int | None = None
@@ -95,12 +101,14 @@ class TimeTravelCalendar:
         clock: "BsimClock",
         *,
         alive: Callable[[], bool],
+        console: "LogCapture",
     ) -> None:
         """Accept the booting guest and run it until it first waits.
 
         loop must be bound to clock, so its timers fire at simulated times.
         alive reports whether the guest process still runs, so a guest that
-        exits during boot fails at once instead of at the timeout.
+        exits during boot fails at once instead of at the timeout. console
+        captures the guest's output and is drained while the guest runs.
         Simulation time stands still until the guest waits, so it starts at
         the instant its process was launched, however long the boot takes.
         """
@@ -108,6 +116,7 @@ class TimeTravelCalendar:
             raise RuntimeError("time-travel calendar is not listening")
         self._loop = loop
         self._clock = clock
+        self._console = console
         self._guest_ns = clock.now_us * _NS_PER_US
         deadline = time.monotonic() + _TIMEOUT
         while not select.select([self._server], [], [], 0.1)[0]:
@@ -238,18 +247,36 @@ class TimeTravelCalendar:
 
     def _receive(self) -> tuple[int, int, int]:
         assert self._conn is not None
+        deadline = time.monotonic() + _TIMEOUT
         data = b""
-        try:
-            while len(data) < _MESSAGE.size:
-                chunk = self._conn.recv(_MESSAGE.size - len(data))
-                if not chunk:
-                    raise EOFError("UML guest closed its time-travel socket")
-                data += chunk
-        except TimeoutError:
-            raise TimeoutError(
-                f"UML guest did not answer within {_TIMEOUT:.0f} s"
-            ) from None
+        while len(data) < _MESSAGE.size:
+            self._wait_readable(deadline)
+            chunk = self._conn.recv(_MESSAGE.size - len(data))
+            if not chunk:
+                raise EOFError("UML guest closed its time-travel socket")
+            data += chunk
         return _MESSAGE.unpack(data)
+
+    def _wait_readable(self, deadline: float) -> None:
+        """Wait for the guest's next message, draining its console meanwhile.
+
+        Draining runs no event loop callback, so simulation time stands still.
+        """
+        assert self._conn is not None
+        console_fd = self._console.read_fd if self._console is not None else None
+        watched: list[socket.socket | int] = [self._conn]
+        if console_fd is not None:
+            watched.append(console_fd)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"UML guest did not answer within {_TIMEOUT:.0f} s")
+            readable = select.select(watched, [], [], remaining)[0]
+            if console_fd is not None and console_fd in readable:
+                assert self._console is not None
+                self._console.drain()
+            if self._conn in readable:
+                return
 
     def _send(self, op: int, seq: int, value: int, fds: list[int] | None = None):
         assert self._conn is not None
