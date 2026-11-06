@@ -84,6 +84,8 @@ After changing [linux.fragment](source/linux.fragment), rerun the configuration 
 
 Add an async pytest test under [BlueZ](bluez/README.md) or [NimBLE](nimble/README.md). Register the Controller with `add_uml_controller(topo, ...)` from [common.py](common.py) before startup. After `topo.start()`, boot the guest with `open_uml_guest(stack, topo, controller, ...)` in an `AsyncExitStack`, so the guest stops when the stack closes. Then send guest commands through `guest.shell` and verify them with `wait_log()`.
 
+The time-travel calendar's protocol tests in [unit/](unit) need no kernel or BabbleSim: `pytest tests/integration/uml/unit`. They also run with the rest of the suite.
+
 ## License
 
 - Tests and the files in `source/`: Apache License 2.0.
