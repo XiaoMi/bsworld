@@ -30,7 +30,7 @@ The maintainers will acknowledge the report, investigate its scope, coordinate a
 
 ## Scope
 
-This policy covers security issues in BSWorld's first-party source, test orchestration, Docker build environment, and published project artifacts. Vulnerabilities that exist independently in BabbleSim, Zephyr, NuttX, QEMU, Buildroot, or another upstream dependency should normally be reported to that project. Report the issue to BSWorld when it is caused by this repository's integration, packaging, or configuration, or when the correct ownership is unclear.
+This policy covers security issues in BSWorld's first-party source, test orchestration, Docker build environment, and published project artifacts. Vulnerabilities that exist independently in BabbleSim, Zephyr, NuttX, Linux, or another upstream dependency should normally be reported to that project. Report the issue to BSWorld when it is caused by this repository's integration, packaging, or configuration, or when the correct ownership is unclear.
 
 Ordinary functional bugs without a security impact should be reported through the public issue tracker.
 

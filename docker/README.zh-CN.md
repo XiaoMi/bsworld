@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-镜像包含 BSWorld、测试用例和全部编译好的固件，需要安装了 [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) 的 Linux/x86_64 主机。
+镜像包含 BSWorld、测试用例和编译好的固件，需要安装了 [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) 的 Linux/x86_64 主机。[User Mode Linux 测试](../tests/integration/uml/README.zh-CN.md)需要在本地编译内核，在镜像中会被跳过。
 
 ## 使用已发布镜像
 
@@ -146,9 +146,7 @@ build-base
 ├── babblesim
 │   ├── zephyr
 │   ├── nuttx
-│   ├── qemu
 │   └── trouble
-└── buildroot（guest 内核和 rootfs）
 ```
 
 运行本地镜像：

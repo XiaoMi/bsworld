@@ -17,7 +17,7 @@ The repository [README](../README.md#technical-architecture) introduces the Virt
 
 ## Test Lifecycle
 
-The `topo` fixture gives each test a `BluetoothTopology`. Tests declare participants, connectivity, and RF conditions instead of orchestrating operating-system processes directly. Suite-local factories describe native Applications as `ProcessInstance` objects with log waiting and optional shell input, and register them with the supplied topology; asyncio-based Python Host stacks register Virtual Controllers directly and open their HCI sockets after topology startup.
+The `topo` fixture gives each test a `BluetoothTopology`. Tests declare participants, connectivity, and RF conditions instead of orchestrating operating-system processes directly. Suite-local factories describe native Applications as `ProcessInstance` objects with log waiting and optional shell input, and register them with the supplied topology; asyncio-based Python Host stacks register Virtual Controllers directly and open their HCI sockets after topology startup. A User Mode Linux guest likewise registers only its Controller beforehand and boots after startup.
 
 The topology moves through four phases:
 
@@ -87,8 +87,8 @@ Attachments can change until device identities are published, normally by `topo.
 |---|---|
 | Bumble | [Bumble integration tests](../tests/integration/bumble/README.md#adding-scenarios) |
 | NuttX | [BTSak and NimBLE](../tests/integration/nuttx/README.md#adding-scenarios) |
-| QEMU Linux | [BlueZ and NimBLE](../tests/integration/qemu/README.md#adding-scenarios) |
 | TrouBLE | [Native TrouBLE tests](../tests/integration/trouble/README.md#adding-scenarios) |
+| UML Linux | [BlueZ and NimBLE](../tests/integration/uml/README.md#adding-scenarios) |
 | Zephyr | [Bluetooth shell](../tests/integration/zephyr/shell/README.md#adding-scenarios) |
 
 ## Complete Firmware

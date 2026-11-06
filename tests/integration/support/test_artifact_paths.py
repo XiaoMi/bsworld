@@ -17,7 +17,6 @@ from __future__ import annotations
 import pytest
 from tests.integration.nuttx.common import NuttXProcessProfile, create_nuttx_process
 from tests.integration.nuttx.common import require_binaries as require_nuttx_binaries
-from tests.integration.qemu.common import _artifact
 from tests.integration.zephyr.shell.devices import (
     create_zephyr_firmware_shell,
     create_zephyr_shell,
@@ -104,26 +103,6 @@ def test_zephyr_shell_follows_exports_without_staging(
     monkeypatch.setenv(binary_env, str(tmp_path / "missing executable"))
     with pytest.raises(pytest.skip.Exception, match=binary_env):
         register()
-
-
-@pytest.mark.parametrize(
-    "variable", ["BSWORLD_QEMU_BIN", "BSWORLD_QEMU_KERNEL", "BSWORLD_QEMU_ROOTFS"]
-)
-def test_qemu_requires_explicit_outputs(monkeypatch, tmp_path, variable) -> None:
-    monkeypatch.setenv(variable, "")
-    with pytest.raises(pytest.skip.Exception, match=variable):
-        _artifact(variable)
-
-    artifact = tmp_path / "upstream output"
-    artifact.write_text("output")
-    monkeypatch.setenv(variable, str(artifact))
-    assert _artifact(variable) == artifact
-
-    if variable == "BSWORLD_QEMU_BIN":
-        with pytest.raises(pytest.skip.Exception, match=variable):
-            _artifact(variable, executable=True)
-        artifact.chmod(0o755)
-        assert _artifact(variable, executable=True) == artifact
 
 
 @pytest.mark.parametrize("controller_type", [BSController, ZephyrController])

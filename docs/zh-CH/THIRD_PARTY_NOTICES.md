@@ -23,7 +23,7 @@ NuttX 源码通过外部依赖获取，不复制到本仓库。
 ## Apache NimBLE
 
 - 源码：https://github.com/apache/mynewt-nimble
-- 用途：[NuttX](../../tests/integration/nuttx/README.zh-CN.md) 和 [Linux Guest 测试](../../tests/integration/qemu/nimble/README.zh-CN.md)使用的 Bluetooth Host 协议栈
+- 用途：[NuttX](../../tests/integration/nuttx/README.zh-CN.md) 和 [Linux Guest 测试](../../tests/integration/uml/nimble/README.zh-CN.md)使用的 Bluetooth Host 协议栈
 - 许可证：Apache License 2.0
 
 NimBLE 源码通过外部依赖获取，不复制到本仓库。
@@ -52,27 +52,18 @@ BSWorld 使用公开的 Python 和 HCI transport 接口，不修改 Bumble Host 
 
 虚拟 Controller 使用 Zephyr 的 `samples/bluetooth/hci_virt`，BSWorld 只提供 Kconfig overlay；shell 应用使用外部 Zephyr 源码。
 
-## QEMU
+## Linux
 
-- 上游源码：https://gitlab.com/qemu-project/qemu
-- BSWorld fork：https://github.com/LingaoM/qemu
-- 用途：运行 [Linux Guest](../../tests/integration/qemu/README.zh-CN.md)，并将指令计数时间同步到 BabbleSim
-- 许可证：QEMU 整体使用 GNU General Public License version 2；个别文件可能使用兼容许可证
+- 源码：https://github.com/torvalds/linux
+- 用途：以 User Mode Linux 形式运行 [Linux Guest](../../tests/integration/uml/README.zh-CN.md)，并通过 time-travel 与 BabbleSim 同步时间
+- 许可证：GNU General Public License version 2；个别文件可能使用兼容许可证，以上游 `COPYING` 为准
 
-本仓库不包含 QEMU 源码，使用的是上方链接的修改版。分发其可执行程序时，仍需遵循适用的对应源码和声明义务。
-
-## Buildroot
-
-- 源码：https://gitlab.com/buildroot.org/buildroot
-- 用途：构建 [Linux Guest 环境](../../tests/integration/qemu/README.zh-CN.md)
-- 许可证：GNU General Public License version 2 or later；例外情况和单个文件的许可证以上游 `COPYING` 为准
-
-本仓库仅维护 BSWorld 的 [external 配置](../../tests/integration/qemu/source/README.zh-CN.md)。Buildroot 的许可证不能替代所组装软件各自的许可证。分发 Guest 镜像前，应检查实际构建的 `legal-info` 输出中的软件包许可证、声明和对应源码材料。
+本仓库不包含 Linux 源码。Guest 内核使用未修改的上游提交和 BSWorld 的[配置片段](../../tests/integration/uml/source/linux.fragment)编译。
 
 ## BlueZ
 
 - 源码：https://git.kernel.org/pub/scm/bluetooth/bluez.git
-- 用途：[Linux Guest 测试](../../tests/integration/qemu/bluez/README.zh-CN.md)使用的 Bluetooth Host 协议栈和工具
+- 用途：[Linux Guest 测试](../../tests/integration/uml/bluez/README.zh-CN.md)使用的 Bluetooth Host 协议栈和工具
 - 许可证：不同组件分别使用 GNU General Public License version 2 or later 和 GNU Lesser General Public License version 2.1 or later
 
-Guest 还包含 D-Bus、BusyBox、glibc 等依赖，它们的许可证和声明记录在对应的 Buildroot `legal-info` 输出中。
+Guest 运行主机上安装的 BlueZ、D-Bus 等程序。BSWorld 不分发这些程序，它们沿用主机软件包各自的许可证。

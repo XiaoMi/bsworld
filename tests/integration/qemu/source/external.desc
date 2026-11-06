@@ -1,6 +1,0 @@
-# Copyright 2026 Xiaomi Corporation
-#
-# SPDX-License-Identifier: Apache-2.0
-
-name: BSWORLD
-desc: BSWorld QEMU Linux guest configuration

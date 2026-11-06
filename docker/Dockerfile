@@ -247,85 +247,9 @@ RUN cd "$NUTTX_NIMBLE_DIR" \
     && make -j"$BUILD_JOBS" \
     && strip --strip-unneeded nuttx
 
-# QEMU: libraries and Python tooling for the BSWorld aarch64-softmmu fork.
-FROM babblesim AS qemu
-USER root
-
-# Keep the optional libraries previously inherited from Zephyr and NuttX.
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    ninja-build pkg-config bison flex \
-    libfdt-dev libffi-dev libglib2.0-dev libpixman-1-dev zlib1g-dev \
-    libexpat1-dev libelf-dev libgmp-dev libncurses-dev libsdl2-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN install -d -o "$BUILD_UID" -g "$BUILD_GID" /opt/qemu
-USER bsworld
-
-# The pinned QEMU pythondeps.toml requires Meson >= 1.6.0 and pycotap >= 1.1.0.
-# QEMU configure may install additional dependencies declared by that checkout.
-RUN python -m pip install wheel "meson>=1.6.0" "pycotap>=1.1.0"
-
-# Use the validated revision of BSWorld's BabbleSim-aware QEMU fork.
-ARG QEMU_REVISION=b2d1776bca209773c4a023e4decb785f7dc3cfb4
-ENV QEMU_DIR=/opt/qemu
-
-RUN git init "$QEMU_DIR" \
-    && git -C "$QEMU_DIR" remote add origin https://github.com/LingaoM/qemu.git \
-    && git -C "$QEMU_DIR" fetch --progress --depth=1 origin "$QEMU_REVISION" \
-    && git -C "$QEMU_DIR" checkout --detach FETCH_HEAD \
-    && test "$(git -C "$QEMU_DIR" rev-parse HEAD)" = "$QEMU_REVISION"
-
-ARG BUILD_JOBS=4
-RUN mkdir -p "$QEMU_DIR/build/bsworld" \
-    && cd "$QEMU_DIR/build/bsworld" \
-    && "$QEMU_DIR/configure" --target-list=aarch64-softmmu --enable-bsim \
-        --bsim-components-path="$BSIM_COMPONENTS_PATH" \
-        --bsim-out-path="$BSIM_OUT_PATH" \
-    && ninja -j"$BUILD_JOBS" qemu-system-aarch64 \
-    && strip --strip-unneeded qemu-system-aarch64
-
-# Buildroot: host utilities for the toolchain, Linux kernel, and guest root filesystem.
-# Guest kernel/rootfs builds do not depend on QEMU or BabbleSim.
-FROM build-base AS buildroot
-USER root
-
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    bc bzip2 cpio debianutils diffutils gzip \
-    patch perl rsync tar zip libssl-dev \
-    bison flex gawk wget unzip xz-utils \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN install -d -o "$BUILD_UID" -g "$BUILD_GID" /opt/buildroot
-USER bsworld
-
-# Validated Buildroot revision for the maintained Linux guest configuration.
-ARG BUILDROOT_REVISION=1ad0796f2b40eb8dadc43e95dd1d56708b191375
-ENV BUILDROOT_DIR=/opt/buildroot \
-    BR2_DL_DIR=/cache/downloads/buildroot
-
-RUN git init "$BUILDROOT_DIR" \
-    && git -C "$BUILDROOT_DIR" remote add origin https://gitlab.com/buildroot.org/buildroot.git \
-    && git -C "$BUILDROOT_DIR" fetch --progress --depth=1 origin "$BUILDROOT_REVISION" \
-    && git -C "$BUILDROOT_DIR" checkout --detach FETCH_HEAD \
-    && test "$(git -C "$BUILDROOT_DIR" rev-parse HEAD)" = "$BUILDROOT_REVISION"
-
-# Build the AArch64 kernel and initramfs with the shared Linux guest packages.
-COPY --chown=$BUILD_UID:$BUILD_GID tests/integration/qemu/source /opt/bsworld-build/qemu-guest
-ARG BUILD_JOBS=4
-# Share downloads across configuration changes without reusing a stale output tree.
-# Include the user IDs so local builds with different owners have writable caches.
-RUN --mount=type=cache,id=bsworld-buildroot-downloads-${BUILD_UID}-${BUILD_GID},target=/cache/downloads/buildroot,uid=${BUILD_UID},gid=${BUILD_GID},sharing=locked \
-    make -C "$BUILDROOT_DIR" O="$BUILDROOT_DIR/output-bsworld-linux" \
-        BR2_EXTERNAL=/opt/bsworld-build/qemu-guest bsworld_qemu_linux_defconfig \
-    && make -C "$BUILDROOT_DIR" O="$BUILDROOT_DIR/output-bsworld-linux" -j"$BUILD_JOBS" \
-    && test -f "$BUILDROOT_DIR/output-bsworld-linux/images/Image" \
-    && test -f "$BUILDROOT_DIR/output-bsworld-linux/images/rootfs.cpio" \
-    && test -x "$BUILDROOT_DIR/output-bsworld-linux/target/usr/bin/btattach" \
-    && test -x "$BUILDROOT_DIR/output-bsworld-linux/target/usr/bin/nimble-linux"
-
 # TrouBLE: build the native adapter against its pinned upstream Host commit.
 # The adapter joins the BabbleSim runtime directly and is kept alongside the
-# Zephyr, NuttX, and QEMU branches rooted in the common BabbleSim stage.
+# Zephyr and NuttX branches rooted in the common BabbleSim stage.
 FROM babblesim AS trouble
 USER root
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -357,10 +281,7 @@ USER root
 # These are the runtime counterparts of the firmware stages' development packages.
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     procps \
-    libc6-i386 lib32gcc-s1 lib32stdc++6 lib32z1 libstdc++6 \
-    libglib2.0-0t64 libpixman-1-0 libfdt1 libffi8 zlib1g libsndio7.0 \
-    libsdl2-2.0-0 libx11-6 libpulse0 \
-    libexpat1 libelf1t64 libgmp10 libncursesw6 libtinfo6 \
+    libc6-i386 lib32gcc-s1 lib32stdc++6 lib32z1 libstdc++6 zlib1g \
     && rm -rf /var/lib/apt/lists/*
 RUN install -d -o "$BUILD_UID" -g "$BUILD_GID" /opt/babblesim/build/results
 
@@ -371,9 +292,6 @@ COPY --from=zephyr /opt/zephyrproject/build/bsworld_zephyr_shell/zephyr/zephyr.e
 COPY --from=zephyr /opt/zephyrproject/build/bsworld_bt_virt_controller/zephyr/zephyr.exe /opt/firmware/zephyr/bt_virt_controller
 COPY --from=nuttx /opt/nuttx/nuttx /opt/firmware/nuttx/btsak
 COPY --from=nuttx /opt/nuttx-nimble/nuttx /opt/firmware/nuttx/nimble
-COPY --from=qemu /opt/qemu/build/bsworld/qemu-system-aarch64 /opt/firmware/qemu/qemu-system-aarch64
-COPY --from=buildroot /opt/buildroot/output-bsworld-linux/images/Image /opt/firmware/qemu/Image
-COPY --from=buildroot /opt/buildroot/output-bsworld-linux/images/rootfs.cpio /opt/firmware/qemu/rootfs.cpio
 COPY --from=trouble /opt/trouble/target/release/ble_bas /opt/firmware/trouble/ble_bas
 
 ENV BSIM_OUT_PATH=/opt/babblesim/build \
@@ -383,9 +301,6 @@ ENV BSIM_OUT_PATH=/opt/babblesim/build \
     BSWORLD_BT_VIRT_CONTROLLER_BIN=/opt/firmware/zephyr/bt_virt_controller \
     BSWORLD_NUTTX_BTSAK_BIN=/opt/firmware/nuttx/btsak \
     BSWORLD_NUTTX_NIMBLE_BIN=/opt/firmware/nuttx/nimble \
-    BSWORLD_QEMU_BIN=/opt/firmware/qemu/qemu-system-aarch64 \
-    BSWORLD_QEMU_KERNEL=/opt/firmware/qemu/Image \
-    BSWORLD_QEMU_ROOTFS=/opt/firmware/qemu/rootfs.cpio \
     BSWORLD_TROUBLE_NATIVE_BIN=/opt/firmware/trouble/ble_bas
 
 USER bsworld
@@ -393,7 +308,7 @@ USER bsworld
 # Verify binaries and their dynamic dependencies in the final filesystem.
 # BabbleSim .Tsymbols files are readable text maps, not executable binaries.
 RUN for binary in /opt/firmware/zephyr/* \
-        /opt/firmware/nuttx/* /opt/firmware/qemu/qemu-system-aarch64 \
+        /opt/firmware/nuttx/* \
         /opt/firmware/trouble/ble_bas \
         /opt/babblesim/build/bin/*; do \
         case "$binary" in *.Tsymbols) continue ;; esac; \
