@@ -4,7 +4,7 @@
 
 [English](../../README.md) | 简体中文
 
-[![Checks](https://github.com/XiaoMi/bsworld/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/XiaoMi/bsworld/actions/workflows/checks.yml) [![Zephyr](https://github.com/XiaoMi/bsworld/actions/workflows/zephyr.yml/badge.svg?branch=main)](https://github.com/XiaoMi/bsworld/actions/workflows/zephyr.yml) [![NuttX](https://github.com/XiaoMi/bsworld/actions/workflows/nuttx.yml/badge.svg?branch=main)](https://github.com/XiaoMi/bsworld/actions/workflows/nuttx.yml) [![TrouBLE](https://github.com/XiaoMi/bsworld/actions/workflows/trouble.yml/badge.svg?branch=main)](https://github.com/XiaoMi/bsworld/actions/workflows/trouble.yml) [![最新版本](https://img.shields.io/github/v/release/XiaoMi/bsworld?label=release&filter=v*)](https://github.com/XiaoMi/bsworld/releases/latest) [![PyPI bsworld](https://img.shields.io/pypi/v/bsworld?label=pypi%20bsworld)](https://pypi.org/project/bsworld/) [![PyPI bscontroller](https://img.shields.io/pypi/v/bscontroller?label=pypi%20bscontroller)](https://pypi.org/project/bscontroller/) [![许可证](https://img.shields.io/github/license/XiaoMi/bsworld)](../../LICENSE) [![欢迎 PR](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/XiaoMi/bsworld/pulls)
+[![Checks](https://github.com/XiaoMi/bsworld/actions/workflows/checks.yml/badge.svg?branch=main)](https://github.com/XiaoMi/bsworld/actions/workflows/checks.yml) [![Zephyr](https://github.com/XiaoMi/bsworld/actions/workflows/zephyr.yml/badge.svg?branch=main)](https://github.com/XiaoMi/bsworld/actions/workflows/zephyr.yml) [![NuttX](https://github.com/XiaoMi/bsworld/actions/workflows/nuttx.yml/badge.svg?branch=main)](https://github.com/XiaoMi/bsworld/actions/workflows/nuttx.yml) [![TrouBLE](https://github.com/XiaoMi/bsworld/actions/workflows/trouble.yml/badge.svg?branch=main)](https://github.com/XiaoMi/bsworld/actions/workflows/trouble.yml) [![Linux](https://github.com/XiaoMi/bsworld/actions/workflows/linux.yml/badge.svg?branch=main)](https://github.com/XiaoMi/bsworld/actions/workflows/linux.yml) [![最新版本](https://img.shields.io/github/v/release/XiaoMi/bsworld?label=release&filter=v*)](https://github.com/XiaoMi/bsworld/releases/latest) [![PyPI bsworld](https://img.shields.io/pypi/v/bsworld?label=pypi%20bsworld)](https://pypi.org/project/bsworld/) [![PyPI bscontroller](https://img.shields.io/pypi/v/bscontroller?label=pypi%20bscontroller)](https://pypi.org/project/bscontroller/) [![许可证](https://img.shields.io/github/license/XiaoMi/bsworld)](../../LICENSE) [![欢迎 PR](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/XiaoMi/bsworld/pulls)
 
 </div>
 
@@ -22,7 +22,7 @@ BSWorld 是一个在 Linux 上测试 Bluetooth Host 及其业务程序的确定�
 
 ## 快速开始
 
-BSWorld 运行于 Linux/x86_64。每个平台都有已发布的 Docker 镜像，包含 Python、BSWorld 和该平台的固件，列表见 [Docker 使用说明](../../docker/README.zh-CN.md)。[User Mode Linux 测试](../../tests/integration/uml/README.zh-CN.md)需要在本地编译内核，在镜像中会被跳过。
+BSWorld 运行于 Linux/x86_64。每个平台都有已发布的 Docker 镜像，包含 Python、BSWorld 和该平台的固件，列表见 [Docker 使用说明](../../docker/README.zh-CN.md)。
 
 ### Docker（推荐）
 
@@ -39,7 +39,7 @@ sudo docker run --rm \
   ghcr.io/xiaomi/bsworld-zephyr:latest
 ```
 
-测试结果写入 `.cache/docker-results`，包括 `pytest.xml`、进程日志、HCI 抓包和 RF 跟踪文件。NuttX 和 TrouBLE 镜像、选择测试套件、测试当前检出版本、选择镜像版本或自行构建镜像，参见 [Docker 使用说明](../../docker/README.zh-CN.md)。
+测试结果写入 `.cache/docker-results`，包括 `pytest.xml`、进程日志、HCI 抓包和 RF 跟踪文件。NuttX、TrouBLE 和 Linux 镜像、选择测试套件、测试当前检出版本、选择镜像版本或自行构建镜像，参见 [Docker 使用说明](../../docker/README.zh-CN.md)。
 
 ### 本地 Linux
 

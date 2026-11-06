@@ -8,6 +8,8 @@ Runs the upstream [Apache NimBLE](https://github.com/apache/mynewt-nimble) Linux
 |---|---|---|
 | `nimble-linux` | `porting/examples/linux` at `1e8ed60276f35a80ed4d4b4f8bb9d9c6fee53845` | `BSWORLD_UML_NIMBLE_BIN` |
 
+The [Linux Docker image](../../../../docker/README.md#select-a-suite) includes the executable and sets the variable. The steps below are for native Linux builds.
+
 ## Prepare the Environment
 
 Build the kernel and seed library using the [UML test environment](../README.md#build-the-linux-guest). Install the mbedtls headers (Ubuntu):
@@ -27,10 +29,11 @@ git -C "$NIMBLE_DIR" checkout --detach FETCH_HEAD
 
 ## Build and Run
 
-The guest runs the example from the host's file system. Upstream builds it 32-bit by default (`-m32`), so clear those flags for the 64-bit guest:
+The guest runs the example from the host's file system. Upstream builds it 32-bit by default (`-m32`), so clear those flags for the 64-bit guest. `CC` and `CXX` call the compilers directly instead of through the ccache that upstream's Makefile uses:
 
 ```sh
-make -C "$NIMBLE_DIR/porting/examples/linux" NIMBLE_CFLAGS= NIMBLE_LDFLAGS= -j"$(nproc)"
+make -C "$NIMBLE_DIR/porting/examples/linux" CC=gcc CXX=g++ \
+  NIMBLE_CFLAGS= NIMBLE_LDFLAGS= -j"$(nproc)"
 export BSWORLD_UML_NIMBLE_BIN="$NIMBLE_DIR/porting/examples/linux/nimble-linux"
 ```
 

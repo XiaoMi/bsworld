@@ -12,7 +12,7 @@
 
 ## 准备环境
 
-[Docker 镜像](../../../docker/README.zh-CN.md)不包含 UML 内核，这些测试在镜像中会被跳过，需要在原生 Linux 主机上运行。
+[Linux Docker 镜像](../../../docker/README.zh-CN.md#选择测试套件)已包含内核、随机种子库和 `nimble-linux`，并设置好变量。镜像中的 Guest 运行 Ubuntu 24.04 打包的 BlueZ 和 D-Bus。UML 把内存映射到 `TMPDIR` 下的文件，未设置时使用 `/dev/shm`，而 Docker 以 noexec 挂载 `/dev/shm`，因此镜像设置了 `TMPDIR=/tmp`。以下步骤用于本机 Linux 构建。
 
 先按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim 和[虚拟 Controller](../../../docs/zh-CH/controllers.md#编译-zephyr-controller)。
 

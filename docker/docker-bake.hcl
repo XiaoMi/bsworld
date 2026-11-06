@@ -60,7 +60,7 @@ function "cache_to" {
 }
 
 group "default" {
-  targets = ["zephyr", "nuttx", "trouble"]
+  targets = ["zephyr", "nuttx", "trouble", "linux"]
 }
 
 target "_common" {
@@ -83,6 +83,14 @@ target "_platform" {
 }
 
 # Stages of base.Dockerfile that the platform Dockerfiles build on.
+
+target "build-base" {
+  inherits   = ["_common"]
+  dockerfile = "docker/base.Dockerfile"
+  target     = "build-base"
+  cache-from = cache_from("build-base")
+  cache-to   = cache_to("build-base")
+}
 
 target "babblesim" {
   inherits   = ["_common"]
@@ -147,4 +155,17 @@ target "trouble" {
   tags       = ["bsworld-trouble:${TAG}"]
   cache-from = cache_from("trouble")
   cache-to   = cache_to("trouble")
+}
+
+target "linux" {
+  inherits   = ["_platform"]
+  dockerfile = "docker/linux.Dockerfile"
+  target     = "runtime-linux"
+  contexts = {
+    build-base   = "target:build-base"
+    runtime-base = "target:runtime-base"
+  }
+  tags       = ["bsworld-linux:${TAG}"]
+  cache-from = cache_from("linux")
+  cache-to   = cache_to("linux")
 }

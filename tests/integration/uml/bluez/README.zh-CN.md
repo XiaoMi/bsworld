@@ -6,7 +6,7 @@
 
 | 程序 | 来源 | 可执行文件变量 |
 |---|---|---|
-| `bluetoothd`、`bluetoothctl`、`btattach` | 主机已安装的 BlueZ，已用 `bluetoothd` 5.86 和 `bluetoothctl` 5.64 验证 | 无 |
+| `bluetoothd`、`bluetoothctl`、`btattach` | 主机已安装的 BlueZ，已用 `bluetoothd` 5.86 和 `bluetoothctl` 5.64 验证；Linux Docker 镜像安装的是 Ubuntu 24.04 的 BlueZ 5.72 | 无 |
 
 ## 准备环境
 
