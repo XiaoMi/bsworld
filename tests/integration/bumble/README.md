@@ -8,8 +8,6 @@ These tests run the [Bumble](https://github.com/google/bumble) Python Host insid
 |---|---|---|
 | Bumble | [google/bumble](https://github.com/google/bumble) | `bumble==0.0.235`, pinned in [pyproject.toml](../../../pyproject.toml) |
 
-Every [Docker image](../../../docker/README.md#select-a-suite) includes Bumble and runs this suite when given its pytest command. The steps below are for native Linux.
-
 ## Prepare the Environment
 
 Prepare BSWorld using the [local Linux setup](../../../README.md#local-linux), which also installs Bumble, and build BabbleSim using the [repository instructions](../../../README.md#build-and-test).
@@ -24,11 +22,11 @@ source .venv/bin/activate
 pytest tests/integration/bumble -n auto -q
 ```
 
-| File | Scenarios | Controllers |
-|---|---|---|
-| [broadcast_observe/test_bumble_broadcast_observe.py](broadcast_observe/test_bumble_broadcast_observe.py) | Legacy advertising and passive scanning, targeted CW interference and recovery | Once per Controller |
-| [connection/test_bumble_connection.py](connection/test_bumble_connection.py) | Central and peripheral connection | Once per Controller |
-| [periodic_advertising/test_bumble_periodic_advertising.py](periodic_advertising/test_bumble_periodic_advertising.py) | Periodic advertising and synchronization | Once per Controller |
+| File | Scenarios |
+|---|---|
+| [broadcast_observe/test_bumble_broadcast_observe.py](broadcast_observe/test_bumble_broadcast_observe.py) | Legacy advertising and passive scanning, targeted CW interference and recovery |
+| [connection/test_bumble_connection.py](connection/test_bumble_connection.py) | Central and peripheral connection |
+| [periodic_advertising/test_bumble_periodic_advertising.py](periodic_advertising/test_bumble_periodic_advertising.py) | Periodic advertising and synchronization |
 
 ## Adding Scenarios
 

@@ -23,7 +23,7 @@
 ```sh
 cd "$BSWORLD_ROOT"
 source .venv/bin/activate
-pytest tests/integration/zephyr/shell/shell_peer -n 4 -q
+pytest tests/integration/zephyr/shell/shell_peer -n auto -q
 ```
 
 用参数 ID 选择拓扑：

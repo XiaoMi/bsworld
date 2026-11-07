@@ -56,11 +56,11 @@ def bsworld_default_controller_type(request):
     return request.param
 ```
 
-集成测试使用 BSController。只有 Zephyr 测试集通过 [tests/integration/zephyr/controllers.py](../../tests/integration/zephyr/controllers.py) 中的 `controller_type` fixture，把纯 Host 场景在两种 Controller 上各运行一遍；未设置 `BSWORLD_BT_VIRT_CONTROLLER_BIN` 时跳过 `[zephyr]` 用例。用参数 ID 选择其中一种实现：
+用参数 ID 选择其中一种实现：
 
 ```sh
-pytest tests/integration/zephyr -n auto -k '[zephyr]'
-pytest tests/integration/zephyr -n auto -k '[bscontroller]'
+pytest tests/integration/zephyr -n auto -k '[zephyr or host-zephyr'
+pytest tests/integration/zephyr -n auto -k bscontroller
 ```
 
 ## 配置 BSController

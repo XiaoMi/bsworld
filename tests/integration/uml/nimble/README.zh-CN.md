@@ -8,11 +8,9 @@
 |---|---|---|
 | `nimble-linux` | `porting/examples/linux`，提交 `1e8ed60276f35a80ed4d4b4f8bb9d9c6fee53845` | `BSWORLD_UML_NIMBLE_BIN` |
 
-[Linux Docker 镜像](../../../../docker/README.zh-CN.md#选择测试套件)已包含该程序并设置好变量。以下步骤用于本机 Linux 构建。
-
 ## 准备环境
 
-先按 [UML 测试环境](../README.zh-CN.md#编译-linux-guest)编译内核和随机种子库。安装 mbedtls 头文件（Ubuntu）：
+先按 [UML 测试环境](../README.zh-CN.md#准备环境)编译内核和随机种子库，该步骤也会设置 `UML_DIR`。安装 mbedtls 头文件（Ubuntu）：
 
 ```sh
 sudo apt-get install -y libmbedtls-dev
@@ -47,7 +45,7 @@ pytest tests/integration/uml/nimble -q
 
 `test_uml_nimble_linux_advertises_and_accepts_connection`：NimBLE 以 `AA:BB:CC:DD:EE:FE` 和设备名 `nimble` 广播，Bumble Central 连接后断开。
 
-NimBLE 停止 `bluetoothd` 后通过 HCI User Channel 独占 `hci0`。Guest 控制台位于 `uml/nimble/uml_nimble.log`，其余见[产物目录结构](../../../../docs/zh-CH/artifacts.md)。
+Guest 控制台位于 `uml/nimble/uml_nimble.log`，其余见[产物目录结构](../../../../docs/zh-CH/artifacts.md)。
 
 ## 许可证
 

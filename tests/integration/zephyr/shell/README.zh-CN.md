@@ -2,18 +2,16 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-本组测试把上游 Zephyr Bluetooth shell 编译成两种形态，由 pytest 通过 shell 命令驱动每个进程。完整固件包含 Zephyr Host、Controller 和无线模型，直接接入 PHY；Host-only 固件通过 HCI socket 连接自己的虚拟 Controller。[source/](source/) 存放 BSWorld 的 Kconfig 和 HCI overlay。
+本组测试运行编译成两种形态的上游 Zephyr Bluetooth shell，由 pytest 通过 shell 命令驱动每个进程。完整固件包含 Zephyr Host、Controller 和无线模型，直接接入 PHY；Host-only 固件通过 HCI socket 连接自己的虚拟 Controller。[source/](source/) 存放 BSWorld 的 Kconfig 和 HCI overlay。
 
 | 程序 | 上游入口 | 内容 | 可执行文件变量 |
 |---|---|---|---|
 | 完整固件 | `tests/bluetooth/shell` | Host、Controller 和无线模型 | `BSWORLD_ZEPHYR_FULL_SHELL_BIN` |
 | Host-only | `tests/bluetooth/shell` | Host；Controller 经 HCI 连接 | `BSWORLD_ZEPHYR_SHELL_BIN` |
 
-[Zephyr Docker 镜像](../../../../docker/README.zh-CN.md#选择测试套件)已包含这两个程序和 Zephyr Controller，并设置好变量。以下步骤用于本机 Linux 构建。
-
 ## 准备环境
 
-先准备 [Zephyr 工作区](../README.zh-CN.md#准备-zephyr-工作区)，按[仓库构建说明](../../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim，并构建 [Zephyr Controller](../../../../docs/zh-CH/controllers.md#编译-zephyr-controller)。
+先准备 [Zephyr 工作区](../README.zh-CN.md#准备-zephyr-工作区)，按[仓库构建说明](../../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim。[Zephyr Controller](../../../../docs/zh-CH/controllers.md#编译-zephyr-controller) 是可选的，未编译时跳过 Zephyr Controller 用例。
 
 ## 构建与运行
 
@@ -49,7 +47,7 @@ export BSWORLD_ZEPHYR_SHELL_BIN="$ZEPHYR_WORKSPACE/build/bsworld_zephyr_shell/ze
 ```sh
 cd "$BSWORLD_ROOT"
 source .venv/bin/activate
-pytest tests/integration/zephyr/shell -n 4 -q
+pytest tests/integration/zephyr/shell -n auto -q
 ```
 
 | 目录 | 对端 | 拓扑 |

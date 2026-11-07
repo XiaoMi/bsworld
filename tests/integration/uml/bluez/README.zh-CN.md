@@ -6,11 +6,11 @@
 
 | 程序 | 来源 | 可执行文件变量 |
 |---|---|---|
-| `bluetoothd`、`bluetoothctl`、`btattach` | 主机已安装的 BlueZ，已用 `bluetoothd` 5.86 和 `bluetoothctl` 5.64 验证；Linux Docker 镜像安装的是 Ubuntu 24.04 的 BlueZ 5.72 | 无 |
+| `bluetoothd`、`bluetoothctl`、`btattach` | 主机已安装的 BlueZ，已用 `bluetoothd` 5.86 和 `bluetoothctl` 5.64 验证，CI 使用 Ubuntu 24.04 的 BlueZ 5.72 | 无 |
 
 ## 准备环境
 
-先按 [UML 测试环境](../README.zh-CN.md#编译-linux-guest)编译内核和随机种子库。主机需要安装 64 位的 BlueZ；[init.sh](../source/init.sh) 启动 `/usr/libexec/bluetooth/bluetoothd`，不存在时启动 `/usr/lib/bluetooth/bluetoothd`。
+先按 [UML 测试环境](../README.zh-CN.md#准备环境)编译内核和随机种子库，该步骤也会安装 BlueZ。[init.sh](../source/init.sh) 启动 `/usr/libexec/bluetooth/bluetoothd`，不存在时启动 `/usr/lib/bluetooth/bluetoothd`。
 
 ## 构建与运行
 

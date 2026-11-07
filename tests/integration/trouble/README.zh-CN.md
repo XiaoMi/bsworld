@@ -8,21 +8,20 @@
 |---|---|---|
 | `ble_bas` | `trouble-example-apps` 的 `ble_bas_central` / `ble_bas_peripheral` | `BSWORLD_TROUBLE_NATIVE_BIN`，默认 `source/target/debug/ble_bas` |
 
-[TrouBLE Docker 镜像](../../../docker/README.zh-CN.md#选择测试套件)已包含该程序并设置好变量。以下步骤用于本机 Linux 构建。
-
-## 准备 Rust 工具链
+## 准备环境
 
 先按[本地 Linux 环境搭建](../../../docs/zh-CH/README.md#本地-linux)准备 BSWorld，并按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim。
 
-用 [rustup](https://rustup.rs/) 安装 Rust。首次执行 Cargo 命令时会自动安装 [rust-toolchain.toml](source/rust-toolchain.toml) 固定的工具链。
+用 [rustup](https://rustup.rs/) 安装 Rust。请在 `source/` 目录执行 Cargo，rustup 会在该目录选择并安装 [rust-toolchain.toml](source/rust-toolchain.toml) 固定的工具链。
 
 ## 构建与运行
 
 构建程序：
 
 ```sh
+cd "$BSWORLD_ROOT/tests/integration/trouble/source"
+cargo build --locked
 cd "$BSWORLD_ROOT"
-cargo build --locked --manifest-path tests/integration/trouble/source/Cargo.toml
 ```
 
 运行测试：
@@ -32,14 +31,16 @@ source .venv/bin/activate
 pytest tests/integration/trouble -q
 ```
 
-| 文件 | 场景 | Controller |
-|---|---|---|
-| [test_trouble_native.py](test_trouble_native.py) | 广播与连接、Battery Service 发现与读取、通知 | 两种 Controller 各跑一次 |
+| 文件 | 场景 |
+|---|---|
+| [test_trouble_native.py](test_trouble_native.py) | 广播与连接、Battery Service 发现与读取、通知 |
 
 运行适配层单元测试：
 
 ```sh
-cargo test --locked --manifest-path tests/integration/trouble/source/Cargo.toml
+cd "$BSWORLD_ROOT/tests/integration/trouble/source"
+cargo test --locked
+cd "$BSWORLD_ROOT"
 ```
 
 ## 添加场景

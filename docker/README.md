@@ -4,14 +4,14 @@
 
 Each platform has its own image with BSWorld, the tests and that platform's compiled firmware. The images need a Linux/x86_64 host with [Docker Engine](https://docs.docker.com/engine/install/ubuntu/).
 
+The images hold only the final executables, as CI built and tested them, without the toolchains or firmware sources. Use them to run and verify tests, and develop in a [local Linux environment](../README.md#local-linux). A published image is also the reference environment: when a local result differs from CI, first reproduce it in the image of the same commit; see [Verifying Changes](../docs/development.md#verifying-changes).
+
 | Image | Firmware | Default suites |
 |---|---|---|
 | `ghcr.io/xiaomi/bsworld-zephyr` | Zephyr Controller and Bluetooth shells | `tests/integration/zephyr` |
 | `ghcr.io/xiaomi/bsworld-nuttx` | NuttX BTSak and NimBLE | `tests/integration/nuttx` |
 | `ghcr.io/xiaomi/bsworld-trouble` | TrouBLE `ble_bas` | `tests/integration/trouble` |
 | `ghcr.io/xiaomi/bsworld-linux` | [User Mode Linux](../tests/integration/uml/README.md) kernel, Ubuntu BlueZ, NimBLE Linux | `tests/integration/uml` |
-
-Every image also includes Bumble, so any of them runs the Bumble and BabbleSim suites, the unit tests and Ruff.
 
 ## Use a Published Image
 
@@ -20,10 +20,10 @@ Run an image's integration tests from any directory, here the Zephyr image:
 ```sh
 sudo docker pull ghcr.io/xiaomi/bsworld-zephyr:latest
 mkdir -p .cache/docker-results
+# The published images run as UID/GID 1000.
 sudo chown 1000:1000 .cache/docker-results
 sudo docker run --rm \
   --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  -e PYTHONPATH=/workspace \
   ghcr.io/xiaomi/bsworld-zephyr:latest
 ```
 
@@ -37,7 +37,7 @@ Replace `latest` with a commit or Release tag to run another version:
 |---|---|
 | Latest tested main | `latest` |
 | Full commit ID | `sha-<40-character-commit>` |
-| Release tag | `v1.0.0` |
+| Release tag | `v<version>`, e.g. `v1.1.5` |
 
 Each platform's CI publishes its own image: `sha-<commit>` and `latest` once its tests pass on main, and a Release tag from the release commit's image. A failing platform does not hold back the others, so `latest` can name different commits for different platforms, while one Release tag always names one commit. Releases before the per-platform images used a single image, `ghcr.io/xiaomi/bsworld`.
 
@@ -58,11 +58,10 @@ sudo chown 1000:1000 .cache/docker-results
 sudo docker run --rm \
   --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
   --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  -e PYTHONPATH=/workspace \
   ghcr.io/xiaomi/bsworld-zephyr:latest
 ```
 
-Firmware still comes from the image; firmware changes require [rebuilding it](#build).
+Firmware still comes from the image. To verify a change to firmware, its build inputs or a Dockerfile, [build the image](#build), or use the pull request's CI, which builds the images from the change.
 
 ### Select a Suite
 
@@ -72,7 +71,6 @@ Put a pytest command after the name of the image that contains the suite's firmw
 sudo docker run --rm \
   --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
   --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  -e PYTHONPATH=/workspace \
   ghcr.io/xiaomi/bsworld-zephyr:latest \
   pytest tests/integration/zephyr/shell -n auto \
     --out-dir /output --junitxml=/output/zephyr-shell.xml
@@ -84,7 +82,6 @@ Unit tests, in any image:
 sudo docker run --rm \
   --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
   --env PYTHONDONTWRITEBYTECODE=1 \
-  -e PYTHONPATH=/workspace \
   ghcr.io/xiaomi/bsworld-zephyr:latest pytest tests/unit -q -p no:cacheprovider
 ```
 
@@ -93,11 +90,12 @@ Ruff:
 ```sh
 sudo docker run --rm \
   --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
-  -e PYTHONPATH=/workspace \
-  ghcr.io/xiaomi/bsworld-zephyr:latest ruff check --no-cache src tests
+  ghcr.io/xiaomi/bsworld-zephyr:latest ruff check --no-cache .
 ```
 
 ## Build
+
+Build an image to verify firmware or Dockerfile changes before CI does. The build stages are not maintained as a development environment.
 
 Clone the repository with its tags, then run the remaining commands from its root:
 
@@ -130,7 +128,7 @@ sudo docker build --progress=plain -f docker/base.Dockerfile \
   --build-arg BSWORLD_VERSION="$BSWORLD_VERSION" \
   -t bsworld:python-test .
 sudo docker run --rm --env PYTHONDONTWRITEBYTECODE=1 \
-  bsworld:python-test python -m ruff check --no-cache src tests
+  bsworld:python-test python -m ruff check --no-cache .
 sudo docker run --rm --env PYTHONDONTWRITEBYTECODE=1 \
   bsworld:python-test python -m pytest tests/unit -q -p no:cacheprovider
 ```
@@ -147,7 +145,7 @@ The image is tagged `bsworld-zephyr:dev`. `BUILD_JOBS` sets the compile parallel
 
 | File | Stages |
 |---|---|
-| `base.Dockerfile` | `build-base`, `bsworld` (Python project dependencies), `python-test` (installed project and tests), `babblesim`, `runtime-base` (runtime libraries and BabbleSim) |
+| `base.Dockerfile` | `build-base`, `bsworld` (setuptools-scm, which reads the version), `python-test` (installed project and tests), `babblesim`, `runtime-base` (runtime libraries and BabbleSim) |
 | `zephyr.Dockerfile` | `zephyr-workspace` (Zephyr workspace and SDK), `zephyr-controller`, `zephyr-shell`, `runtime-zephyr` |
 | `nuttx.Dockerfile` | `nuttx`, `runtime-nuttx` |
 | `trouble.Dockerfile` | `trouble`, `runtime-trouble` |
@@ -161,7 +159,6 @@ sudo chown "$(id -u):$(id -g)" .cache/docker-results
 sudo docker run --rm \
   --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
   --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  -e PYTHONPATH=/workspace \
   bsworld-zephyr:dev
 ```
 

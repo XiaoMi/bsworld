@@ -56,11 +56,11 @@ def bsworld_default_controller_type(request):
     return request.param
 ```
 
-The integration suites use BSController. Only the Zephyr suite runs its Host-only scenarios on both Controllers, through the `controller_type` fixture in [tests/integration/zephyr/controllers.py](../tests/integration/zephyr/controllers.py), which also skips `[zephyr]` cases when `BSWORLD_BT_VIRT_CONTROLLER_BIN` is not set. Select one implementation with its parameter ID:
+Select one implementation with its parameter ID:
 
 ```sh
-pytest tests/integration/zephyr -n auto -k '[zephyr]'
-pytest tests/integration/zephyr -n auto -k '[bscontroller]'
+pytest tests/integration/zephyr -n auto -k '[zephyr or host-zephyr'
+pytest tests/integration/zephyr -n auto -k bscontroller
 ```
 
 ## Configuring BSController

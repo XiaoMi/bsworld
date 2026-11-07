@@ -2,11 +2,11 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+本组测试把 NuttX 模拟器固件作为原生 Linux 进程运行，分为 [BTSak](btsak/README.zh-CN.md) 和 [NimBLE](nimble/README.zh-CN.md) 两个套件。每个进程连接自己的 BSController。
+
 ## 准备环境
 
-推荐使用[已发布的 NuttX 镜像](../../../docker/README.zh-CN.md#运行测试) `ghcr.io/xiaomi/bsworld-nuttx`，其中已包含 BTSak 和 NimBLE 固件。选择 NuttX 套件时使用 `pytest tests/integration/nuttx`。
-
-以下步骤用于本机 Linux 构建。先按[本地 Linux 环境搭建](../../../docs/zh-CH/README.md#本地-linux)准备 BSWorld，再参考 NuttX [安装文档](https://nuttx.apache.org/docs/latest/quickstart/install.html)安装依赖。Ubuntu 24.04：
+先按[本地 Linux 环境搭建](../../../docs/zh-CH/README.md#本地-linux)准备 BSWorld，按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim，再参考 NuttX [安装文档](https://nuttx.apache.org/docs/latest/quickstart/install.html)安装依赖。Ubuntu 24.04：
 
 ```sh
 sudo apt-get update
@@ -44,18 +44,24 @@ git clone "$NUTTX_DIR" "$NUTTX_NIMBLE_DIR"
 git clone "$NUTTX_APPS_DIR" "$NUTTX_NIMBLE_APPS_DIR"
 ```
 
-## 编译与运行
+## 测试套件
 
-先按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim。
-
-| 套件 | 编译说明 | 测试产物变量 |
+| 套件 | 编译说明 | 可执行文件变量 |
 |---|---|---|
 | BTSak | [BTSak 测试](btsak/README.zh-CN.md#构建与运行) | `BSWORLD_NUTTX_BTSAK_BIN` |
 | NimBLE | [NimBLE 测试](nimble/README.zh-CN.md#构建与运行) | `BSWORLD_NUTTX_NIMBLE_BIN` |
 
+运行两个套件：
+
+```sh
+cd "$BSWORLD_ROOT"
+source .venv/bin/activate
+pytest tests/integration/nuttx -n auto -q
+```
+
 ## 添加场景
 
-在 [BTSak](btsak/README.zh-CN.md) 或 [NimBLE](nimble/README.zh-CN.md) 目录中添加异步 pytest 测试，复用套件的设备配置和 [common/](common/) 中的 `create_nuttx_process()`。在 `topo.start()` 前登记进程，启动后按对应 README 发送角色命令，并通过 `wait_log()` 验证输出。
+在 [BTSak](btsak/README.zh-CN.md) 或 [NimBLE](nimble/README.zh-CN.md) 目录中添加异步 pytest 测试，复用套件的设备配置和 [common/](common/) 中的 `create_nuttx_process()`。在 `topo.start()` 前登记进程，启动后按对应 README 发送角色命令，并通过 `wait_log()` 验证输出。Profile 描述程序名称、可执行文件和 shell 行为，创建进程时会把它登记到拓扑中。测试通过 `topo.add_controller()` 添加 Controller，再用 `attach()` 把程序绑定到它。
 
 ## 许可证
 

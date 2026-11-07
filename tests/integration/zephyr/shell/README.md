@@ -2,18 +2,16 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-These tests build the upstream Zephyr Bluetooth shell in two forms and drive each process through shell commands. Complete firmware contains the Zephyr Host, Controller and radio and joins the PHY directly; Host-only firmware connects to its own Virtual Controller over an HCI socket. [source/](source/) holds the BSWorld Kconfig and HCI overlay.
+These tests run the upstream Zephyr Bluetooth shell, built in two forms, and drive each process through shell commands. Complete firmware contains the Zephyr Host, Controller and radio and joins the PHY directly; Host-only firmware connects to its own Virtual Controller over an HCI socket. [source/](source/) holds the BSWorld Kconfig and HCI overlay.
 
 | Executable | Upstream entry point | Contents | Executable variable |
 |---|---|---|---|
 | Complete | `tests/bluetooth/shell` | Host, Controller and radio | `BSWORLD_ZEPHYR_FULL_SHELL_BIN` |
 | Host-only | `tests/bluetooth/shell` | Host; Controller over HCI | `BSWORLD_ZEPHYR_SHELL_BIN` |
 
-The [Zephyr Docker image](../../../../docker/README.md#select-a-suite) includes both executables and the Zephyr Controller, and sets the variables. The steps below are for native Linux builds.
-
 ## Prepare the Environment
 
-Prepare the [Zephyr workspace](../README.md#prepare-the-zephyr-workspace), build BabbleSim using the [repository instructions](../../../../README.md#build-and-test), and build the [Zephyr Controller](../../../../docs/controllers.md#building-the-zephyr-controller).
+Prepare the [Zephyr workspace](../README.md#prepare-the-zephyr-workspace), build BabbleSim using the [repository instructions](../../../../README.md#build-and-test). The [Zephyr Controller](../../../../docs/controllers.md#building-the-zephyr-controller) is optional: without it, the Zephyr Controller cases are skipped.
 
 ## Build and Run
 
@@ -49,7 +47,7 @@ Switch back to the BSWorld environment in the same terminal and run the tests:
 ```sh
 cd "$BSWORLD_ROOT"
 source .venv/bin/activate
-pytest tests/integration/zephyr/shell -n 4 -q
+pytest tests/integration/zephyr/shell -n auto -q
 ```
 
 | Directory | Peer | Topologies |

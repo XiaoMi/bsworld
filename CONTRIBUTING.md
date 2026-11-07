@@ -16,7 +16,7 @@ BSWorld's first-party code is licensed under Apache License 2.0. Imported or reu
 
 ## Development Setup
 
-We recommend the [Docker test image](docker/README.md#run-tests) with your checkout mounted at `/workspace` for lint, unit tests, and integration tests. To change firmware or build configuration, [build your own image](docker/README.md#build).
+Develop in the [local Linux environment](README.md#local-linux). The [published images](docker/README.md#run-tests) hold only the final executables: use them with your checkout mounted to verify tests, and [build an image](docker/README.md#build) to verify firmware or Dockerfile changes.
 
 ## Making Changes
 
@@ -30,12 +30,12 @@ We recommend the [Docker test image](docker/README.md#run-tests) with your check
 
 ## Validation
 
-Run the checks relevant to the change in the [Docker environment](docker/README.md#run-tests) with your checkout mounted, or in the local Python environment. At minimum, framework changes should pass:
+Run the checks relevant to the change in your local environment, or in a published image with your checkout mounted; see [Verifying Changes](docs/development.md#verifying-changes). At minimum, framework changes should pass:
 
 ```sh
 ruff check --no-cache .
 ruff format --check --no-cache .
-pytest tests/unit/
+pytest tests/unit tests/integration/support
 ```
 
 Follow the repository's Python [code style](docs/development.md#code-style). The `Checks` workflow, part of `CI`, checks all maintained Python code and runs the unit tests for every pull request and push to main.
