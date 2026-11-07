@@ -49,6 +49,11 @@ jobs:
     if: github.event_name != 'release'
     uses: ./.github/workflows/bscontroller.yml
 
+  bumble:
+    name: Bumble
+    if: github.event_name != 'release'
+    uses: ./.github/workflows/bumble.yml
+
   # A release only tags the platform images its commit already published.
   zephyr:
     name: Zephyr
@@ -89,7 +94,7 @@ jobs:
   result:
     # The one check branch protection requires.
     name: CI result
-    needs: [checks, bscontroller, zephyr, nuttx, trouble, linux]
+    needs: [checks, bscontroller, bumble, zephyr, nuttx, trouble, linux]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

@@ -6,12 +6,12 @@ Each platform has its own image with BSWorld, the tests and that platform's comp
 
 | Image | Firmware | Default suites |
 |---|---|---|
-| `ghcr.io/xiaomi/bsworld-zephyr` | Zephyr Controller and Bluetooth shells | `tests/integration/zephyr`, `tests/integration/bumble`, `tests/integration/babblesim` |
+| `ghcr.io/xiaomi/bsworld-zephyr` | Zephyr Controller and Bluetooth shells | `tests/integration/zephyr` |
 | `ghcr.io/xiaomi/bsworld-nuttx` | NuttX BTSak and NimBLE | `tests/integration/nuttx` |
 | `ghcr.io/xiaomi/bsworld-trouble` | TrouBLE `ble_bas` | `tests/integration/trouble` |
 | `ghcr.io/xiaomi/bsworld-linux` | [User Mode Linux](../tests/integration/uml/README.md) kernel, Ubuntu BlueZ, NimBLE Linux | `tests/integration/uml` |
 
-Every image also includes Bumble, so any of them runs the Bumble suite, the unit tests and Ruff.
+Every image also includes Bumble, so any of them runs the Bumble and BabbleSim suites, the unit tests and Ruff.
 
 ## Use a Published Image
 

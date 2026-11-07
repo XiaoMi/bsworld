@@ -1,0 +1,82 @@
+# Copyright 2026 Xiaomi Corporation
+# SPDX-License-Identifier: Apache-2.0
+
+name: Bumble
+
+# The CI workflow runs these tests for pull requests and pushes to main.
+# The Bumble and BabbleSim suites need BabbleSim and BSController but no
+# firmware, so they run on the runner without a platform image.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  test:
+    name: Bumble and BabbleSim tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the commit under test
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+
+      - name: Install BSWorld and its test tools
+        # A shallow checkout uses the fallback version.
+        run: python -m pip install -e components/bscontroller -e '.[test]'
+
+      - name: Install BabbleSim build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            repo build-essential gcc-multilib g++-multilib gawk
+
+      - name: Fetch and build BabbleSim
+        env:
+          BSIM_OUT_PATH: ${{ runner.temp }}/babblesim/build
+          BSIM_COMPONENTS_PATH: ${{ runner.temp }}/babblesim/components
+          BSIM_BUILD_FAIL_ASAP: '1'
+        run: |
+          mkdir -p "$RUNNER_TEMP/babblesim"
+          cd "$RUNNER_TEMP/babblesim"
+          repo init --standalone-manifest --depth=1 \
+            -u "file://$GITHUB_WORKSPACE/components/babblesim.xml"
+          repo sync -c --no-tags
+          make -j"$(nproc)" everything
+          printf 'BSIM_OUT_PATH=%s\nBSIM_COMPONENTS_PATH=%s\n' \
+            "$BSIM_OUT_PATH" "$BSIM_COMPONENTS_PATH" >> "$GITHUB_ENV"
+
+      - name: Run the Bumble and BabbleSim integration tests
+        env:
+          CI_RESULTS: ${{ runner.temp }}/bsworld-results
+        run: |
+          mkdir -p "$CI_RESULTS"
+          python -m pytest tests/integration/bumble tests/integration/babblesim \
+            -n auto -p no:cacheprovider \
+            --out-dir "$CI_RESULTS/integration" --junitxml="$CI_RESULTS/integration.xml" \
+            2>&1 | tee "$CI_RESULTS/integration.log"
+
+      - name: Upload test reports and logs
+        if: ${{ always() }}
+        timeout-minutes: 10
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bsworld-results-bumble-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/bsworld-results
+          if-no-files-found: warn
+          retention-days: 14

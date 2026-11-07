@@ -6,12 +6,12 @@
 
 | 镜像 | 固件 | 默认测试套件 |
 |---|---|---|
-| `ghcr.io/xiaomi/bsworld-zephyr` | Zephyr Controller 与 Bluetooth shell | `tests/integration/zephyr`、`tests/integration/bumble`、`tests/integration/babblesim` |
+| `ghcr.io/xiaomi/bsworld-zephyr` | Zephyr Controller 与 Bluetooth shell | `tests/integration/zephyr` |
 | `ghcr.io/xiaomi/bsworld-nuttx` | NuttX BTSak 与 NimBLE | `tests/integration/nuttx` |
 | `ghcr.io/xiaomi/bsworld-trouble` | TrouBLE `ble_bas` | `tests/integration/trouble` |
 | `ghcr.io/xiaomi/bsworld-linux` | [User Mode Linux](../tests/integration/uml/README.zh-CN.md) 内核、Ubuntu 的 BlueZ、NimBLE Linux | `tests/integration/uml` |
 
-每个镜像都包含 Bumble，因此任一镜像都能运行 Bumble 套件、单元测试和 Ruff。
+每个镜像都包含 Bumble，因此任一镜像都能运行 Bumble 和 BabbleSim 套件、单元测试和 Ruff。
 
 ## 使用已发布镜像
 

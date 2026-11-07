@@ -8,7 +8,7 @@
 |---|---|---|
 | Bumble | [google/bumble](https://github.com/google/bumble) | `bumble==0.0.235`，在 [pyproject.toml](../../../pyproject.toml) 中固定 |
 
-每个 [Docker 镜像](../../../docker/README.zh-CN.md#选择测试套件)都包含 Bumble，Zephyr 镜像默认运行该套件。以下步骤用于本机 Linux。
+每个 [Docker 镜像](../../../docker/README.zh-CN.md#选择测试套件)都包含 Bumble，传入该套件的 pytest 命令即可运行。以下步骤用于本机 Linux。
 
 ## 准备环境
 
