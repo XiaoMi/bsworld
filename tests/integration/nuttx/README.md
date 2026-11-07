@@ -46,7 +46,7 @@ git clone "$NUTTX_APPS_DIR" "$NUTTX_NIMBLE_APPS_DIR"
 
 ## Compile and Run
 
-Build BabbleSim using the [repository instructions](../../../README.md#build-and-test) and the [Virtual Controller](../../../docs/controllers.md#building-the-zephyr-controller).
+Build BabbleSim using the [repository instructions](../../../README.md#build-and-test).
 
 | Suite | Build instructions | Test artifact variable |
 |---|---|---|

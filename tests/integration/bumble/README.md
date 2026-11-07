@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-These tests run the [Bumble](https://github.com/google/bumble) Python Host inside the pytest asyncio event loop, sharing the simulation clock with the test. Each device connects to its own Virtual Controller. [common/](common/) holds the shared device helpers.
+These tests run the [Bumble](https://github.com/google/bumble) Python Host inside the pytest asyncio event loop, sharing the simulation clock with the test. Each device connects to its own BSController, the default [Virtual Controller](../../../docs/controllers.md). [common/](common/) holds the shared device helpers.
 
 | Host | Upstream | Version |
 |---|---|---|
@@ -13,8 +13,6 @@ Every [Docker image](../../../docker/README.md#select-a-suite) includes Bumble; 
 ## Prepare the Environment
 
 Prepare BSWorld using the [local Linux setup](../../../README.md#local-linux), which also installs Bumble, and build BabbleSim using the [repository instructions](../../../README.md#build-and-test).
-
-The `[zephyr]` cases also need the [Zephyr Virtual Controller](../../../docs/controllers.md#building-the-zephyr-controller).
 
 ## Build and Run
 

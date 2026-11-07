@@ -33,7 +33,7 @@ OUT_DIR=/path/to/artifacts pytest tests/
 
 ## 目录结构
 
-下面是一项 NuttX 扫描测试 `[zephyr]` 用例的典型目录：
+下面是一项 NuttX 扫描测试的典型目录：
 
 ```text
 /tmp/run-<timestamp>/<uid>/
@@ -43,16 +43,13 @@ OUT_DIR=/path/to/artifacts pytest tests/
                 nuttx/
                     btsak/
                         test_btsak_scan_advertise/
-                            test_nuttx_btsak_scanner_finds_advertiser_zephyr/
+                            test_nuttx_btsak_scanner_finds_advertiser/
                                 bsworld.log
                                 babblesim/
                                     bs_2G4_phy_v1.log
                                     ellisys.bttrp
                                     att_matrix.txt
                                     timed_att_0_1_0.txt
-                                bt_virt_controller/
-                                    bt_virt_controller_hci0.log
-                                    bt_virt_controller_hci1.log
                                 nuttx/
                                     scanners/
                                         nuttx_btsak_scanner/
@@ -64,7 +61,7 @@ OUT_DIR=/path/to/artifacts pytest tests/
                                             hci1.snoop
 ```
 
-`[bscontroller]` 用例在 `..._bscontroller/` 下生成相同文件，但没有 `bt_virt_controller/`。`att_matrix.txt` 和 `timed_att_*.txt` 只在测试配置了对应的固定或时变路径衰减时生成。
+使用 `ZephyrController` 的测试还会生成 `bt_virt_controller/bt_virt_controller_hciN.log`。`att_matrix.txt` 和 `timed_att_*.txt` 只在测试配置了对应的固定或时变路径衰减时生成。
 
 ## 各类产物
 

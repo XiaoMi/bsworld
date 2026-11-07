@@ -100,14 +100,6 @@ target "babblesim" {
   cache-to   = cache_to("babblesim")
 }
 
-target "zephyr-workspace" {
-  inherits   = ["_common"]
-  dockerfile = "docker/base.Dockerfile"
-  target     = "zephyr-workspace"
-  cache-from = cache_from("zephyr-workspace")
-  cache-to   = cache_to("zephyr-workspace")
-}
-
 target "runtime-base" {
   inherits   = ["_common"]
   dockerfile = "docker/base.Dockerfile"
@@ -123,8 +115,8 @@ target "zephyr" {
   dockerfile = "docker/zephyr.Dockerfile"
   target     = "runtime-zephyr"
   contexts = {
-    zephyr-workspace = "target:zephyr-workspace"
-    runtime-base     = "target:runtime-base"
+    babblesim    = "target:babblesim"
+    runtime-base = "target:runtime-base"
   }
   tags       = ["bsworld-zephyr:${TAG}"]
   cache-from = cache_from("zephyr")

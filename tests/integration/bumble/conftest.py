@@ -10,12 +10,6 @@ from tests.integration.bumble.common import (
     add_bumble_controller,
     open_bumble_device,
 )
-from tests.integration.controllers import (
-    bsworld_default_controller_type,
-    controller_type,
-)
-
-__all__ = ["bsworld_default_controller_type", "bumble_pair", "controller_type"]
 
 
 @pytest_asyncio.fixture

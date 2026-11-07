@@ -10,7 +10,7 @@ BSWorld ships two implementations:
 |---|---|---|
 | Implementation | Zephyr's upstream `hci_virt` sample, built for `nrf52_bsim` ([details](#using-a-zephyr-controller)) | Python Controller ([bscontroller](../components/bscontroller/README.md)) |
 | Runs as | Native simulator process, one per Controller | Worker thread inside the pytest process |
-| Needs | `BSWORLD_BT_VIRT_CONTROLLER_BIN` (prebuilt in the Docker image) | Nothing beyond the BSWorld installation |
+| Needs | `BSWORLD_BT_VIRT_CONTROLLER_BIN` (prebuilt in the Zephyr Docker image) | Nothing beyond the BSWorld installation |
 | Configuration | Fixed by the Zephyr build | Per Controller: buffers, list sizes, limits, version ([below](#configuring-bscontroller)) |
 | Default | Selected explicitly | Yes |
 
@@ -44,7 +44,7 @@ await topo.start()
 
 ## Running a scenario against both Controllers
 
-Override the `bsworld_default_controller_type` fixture to set the default `controller_type` of the `topo` fixture; an explicit `controller_type` still takes precedence. The integration suites share this override through [tests/integration/controllers.py](../tests/integration/controllers.py), which also skips `[zephyr]` cases when `BSWORLD_BT_VIRT_CONTROLLER_BIN` is not set:
+Override the `bsworld_default_controller_type` fixture to set the default `controller_type` of the `topo` fixture; an explicit `controller_type` still takes precedence. For example, a `conftest.py` with this fixture runs every scenario below it on both Controllers:
 
 ```python
 import pytest
@@ -56,11 +56,11 @@ def bsworld_default_controller_type(request):
     return request.param
 ```
 
-Select one implementation with its parameter ID:
+The integration suites use BSController. Only the Zephyr suite runs its Host-only scenarios on both Controllers, through the `controller_type` fixture in [tests/integration/zephyr/controllers.py](../tests/integration/zephyr/controllers.py), which also skips `[zephyr]` cases when `BSWORLD_BT_VIRT_CONTROLLER_BIN` is not set. Select one implementation with its parameter ID:
 
 ```sh
-pytest tests/integration -n auto -k '[zephyr]'
-pytest tests/integration -n auto -k '[bscontroller]'
+pytest tests/integration/zephyr -n auto -k '[zephyr]'
+pytest tests/integration/zephyr -n auto -k '[bscontroller]'
 ```
 
 ## Configuring BSController
@@ -109,7 +109,7 @@ The Zephyr Controller is Zephyr's upstream [`samples/bluetooth/hci_virt`](https:
 
 ### Building the Zephyr Controller
 
-The [Docker test image](../docker/README.md#use-a-published-image) already includes the Controller. For native Linux builds, build BabbleSim using the [repository instructions](../README.md#build-and-test) and prepare the [Zephyr workspace](../tests/integration/zephyr/README.md#prepare-the-zephyr-workspace).
+The [Zephyr Docker image](../docker/README.md#use-a-published-image) already includes the Controller. For native Linux builds, build BabbleSim using the [repository instructions](../README.md#build-and-test) and prepare the [Zephyr workspace](../tests/integration/zephyr/README.md#prepare-the-zephyr-workspace).
 
 Build the sample with the BSWorld overlay:
 

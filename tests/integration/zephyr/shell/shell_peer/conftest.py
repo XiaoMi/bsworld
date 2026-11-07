@@ -5,7 +5,7 @@
 
 import pytest
 import pytest_asyncio
-from tests.integration.controllers import require_controller
+from tests.integration.zephyr.controllers import require_controller
 from tests.integration.zephyr.shell.devices import (
     create_zephyr_firmware_shell,
     create_zephyr_shell,
