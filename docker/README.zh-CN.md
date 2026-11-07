@@ -4,14 +4,14 @@
 
 每个平台有各自的镜像，包含 BSWorld、测试用例和该平台编译好的固件，需要安装了 [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) 的 Linux/x86_64 主机。
 
+镜像只包含经 CI 构建和测试的最终可执行程序，不含工具链和固件源码。镜像用于运行和验证测试，开发请使用[本地 Linux 环境](../docs/zh-CH/README.md#本地-linux)。已发布的镜像也是参照环境：本地结果与 CI 不一致时，先用同一提交的镜像复现，参见[验证修改](../docs/zh-CH/development.md#验证修改)。
+
 | 镜像 | 固件 | 默认测试套件 |
 |---|---|---|
 | `ghcr.io/xiaomi/bsworld-zephyr` | Zephyr Controller 与 Bluetooth shell | `tests/integration/zephyr` |
 | `ghcr.io/xiaomi/bsworld-nuttx` | NuttX BTSak 与 NimBLE | `tests/integration/nuttx` |
 | `ghcr.io/xiaomi/bsworld-trouble` | TrouBLE `ble_bas` | `tests/integration/trouble` |
 | `ghcr.io/xiaomi/bsworld-linux` | [User Mode Linux](../tests/integration/uml/README.zh-CN.md) 内核、Ubuntu 的 BlueZ、NimBLE Linux | `tests/integration/uml` |
-
-每个镜像都包含 Bumble，因此任一镜像都能运行 Bumble 和 BabbleSim 套件、单元测试和 Ruff。
 
 ## 使用已发布镜像
 
@@ -20,10 +20,10 @@
 ```sh
 sudo docker pull ghcr.io/xiaomi/bsworld-zephyr:latest
 mkdir -p .cache/docker-results
+# 已发布镜像以 UID/GID 1000 运行。
 sudo chown 1000:1000 .cache/docker-results
 sudo docker run --rm \
   --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  -e PYTHONPATH=/workspace \
   ghcr.io/xiaomi/bsworld-zephyr:latest
 ```
 
@@ -37,7 +37,7 @@ sudo docker run --rm \
 |---|---|
 | 最近通过测试并发布的主线版本 | `latest` |
 | 完整 commit ID | `sha-<40位commit>` |
-| Release tag | `v1.0.0` |
+| Release tag | `v<版本号>`，例如 `v1.1.5` |
 
 每个平台的 CI 各自发布镜像：主线上测试通过后推送 `sha-<commit>` 并更新 `latest`，发布 Release 时用该 commit 的镜像打 Release tag。某个平台失败不会阻止其他平台发布，因此各平台的 `latest` 可能对应不同的 commit，而同一个 Release tag 始终对应同一个 commit。拆分为各平台镜像之前的版本发布的是单个镜像 `ghcr.io/xiaomi/bsworld`。
 
@@ -58,11 +58,10 @@ sudo chown 1000:1000 .cache/docker-results
 sudo docker run --rm \
   --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
   --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  -e PYTHONPATH=/workspace \
   ghcr.io/xiaomi/bsworld-zephyr:latest
 ```
 
-固件仍来自镜像，修改固件后需要[重新构建镜像](#构建)。
+固件仍来自镜像。要验证固件、固件构建输入或 Dockerfile 的修改，请[构建镜像](#构建)，或使用 pull request 的 CI，它会用修改后的代码构建镜像。
 
 ### 选择测试套件
 
@@ -72,7 +71,6 @@ sudo docker run --rm \
 sudo docker run --rm \
   --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
   --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  -e PYTHONPATH=/workspace \
   ghcr.io/xiaomi/bsworld-zephyr:latest \
   pytest tests/integration/zephyr/shell -n auto \
     --out-dir /output --junitxml=/output/zephyr-shell.xml
@@ -84,7 +82,6 @@ sudo docker run --rm \
 sudo docker run --rm \
   --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
   --env PYTHONDONTWRITEBYTECODE=1 \
-  -e PYTHONPATH=/workspace \
   ghcr.io/xiaomi/bsworld-zephyr:latest pytest tests/unit -q -p no:cacheprovider
 ```
 
@@ -93,11 +90,12 @@ Ruff：
 ```sh
 sudo docker run --rm \
   --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
-  -e PYTHONPATH=/workspace \
-  ghcr.io/xiaomi/bsworld-zephyr:latest ruff check --no-cache src tests
+  ghcr.io/xiaomi/bsworld-zephyr:latest ruff check --no-cache .
 ```
 
 ## 构建
+
+构建镜像用于在 CI 之前验证固件或 Dockerfile 的修改。各构建阶段不作为开发环境维护。
 
 克隆包含 tag 的仓库，后续命令都在仓库根目录执行：
 
@@ -130,7 +128,7 @@ sudo docker build --progress=plain -f docker/base.Dockerfile \
   --build-arg BSWORLD_VERSION="$BSWORLD_VERSION" \
   -t bsworld:python-test .
 sudo docker run --rm --env PYTHONDONTWRITEBYTECODE=1 \
-  bsworld:python-test python -m ruff check --no-cache src tests
+  bsworld:python-test python -m ruff check --no-cache .
 sudo docker run --rm --env PYTHONDONTWRITEBYTECODE=1 \
   bsworld:python-test python -m pytest tests/unit -q -p no:cacheprovider
 ```
@@ -147,7 +145,7 @@ sudo BUILD_UID="$(id -u)" BUILD_GID="$(id -g)" BUILD_JOBS=4 \
 
 | 文件 | 构建阶段 |
 |---|---|
-| `base.Dockerfile` | `build-base`、`bsworld`（Python 项目依赖）、`python-test`（已安装的项目和测试）、`babblesim`、`runtime-base`（运行库和 BabbleSim） |
+| `base.Dockerfile` | `build-base`、`bsworld`（用于读取版本号的 setuptools-scm）、`python-test`（已安装的项目和测试）、`babblesim`、`runtime-base`（运行库和 BabbleSim） |
 | `zephyr.Dockerfile` | `zephyr-workspace`（Zephyr workspace 和 SDK）、`zephyr-controller`、`zephyr-shell`、`runtime-zephyr` |
 | `nuttx.Dockerfile` | `nuttx`、`runtime-nuttx` |
 | `trouble.Dockerfile` | `trouble`、`runtime-trouble` |
@@ -161,7 +159,6 @@ sudo chown "$(id -u):$(id -g)" .cache/docker-results
 sudo docker run --rm \
   --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
   --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  -e PYTHONPATH=/workspace \
   bsworld-zephyr:dev
 ```
 

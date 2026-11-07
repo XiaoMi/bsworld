@@ -22,11 +22,11 @@ BSWorld 是一个在 Linux 上测试 Bluetooth Host 及其业务程序的确定�
 
 ## 快速开始
 
-BSWorld 运行于 Linux/x86_64。每个平台都有已发布的 Docker 镜像，包含 Python、BSWorld 和该平台的固件，列表见 [Docker 使用说明](../../docker/README.zh-CN.md)。
+BSWorld 运行于 Linux/x86_64。开发请使用[本地 Linux](#本地-linux) 环境，已发布的 Docker 镜像用于运行和验证测试。每个平台的镜像包含 BSWorld 和经 CI 测试的该平台可执行程序，不含工具链和固件源码，列表见 [Docker 使用说明](../../docker/README.zh-CN.md)。
 
-### Docker（推荐）
+### Docker
 
-安装 [Docker Engine](https://docs.docker.com/engine/install/ubuntu/)，然后运行 Zephyr 镜像内的集成测试：
+安装 [Docker Engine](https://docs.docker.com/engine/install/ubuntu/)，然后运行镜像内的集成测试，以 Zephyr 镜像为例：
 
 ```sh
 sudo docker pull ghcr.io/xiaomi/bsworld-zephyr:latest
@@ -34,7 +34,6 @@ mkdir -p .cache/docker-results
 # 已发布镜像以 UID/GID 1000 运行。
 sudo chown 1000:1000 .cache/docker-results
 sudo docker run --rm \
-  -e PYTHONPATH=/workspace \
   --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
   ghcr.io/xiaomi/bsworld-zephyr:latest
 ```
@@ -42,6 +41,8 @@ sudo docker run --rm \
 测试结果写入 `.cache/docker-results`，包括 `pytest.xml`、进程日志、HCI 抓包和 RF 跟踪文件。NuttX、TrouBLE 和 Linux 镜像、选择测试套件、测试当前检出版本、选择镜像版本或自行构建镜像，参见 [Docker 使用说明](../../docker/README.zh-CN.md)。
 
 ### 本地 Linux
+
+本地环境用自己的工具编译固件、运行测试，修改后可以增量编译。
 
 开发和测试需要 Python 3.12 或更高版本。在 Ubuntu 24.04 上安装所需工具：
 
@@ -67,8 +68,9 @@ python -m pip install -e components/bscontroller -e '.[test]'
 运行开发检查：
 
 ```sh
-ruff check src tests
-pytest tests/unit -q
+ruff check .
+ruff format --check .
+pytest tests/unit tests/integration/support -q
 ```
 
 #### 构建与测试
@@ -91,23 +93,16 @@ export BSIM_BUILD_FAIL_ASAP=1
 make -j"$(nproc)" everything
 ```
 
-运行 Bumble 场景，不需要其他二进制：
+每个新开的、用于构建或运行测试的 shell 都要重新导出 `BSWORLD_ROOT`、`BSIM_OUT_PATH` 和 `BSIM_COMPONENTS_PATH`；没有 `BSIM_OUT_PATH` 时，集成测试会报环境配置错误并停止。
+
+运行 Bumble 和 BabbleSim 场景，不需要其他二进制：
 
 ```sh
 cd "$BSWORLD_ROOT"
-pytest tests/integration/bumble -n auto
+pytest tests/integration/bumble tests/integration/babblesim -n auto
 ```
 
-### 选择测试用的 Controller
-
-集成场景使用默认的 BSController。Zephyr 测试集还会把每个纯 Host 场景分别在 Zephyr Controller（`[zephyr]`）和 BSController（`[bscontroller]`）上运行；未编译 Zephyr Controller 时跳过 `[zephyr]` 用例。参见[虚拟 Controller](controllers.md)。
-
-通过 pytest 参数 ID 选择一种实现：
-
-```sh
-pytest tests/integration/zephyr -n auto -v -k '[zephyr]'
-pytest tests/integration/zephyr -n auto -v -k '[bscontroller]'
-```
+其他套件运行各平台的可执行程序。按[支持的集成环境](#支持的集成环境)中的说明编译，说明中会给出每个程序要导出的变量。
 
 ## 支持的集成环境
 

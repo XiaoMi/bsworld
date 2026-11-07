@@ -15,7 +15,7 @@ The executable is built by the Bluetooth shell guide. Run the tests:
 ```sh
 cd "$BSWORLD_ROOT"
 source .venv/bin/activate
-pytest tests/integration/zephyr/shell/bumble_peer -n 4 -q
+pytest tests/integration/zephyr/shell/bumble_peer -n auto -q
 ```
 
 | File | Scenarios | Controllers |

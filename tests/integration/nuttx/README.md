@@ -2,11 +2,11 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+These tests run NuttX simulator firmware as native Linux processes, in two suites: [BTSak](btsak/README.md) and [NimBLE](nimble/README.md). Each process connects to its own BSController.
+
 ## Prepare the Environment
 
-We recommend the [published NuttX image](../../../docker/README.md#run-tests), `ghcr.io/xiaomi/bsworld-nuttx`, which includes BTSak and NimBLE firmware. Select the NuttX suite with `pytest tests/integration/nuttx`.
-
-The steps below are for native Linux builds. Prepare BSWorld using the [local Linux setup](../../../README.md#local-linux), then install the dependencies from the NuttX [installation guide](https://nuttx.apache.org/docs/latest/quickstart/install.html). On Ubuntu 24.04:
+Prepare BSWorld using the [local Linux setup](../../../README.md#local-linux) and build BabbleSim using the [repository instructions](../../../README.md#build-and-test), then install the dependencies from the NuttX [installation guide](https://nuttx.apache.org/docs/latest/quickstart/install.html). On Ubuntu 24.04:
 
 ```sh
 sudo apt-get update
@@ -44,18 +44,24 @@ git clone "$NUTTX_DIR" "$NUTTX_NIMBLE_DIR"
 git clone "$NUTTX_APPS_DIR" "$NUTTX_NIMBLE_APPS_DIR"
 ```
 
-## Compile and Run
+## Test Suites
 
-Build BabbleSim using the [repository instructions](../../../README.md#build-and-test).
-
-| Suite | Build instructions | Test artifact variable |
+| Suite | Build instructions | Executable variable |
 |---|---|---|
 | BTSak | [BTSak tests](btsak/README.md#build-and-run) | `BSWORLD_NUTTX_BTSAK_BIN` |
 | NimBLE | [NimBLE tests](nimble/README.md#build-and-run) | `BSWORLD_NUTTX_NIMBLE_BIN` |
 
+Run both suites:
+
+```sh
+cd "$BSWORLD_ROOT"
+source .venv/bin/activate
+pytest tests/integration/nuttx -n auto -q
+```
+
 ## Adding Scenarios
 
-Add an async pytest test under [BTSak](btsak/README.md) or [NimBLE](nimble/README.md), reusing that suite's device profiles with `create_nuttx_process()` from [common/](common/). Register processes before `topo.start()`, then send the role commands documented in the suite README and verify their output with `wait_log()`.
+Add an async pytest test under [BTSak](btsak/README.md) or [NimBLE](nimble/README.md), reusing that suite's device profiles with `create_nuttx_process()` from [common/](common/). Register processes before `topo.start()`, then send the role commands documented in the suite README and verify their output with `wait_log()`. A profile describes the program name, executable and shell behavior, and creating the process registers it with the topology. The test adds the Controller with `topo.add_controller()` and binds the program to it with `attach()`.
 
 ## License
 

@@ -16,7 +16,7 @@ BSWorld 自有代码使用 Apache License 2.0。引入或复用的第三方组�
 
 ## 搭建开发环境
 
-推荐使用 [Docker 测试镜像](../../docker/README.zh-CN.md#运行测试)，将仓库挂载到 `/workspace`，执行静态检查、单元测试和集成测试。修改固件或构建配置时，[自行构建镜像](../../docker/README.zh-CN.md#构建)。
+开发请使用[本地 Linux 环境](README.md#本地-linux)。[已发布的镜像](../../docker/README.zh-CN.md#运行测试)只包含最终可执行程序：挂载 checkout 后用于验证测试；验证固件或 Dockerfile 的修改时，[自行构建镜像](../../docker/README.zh-CN.md#构建)。
 
 ## 修改代码
 
@@ -30,12 +30,12 @@ BSWorld 自有代码使用 Apache License 2.0。引入或复用的第三方组�
 
 ## 验证修改
 
-以下检查在挂载当前仓库的 [Docker 环境](../../docker/README.zh-CN.md#运行测试)或本机 Python 环境中执行。框架代码至少应通过：
+以下检查在本地环境中执行，或在挂载 checkout 的已发布镜像中执行，参见[验证修改](development.md#验证修改)。框架代码至少应通过：
 
 ```sh
 ruff check --no-cache .
 ruff format --check --no-cache .
-pytest tests/unit/
+pytest tests/unit tests/integration/support
 ```
 
 遵循仓库的 Python [代码格式](development.md#代码格式)约定。`Checks` 工作流属于 `CI`，会在每个 pull request 和推送到 main 时检查全部 Python 代码并运行单元测试。

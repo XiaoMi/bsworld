@@ -2,9 +2,17 @@
 
 [English](../development.md) | [简体中文](development.md)
 
-在仓库根目录运行 BSWorld 的单元测试、静态检查和覆盖率统计。使用[已发布的 Docker 镜像](../../docker/README.zh-CN.md#运行测试)可以减少环境准备；需要本机 Python 环境时，按照 README 的[本地 Linux 环境搭建](README.md#本地-linux)操作。
+请按 README 的[本地 Linux 环境搭建](README.md#本地-linux)准备开发环境，并在仓库根目录运行 BSWorld 的单元测试、静态检查和覆盖率统计。[已发布的 Docker 镜像](../../docker/README.zh-CN.md#运行测试)无需本地环境即可对 checkout 运行相同的检查，它能验证哪些修改见[验证修改](#验证修改)。
 
 ## 单元测试
+
+使用本地虚拟环境：
+
+```sh
+cd "$BSWORLD_ROOT"
+source .venv/bin/activate
+pytest tests/unit tests/integration/support -q
+```
 
 使用 Docker：
 
@@ -12,16 +20,7 @@
 sudo docker run --rm \
   --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
   --env PYTHONDONTWRITEBYTECODE=1 \
-  -e PYTHONPATH=/workspace \
   ghcr.io/xiaomi/bsworld-zephyr:latest pytest tests/unit -q -p no:cacheprovider
-```
-
-使用本地虚拟环境：
-
-```sh
-cd "$BSWORLD_ROOT"
-source .venv/bin/activate
-pytest tests/unit -q
 ```
 
 单元测试覆盖环境与产物解析、拓扑和 Controller 生命周期、BabbleSim 命令生成、RF 配置、仿真时间调度、FIFO 时钟通信和日志采集。端到端 Bluetooth 行为由 `tests/integration/` 覆盖。
@@ -70,3 +69,14 @@ pytest tests/integration/ -n auto
 ```
 
 覆盖率报告包含完整的 `bsworld` Python 包，包括 runtime 调度器。
+
+## 验证修改
+
+已发布的镜像用构建时的可执行程序运行挂载到 `/workspace` 的 checkout：
+
+| 修改内容 | 验证方式 |
+|---|---|
+| Python 框架、测试或场景 | 挂载 checkout，使用包含该套件固件的已发布镜像，参见[运行测试](../../docker/README.zh-CN.md#运行测试) |
+| 固件或其构建输入（如 Zephyr shell 配置、TrouBLE 源码、UML 内核配置片段），或 Dockerfile | 用 checkout [构建](../../docker/README.zh-CN.md#构建)的镜像，或 pull request 的 CI，它会用该 checkout 构建镜像 |
+
+已发布的镜像就是 CI 测试时的环境。本地工具或软件包不同时，本机结果可能与镜像不同，例如编译器、Python，以及 UML Guest 从主机运行的 BlueZ 和 D-Bus。本地结果与 CI 不一致时，先用同一提交的镜像 `sha-<commit>` 复现，再对比本地与镜像中的版本，例如分别运行 `gcc --version`；UML 套件可在 Linux 镜像中运行 `bluetoothctl --version`。

@@ -8,11 +8,9 @@ Runs the upstream [Apache NimBLE](https://github.com/apache/mynewt-nimble) Linux
 |---|---|---|
 | `nimble-linux` | `porting/examples/linux` at `1e8ed60276f35a80ed4d4b4f8bb9d9c6fee53845` | `BSWORLD_UML_NIMBLE_BIN` |
 
-The [Linux Docker image](../../../../docker/README.md#select-a-suite) includes the executable and sets the variable. The steps below are for native Linux builds.
-
 ## Prepare the Environment
 
-Build the kernel and seed library using the [UML test environment](../README.md#build-the-linux-guest). Install the mbedtls headers (Ubuntu):
+Build the kernel and seed library using the [UML test environment](../README.md#prepare-the-environment), which also sets `UML_DIR`. Install the mbedtls headers (Ubuntu):
 
 ```sh
 sudo apt-get install -y libmbedtls-dev
@@ -47,7 +45,7 @@ pytest tests/integration/uml/nimble -q
 
 `test_uml_nimble_linux_advertises_and_accepts_connection`: NimBLE advertises as `nimble` from `AA:BB:CC:DD:EE:FE`, and a Bumble Central connects and disconnects.
 
-NimBLE stops `bluetoothd` and claims `hci0` through HCI User Channel. The guest console is under `uml/nimble/uml_nimble.log`; see [artifacts](../../../../docs/artifacts.md) for the rest.
+The guest console is under `uml/nimble/uml_nimble.log`; see [artifacts](../../../../docs/artifacts.md) for the rest.
 
 ## License
 

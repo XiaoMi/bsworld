@@ -21,11 +21,11 @@ Use BSWorld to:
 
 ## Quick Start
 
-BSWorld runs on Linux/x86_64. Each platform has a published Docker image with Python, BSWorld, and that platform's firmware; the [Docker guide](docker/README.md) lists them.
+BSWorld runs on Linux/x86_64. Develop in a [local Linux](#local-linux) environment, and use the published Docker images to run and verify the tests. Each platform's image holds BSWorld and that platform's compiled executables as CI tested them, without toolchains or firmware sources; the [Docker guide](docker/README.md) lists them.
 
-### Docker (Recommended)
+### Docker
 
-Install [Docker Engine](https://docs.docker.com/engine/install/ubuntu/), then run the integration tests packaged in the Zephyr image:
+Install [Docker Engine](https://docs.docker.com/engine/install/ubuntu/), then run an image's integration tests, taking the Zephyr image as an example:
 
 ```sh
 sudo docker pull ghcr.io/xiaomi/bsworld-zephyr:latest
@@ -33,7 +33,6 @@ mkdir -p .cache/docker-results
 # The published images run as UID/GID 1000.
 sudo chown 1000:1000 .cache/docker-results
 sudo docker run --rm \
-  -e PYTHONPATH=/workspace \
   --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
   ghcr.io/xiaomi/bsworld-zephyr:latest
 ```
@@ -41,6 +40,8 @@ sudo docker run --rm \
 Results are written to `.cache/docker-results`, including `pytest.xml`, process logs, HCI captures, and RF traces. See the [Docker guide](docker/README.md) for the NuttX, TrouBLE and Linux images, to run a selected suite, test the current checkout, choose an image version, or build an image.
 
 ### Local Linux
+
+A local environment builds the firmware and runs the tests with your own tools, so changes rebuild incrementally.
 
 Development and test commands require Python 3.12 or newer. On Ubuntu 24.04, install the required tools:
 
@@ -66,8 +67,9 @@ python -m pip install -e components/bscontroller -e '.[test]'
 Run the development checks:
 
 ```sh
-ruff check src tests
-pytest tests/unit -q
+ruff check .
+ruff format --check .
+pytest tests/unit tests/integration/support -q
 ```
 
 #### Build and Test
@@ -90,23 +92,16 @@ export BSIM_BUILD_FAIL_ASAP=1
 make -j"$(nproc)" everything
 ```
 
-Run the Bumble scenarios, which need no other binaries:
+Export `BSWORLD_ROOT`, `BSIM_OUT_PATH` and `BSIM_COMPONENTS_PATH` again in every new shell that builds or runs tests; without `BSIM_OUT_PATH`, the integration tests stop with a setup error.
+
+Run the Bumble and BabbleSim scenarios, which need no other binaries:
 
 ```sh
 cd "$BSWORLD_ROOT"
-pytest tests/integration/bumble -n auto
+pytest tests/integration/bumble tests/integration/babblesim -n auto
 ```
 
-### Test Controller Variants
-
-Integration scenarios use BSController, the default Controller. The Zephyr suite also runs each Host-only scenario on the Zephyr Controller (`[zephyr]`) and on BSController (`[bscontroller]`); `[zephyr]` cases are skipped when the Zephyr Controller is not built. See [Virtual Controllers](docs/controllers.md).
-
-Select one implementation with its pytest parameter ID:
-
-```sh
-pytest tests/integration/zephyr -n auto -v -k '[zephyr]'
-pytest tests/integration/zephyr -n auto -v -k '[bscontroller]'
-```
+The other suites run a platform's executables. Build them with the guides in [Supported Integrations](#supported-integrations), which name the variable to export for each executable.
 
 ## Supported Integrations
 

@@ -8,8 +8,6 @@
 |---|---|---|
 | Bumble | [google/bumble](https://github.com/google/bumble) | `bumble==0.0.235`，在 [pyproject.toml](../../../pyproject.toml) 中固定 |
 
-每个 [Docker 镜像](../../../docker/README.zh-CN.md#选择测试套件)都包含 Bumble，传入该套件的 pytest 命令即可运行。以下步骤用于本机 Linux。
-
 ## 准备环境
 
 先按[本地 Linux 环境搭建](../../../docs/zh-CH/README.md#本地-linux)准备 BSWorld（同时安装 Bumble），并按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim。
@@ -24,11 +22,11 @@ source .venv/bin/activate
 pytest tests/integration/bumble -n auto -q
 ```
 
-| 文件 | 场景 | Controller |
-|---|---|---|
-| [broadcast_observe/test_bumble_broadcast_observe.py](broadcast_observe/test_bumble_broadcast_observe.py) | 传统广播与被动扫描、定向 CW 干扰与恢复 | 两种 Controller 各跑一次 |
-| [connection/test_bumble_connection.py](connection/test_bumble_connection.py) | Central 与 Peripheral 建立连接 | 两种 Controller 各跑一次 |
-| [periodic_advertising/test_bumble_periodic_advertising.py](periodic_advertising/test_bumble_periodic_advertising.py) | 周期广播与同步 | 两种 Controller 各跑一次 |
+| 文件 | 场景 |
+|---|---|
+| [broadcast_observe/test_bumble_broadcast_observe.py](broadcast_observe/test_bumble_broadcast_observe.py) | 传统广播与被动扫描、定向 CW 干扰与恢复 |
+| [connection/test_bumble_connection.py](connection/test_bumble_connection.py) | Central 与 Peripheral 建立连接 |
+| [periodic_advertising/test_bumble_periodic_advertising.py](periodic_advertising/test_bumble_periodic_advertising.py) | 周期广播与同步 |
 
 ## 添加场景
 

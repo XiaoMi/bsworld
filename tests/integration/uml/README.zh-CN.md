@@ -12,9 +12,11 @@
 
 ## 准备环境
 
-[Linux Docker 镜像](../../../docker/README.zh-CN.md#选择测试套件)已包含内核、随机种子库和 `nimble-linux`，并设置好变量。镜像中的 Guest 运行 Ubuntu 24.04 打包的 BlueZ 和 D-Bus。UML 把内存映射到 `TMPDIR` 下的文件，未设置时使用 `/dev/shm`，而 Docker 以 noexec 挂载 `/dev/shm`，因此镜像设置了 `TMPDIR=/tmp`。以下步骤用于本机 Linux 构建。
+先按[本地 Linux 环境搭建](../../../docs/zh-CH/README.md#本地-linux)准备 BSWorld，并按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim。安装编译内核所需的工具和 Guest 运行的程序：
 
-先按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim。
+```sh
+sudo apt-get install -y bc bison flex bluez dbus psmisc
+```
 
 Guest 以只读方式挂载主机的根文件系统并运行其中的程序。64 位 UML 内核不能运行 32 位程序，因此 Guest 运行的程序都必须是 64 位，包括 [init.sh](source/init.sh) 启动的 `dbus-daemon`、`bluetoothd` 以及 `btattach`，可以用 `file /usr/bin/dbus-daemon` 检查。
 
@@ -40,7 +42,7 @@ make ARCH=um olddefconfig
 make ARCH=um -j"$(nproc)"
 ```
 
-UML 启动时从主机获取 Guest 随机数生成器的种子。编译 [getrandom.c](source/getrandom/getrandom.c)，用固定种子代替它，使随机地址和密钥每次运行都相同：
+UML 启动时从主机获取 Guest 随机数生成器的种子。编译 [getrandom.c](source/getrandom/getrandom.c)，用由 Guest 标签派生的种子代替它，使随机地址和密钥每次运行都相同：
 
 ```sh
 cc -shared -fPIC -O2 -o "$UML_DIR/getrandom.so" \
@@ -61,12 +63,20 @@ test -x "$BSWORLD_UML_KERNEL"
 test -f "$BSWORLD_UML_GETRANDOM"
 ```
 
-## 编译与运行
+## 测试套件
 
-| 套件 | 编译说明 | 测试产物变量 |
+| 套件 | 编译说明 | 可执行文件变量 |
 |---|---|---|
-| BlueZ | [BlueZ 测试](bluez/README.zh-CN.md#构建与运行) | 无，使用主机的 BlueZ |
+| BlueZ | [BlueZ 测试](bluez/README.zh-CN.md#构建与运行) | 无，Guest 运行主机的 BlueZ |
 | NimBLE | [NimBLE 测试](nimble/README.zh-CN.md#构建与运行) | `BSWORLD_UML_NIMBLE_BIN` |
+
+运行两个套件：
+
+```sh
+cd "$BSWORLD_ROOT"
+source .venv/bin/activate
+pytest tests/integration/uml -n auto -q
+```
 
 ## 运行时数据路径
 

@@ -8,8 +8,6 @@ These tests run the stock NuttX `btsak`. Each process connects to its own BSCont
 |---|---|---|
 | BTSak | NuttX `sim:bthcisock` | `BSWORLD_NUTTX_BTSAK_BIN` |
 
-The [NuttX Docker image](../../../../docker/README.md#select-a-suite) includes the executable and sets the variable. The steps below are for native Linux builds.
-
 ## Prepare the Environment
 
 Prepare the `$NUTTX_DIR` and `$NUTTX_APPS_DIR` workspaces using the [NuttX test environment](../README.md#prepare-the-environment), and build BabbleSim.
@@ -42,9 +40,9 @@ cd "$BSWORLD_ROOT"
 pytest tests/integration/nuttx/btsak -q
 ```
 
-| File | Scenarios | Controllers |
-|---|---|---|
-| [test_btsak_scan_advertise.py](test_btsak_scan_advertise.py) | Discovery of one and multiple advertisers, staged shell commands, targeted CW interference and recovery | Once per Controller |
+| File | Scenarios |
+|---|---|
+| [test_btsak_scan_advertise.py](test_btsak_scan_advertise.py) | Discovery of one and multiple advertisers, staged shell commands, targeted CW interference and recovery |
 
 ## Adding Scenarios
 
@@ -59,8 +57,6 @@ advertiser.attach(topo.add_controller(public_address="C0:FF:EE:00:00:01"))
 await topo.start()
 await advertiser.shell.run_many(("ifup bnep0", "bt bnep0 advertise start"))
 ```
-
-Profiles describe the program name, executable and shell behavior. Creation registers the process with the supplied topology. The test separately chooses the Controller type and address through `topo.add_controller()` and binds the program with `host.attach(controller)`.
 
 | Role | Shell commands |
 |---|---|

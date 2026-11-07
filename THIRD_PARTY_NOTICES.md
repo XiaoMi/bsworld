@@ -47,10 +47,10 @@ BSWorld uses the public Python and HCI transport APIs without modifying the Bumb
 ## Zephyr Project
 
 - Source: https://github.com/zephyrproject-rtos/zephyr
-- Usage: [Virtual Controller](docs/controllers.md#using-a-zephyr-controller) and [Bluetooth shells](tests/integration/zephyr/shell/README.md)
+- Usage: [Zephyr Controller](docs/controllers.md#using-a-zephyr-controller) and [Bluetooth shells](tests/integration/zephyr/shell/README.md)
 - License: Apache License 2.0
 
-The Virtual Controller is Zephyr's `samples/bluetooth/hci_virt` with a BSWorld Kconfig overlay. The complete and Host-only shells use external Zephyr sources.
+The Zephyr Controller is Zephyr's `samples/bluetooth/hci_virt` with a BSWorld Kconfig overlay. The complete and Host-only shells use external Zephyr sources.
 
 ## Linux
 
@@ -66,4 +66,4 @@ Linux is not vendored in this repository. The Guest kernel is built from an unmo
 - Usage: Bluetooth Host stack and tools for [Linux Guest tests](tests/integration/uml/bluez/README.md)
 - License: GNU General Public License version 2 or later and GNU Lesser General Public License version 2.1 or later, depending on the component
 
-The Guest runs BlueZ, D-Bus, and other programs installed on the host. BSWorld does not distribute them; they keep the licenses of the host's packages.
+Natively, the Guest runs BlueZ, D-Bus and other programs installed on the host, which keep the licenses of the host's packages. The `bsworld-linux` image includes Ubuntu 24.04's `bluez`, `dbus`, `psmisc` and mbedTLS packages under their Debian package licenses, listed in `/usr/share/doc/<package>/copyright` in the image.

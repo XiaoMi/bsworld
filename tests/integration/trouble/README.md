@@ -8,21 +8,20 @@ These tests run two [TrouBLE](https://github.com/embassy-rs/trouble) Rust Hosts 
 |---|---|---|
 | `ble_bas` | `trouble-example-apps` `ble_bas_central` / `ble_bas_peripheral` at `43a14413508eb63a114df672f9a93dab624b717d` | `BSWORLD_TROUBLE_NATIVE_BIN`, default `source/target/debug/ble_bas` |
 
-The [TrouBLE Docker image](../../../docker/README.md#select-a-suite) includes the executable and sets the variable. The steps below are for native Linux builds.
-
-## Prepare the Rust Toolchain
+## Prepare the Environment
 
 Prepare BSWorld using the [local Linux setup](../../../README.md#local-linux) and build BabbleSim using the [repository instructions](../../../README.md#build-and-test).
 
-Install Rust with [rustup](https://rustup.rs/). The first Cargo command installs the toolchain pinned by [rust-toolchain.toml](source/rust-toolchain.toml).
+Install Rust with [rustup](https://rustup.rs/). Run Cargo from `source/`, where rustup selects and installs the toolchain pinned by [rust-toolchain.toml](source/rust-toolchain.toml).
 
 ## Build and Run
 
 Build the executable:
 
 ```sh
+cd "$BSWORLD_ROOT/tests/integration/trouble/source"
+cargo build --locked
 cd "$BSWORLD_ROOT"
-cargo build --locked --manifest-path tests/integration/trouble/source/Cargo.toml
 ```
 
 Run the tests:
@@ -32,14 +31,16 @@ source .venv/bin/activate
 pytest tests/integration/trouble -q
 ```
 
-| File | Scenarios | Controllers |
-|---|---|---|
-| [test_trouble_native.py](test_trouble_native.py) | Advertising and connection, Battery Service discovery and read, notifications | Once per Controller |
+| File | Scenarios |
+|---|---|
+| [test_trouble_native.py](test_trouble_native.py) | Advertising and connection, Battery Service discovery and read, notifications |
 
 Run the adapter unit tests:
 
 ```sh
-cargo test --locked --manifest-path tests/integration/trouble/source/Cargo.toml
+cd "$BSWORLD_ROOT/tests/integration/trouble/source"
+cargo test --locked
+cd "$BSWORLD_ROOT"
 ```
 
 ## Adding Scenarios

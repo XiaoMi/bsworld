@@ -8,8 +8,6 @@ These tests run the [Apache NimBLE](https://github.com/apache/mynewt-nimble) exa
 |---|---|---|
 | NimBLE | NuttX `sim:nimble` with `nimble_bleprph` and `nimble_blecent` enabled | `BSWORLD_NUTTX_NIMBLE_BIN` |
 
-The [NuttX Docker image](../../../../docker/README.md#select-a-suite) includes the executable and sets the variable. The steps below are for native Linux builds.
-
 ## Prepare the Environment
 
 Prepare the `$NUTTX_NIMBLE_DIR` and `$NUTTX_NIMBLE_APPS_DIR` workspaces using the [NuttX test environment](../README.md#prepare-the-environment), and build BabbleSim.
@@ -45,9 +43,9 @@ cd "$BSWORLD_ROOT"
 pytest tests/integration/nuttx/nimble -q
 ```
 
-| File | Scenarios | Controllers |
-|---|---|---|
-| [test_central_peripheral.py](test_central_peripheral.py) | Central scanning, connection, service discovery and notification subscription | Once per Controller |
+| File | Scenarios |
+|---|---|
+| [test_central_peripheral.py](test_central_peripheral.py) | Central scanning, connection, service discovery and notification subscription |
 
 ## Adding Scenarios
 
@@ -63,8 +61,6 @@ await topo.start()
 await peripheral.shell.run_many(("ifup bnep0", "bleprph"))
 await peripheral.wait_log(r"connection established; status=0 handle=\d+")
 ```
-
-Profiles describe the program name, executable and shell behavior. Creation registers the process with the supplied topology. The test separately chooses the Controller type and address through `topo.add_controller()` and binds the program with `host.attach(controller)`.
 
 | Role | Shell commands |
 |---|---|

@@ -2,11 +2,11 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+These tests run Zephyr `nrf52_bsim` firmware as native Linux processes. The [Bluetooth shell](shell/README.md) suite runs its scenarios on both the Zephyr Controller and BSController; see [Virtual Controllers](../../../docs/controllers.md#running-a-scenario-against-both-controllers).
+
 ## Prepare the Zephyr Workspace
 
-We recommend the [published Zephyr image](../../../docker/README.md#run-tests), `ghcr.io/xiaomi/bsworld-zephyr`, which includes the Zephyr shell executables and the Zephyr Controller. Select the Zephyr suite with `pytest tests/integration/zephyr`.
-
-The steps below are for native Linux builds. Prepare BSWorld using the [local Linux setup](../../../README.md#local-linux) and install the system dependencies from Zephyr's [Getting Started Guide](https://docs.zephyrproject.org/latest/develop/getting_started/index.html).
+Prepare BSWorld using the [local Linux setup](../../../README.md#local-linux) and install the system dependencies from Zephyr's [Getting Started Guide](https://docs.zephyrproject.org/latest/develop/getting_started/index.html).
 
 Create a separate Python environment for Zephyr and install west:
 
@@ -18,7 +18,7 @@ source "$ZEPHYR_WORKSPACE/.venv/bin/activate"
 python -m pip install west
 ```
 
-Fetch the Zephyr revision pinned by [base.Dockerfile](../../../docker/base.Dockerfile):
+Fetch the Zephyr revision pinned by [zephyr.Dockerfile](../../../docker/zephyr.Dockerfile):
 
 ```sh
 git init "$ZEPHYR_WORKSPACE/zephyr"
@@ -44,13 +44,22 @@ cd "$ZEPHYR_WORKSPACE/zephyr"
 west sdk install --gnu-toolchains x86_64-zephyr-elf
 ```
 
-## Compile and Run
+Build BabbleSim using the [repository instructions](../../../README.md#build-and-test). The [Zephyr Controller](../../../docs/controllers.md#building-the-zephyr-controller) is optional: without it, the Zephyr Controller cases are skipped. Keep `BSWORLD_ROOT`, `BSIM_OUT_PATH` and `BSIM_COMPONENTS_PATH` exported while building Zephyr.
 
-Build BabbleSim using the [repository instructions](../../../README.md#build-and-test) and the [Zephyr Controller](../../../docs/controllers.md#building-the-zephyr-controller). Keep `BSWORLD_ROOT`, `BSIM_OUT_PATH` and `BSIM_COMPONENTS_PATH` exported while building Zephyr.
+## Test Suites
 
-| Suite | Build instructions | Test artifact variables |
+| Suite | Build instructions | Executable variables |
 |---|---|---|
 | Bluetooth shell | [Bluetooth shell tests](shell/README.md#build-and-run) | `BSWORLD_ZEPHYR_FULL_SHELL_BIN`, `BSWORLD_ZEPHYR_SHELL_BIN` |
+| Zephyr Controller, optional | [Building the Zephyr Controller](../../../docs/controllers.md#building-the-zephyr-controller) | `BSWORLD_BT_VIRT_CONTROLLER_BIN` |
+
+Run the suite:
+
+```sh
+cd "$BSWORLD_ROOT"
+source .venv/bin/activate
+pytest tests/integration/zephyr -n auto -q
+```
 
 ## License
 

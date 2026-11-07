@@ -17,6 +17,7 @@ The unit suite protects BSWorld's implementation contracts in isolation. It does
 | `runtime/test_pipe.py`, `runtime/test_shell.py`, `runtime/test_wait.py` | Complete-line log matching, command input, path/predicate waiting, cancellation, and timeout diagnostics. |
 | `runtime/scheduler/` | FIFO clock protocol and the rule that ready callbacks and I/O drain before simulation time advances. |
 | `test_plugin.py`, `test_env.py`, `test_deps.py`, `test_log.py` | Pytest identity/configuration, explicit artifact discovery, setup failures, and log routing. |
+| `test_version.py` | Package version from the installed distribution metadata, with a fallback when the metadata is missing. |
 
 ## Test design rules
 
@@ -33,5 +34,5 @@ The unit suite protects BSWorld's implementation contracts in isolation. It does
 
 ```sh
 pytest tests/unit -q
-ruff check src tests
+ruff check .
 ```

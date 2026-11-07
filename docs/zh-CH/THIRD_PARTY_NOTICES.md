@@ -47,10 +47,10 @@ BSWorld 使用公开的 Python 和 HCI transport 接口，不修改 Bumble Host 
 ## Zephyr Project
 
 - 源码：https://github.com/zephyrproject-rtos/zephyr
-- 用途：[虚拟 Controller](controllers.md#使用-zephyr-controller) 和 [Bluetooth shell](../../tests/integration/zephyr/shell/README.zh-CN.md)
+- 用途：[Zephyr Controller](controllers.md#使用-zephyr-controller) 和 [Bluetooth shell](../../tests/integration/zephyr/shell/README.zh-CN.md)
 - 许可证：Apache License 2.0
 
-虚拟 Controller 使用 Zephyr 的 `samples/bluetooth/hci_virt`，BSWorld 只提供 Kconfig overlay；shell 应用使用外部 Zephyr 源码。
+Zephyr Controller 使用 Zephyr 的 `samples/bluetooth/hci_virt`，BSWorld 只提供 Kconfig overlay；shell 应用使用外部 Zephyr 源码。
 
 ## Linux
 
@@ -66,4 +66,4 @@ BSWorld 使用公开的 Python 和 HCI transport 接口，不修改 Bumble Host 
 - 用途：[Linux Guest 测试](../../tests/integration/uml/bluez/README.zh-CN.md)使用的 Bluetooth Host 协议栈和工具
 - 许可证：不同组件分别使用 GNU General Public License version 2 or later 和 GNU Lesser General Public License version 2.1 or later
 
-Guest 运行主机上安装的 BlueZ、D-Bus 等程序。BSWorld 不分发这些程序，它们沿用主机软件包各自的许可证。
+本机运行时，Guest 运行主机上安装的 BlueZ、D-Bus 等程序，它们沿用主机软件包各自的许可证。`bsworld-linux` 镜像包含 Ubuntu 24.04 的 `bluez`、`dbus`、`psmisc` 和 mbedTLS 软件包，遵循各自的 Debian 软件包许可证，见镜像中的 `/usr/share/doc/<package>/copyright`。

@@ -12,9 +12,11 @@ Runs a Linux guest in User Mode Linux (UML): a mainline Linux kernel built as an
 
 ## Prepare the Environment
 
-The [Linux Docker image](../../../docker/README.md#select-a-suite) includes the kernel, the seed library and `nimble-linux`, and sets the variables. Its guest runs the BlueZ and D-Bus packaged by Ubuntu 24.04. UML maps its memory from a file in `TMPDIR`, otherwise in `/dev/shm`, which Docker mounts noexec, so the image sets `TMPDIR=/tmp`. The steps below are for native Linux builds.
+Prepare BSWorld using the [local Linux setup](../../../README.md#local-linux) and build BabbleSim using the [repository instructions](../../../README.md#build-and-test). Install the kernel build tools and the programs the guest runs:
 
-Build BabbleSim using the [repository instructions](../../../README.md#build-and-test) first.
+```sh
+sudo apt-get install -y bc bison flex bluez dbus psmisc
+```
 
 The guest mounts the host's root file system read-only and runs its programs. A 64-bit UML kernel cannot run 32-bit programs, so every program the guest runs must be 64-bit, including the `dbus-daemon` and `bluetoothd` that [init.sh](source/init.sh) starts and `btattach`; check with `file /usr/bin/dbus-daemon`.
 
@@ -40,7 +42,7 @@ make ARCH=um olddefconfig
 make ARCH=um -j"$(nproc)"
 ```
 
-UML seeds the guest's random number generator from the host at boot. Build [getrandom.c](source/getrandom/getrandom.c), which replaces that seed with a fixed one, so random addresses and keys repeat on every run:
+UML seeds the guest's random number generator from the host at boot. Build [getrandom.c](source/getrandom/getrandom.c), which replaces that seed with one derived from the guest's label, so random addresses and keys repeat on every run:
 
 ```sh
 cc -shared -fPIC -O2 -o "$UML_DIR/getrandom.so" \
@@ -61,12 +63,20 @@ test -x "$BSWORLD_UML_KERNEL"
 test -f "$BSWORLD_UML_GETRANDOM"
 ```
 
-## Compile and Run
+## Test Suites
 
-| Suite | Build instructions | Test artifact variable |
+| Suite | Build instructions | Executable variable |
 |---|---|---|
-| BlueZ | [BlueZ tests](bluez/README.md#build-and-run) | None; runs the host's BlueZ |
+| BlueZ | [BlueZ tests](bluez/README.md#build-and-run) | None; the guest runs the host's BlueZ |
 | NimBLE | [NimBLE tests](nimble/README.md#build-and-run) | `BSWORLD_UML_NIMBLE_BIN` |
+
+Run both suites:
+
+```sh
+cd "$BSWORLD_ROOT"
+source .venv/bin/activate
+pytest tests/integration/uml -n auto -q
+```
 
 ## Runtime Data Path
 

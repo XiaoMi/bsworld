@@ -15,7 +15,7 @@
 ```sh
 cd "$BSWORLD_ROOT"
 source .venv/bin/activate
-pytest tests/integration/zephyr/shell/bumble_peer -n 4 -q
+pytest tests/integration/zephyr/shell/bumble_peer -n auto -q
 ```
 
 | 文件 | 场景 | Controller |

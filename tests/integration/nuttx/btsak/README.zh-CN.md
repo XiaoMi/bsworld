@@ -8,8 +8,6 @@
 |---|---|---|
 | BTSak | NuttX `sim:bthcisock` | `BSWORLD_NUTTX_BTSAK_BIN` |
 
-[NuttX Docker 镜像](../../../../docker/README.zh-CN.md#选择测试套件)已包含该程序并设置好变量。以下步骤用于本机 Linux 构建。
-
 ## 准备环境
 
 先按 [NuttX 测试环境](../README.zh-CN.md#准备环境)准备 `$NUTTX_DIR` 和 `$NUTTX_APPS_DIR` 工作区，并构建 BabbleSim。
@@ -42,9 +40,9 @@ cd "$BSWORLD_ROOT"
 pytest tests/integration/nuttx/btsak -q
 ```
 
-| 文件 | 场景 | Controller |
-|---|---|---|
-| [test_btsak_scan_advertise.py](test_btsak_scan_advertise.py) | 单个与多个广播者被发现、分阶段下发 shell 命令、定向 CW 干扰与恢复 | 两种 Controller 各跑一次 |
+| 文件 | 场景 |
+|---|---|
+| [test_btsak_scan_advertise.py](test_btsak_scan_advertise.py) | 单个与多个广播者被发现、分阶段下发 shell 命令、定向 CW 干扰与恢复 |
 
 ## 添加场景
 
@@ -59,8 +57,6 @@ advertiser.attach(topo.add_controller(public_address="C0:FF:EE:00:00:01"))
 await topo.start()
 await advertiser.shell.run_many(("ifup bnep0", "bt bnep0 advertise start"))
 ```
-
-Profile 只描述程序名称、可执行文件和 shell 行为。测试通过 `topo.add_controller()` 选择 Controller 类型和地址，通过 `host.attach(controller)` 绑定程序；创建函数已经将程序登记到传入的拓扑中。
 
 | 角色 | Shell 命令 |
 |---|---|

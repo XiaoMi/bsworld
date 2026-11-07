@@ -1,8 +1,7 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-# Zephyr Bluetooth shells; also the Bumble and BabbleSim suites, which need no
-# firmware of their own.
+# Zephyr Controller and Bluetooth shells.
 # Builds bsworld-zephyr from docker/zephyr.Dockerfile and runs its tests.
 name: Zephyr
 

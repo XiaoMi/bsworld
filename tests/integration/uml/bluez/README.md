@@ -6,11 +6,11 @@ Runs the host's BlueZ in the [UML Linux guest](../README.md) and drives it throu
 
 | Program | Source | Executable variable |
 |---|---|---|
-| `bluetoothd`, `bluetoothctl`, `btattach` | Installed on the host; validated with `bluetoothd` 5.86 and `bluetoothctl` 5.64. The Linux Docker image installs Ubuntu 24.04's BlueZ 5.72 | None |
+| `bluetoothd`, `bluetoothctl`, `btattach` | Installed on the host; validated with `bluetoothd` 5.86 and `bluetoothctl` 5.64, and in CI with Ubuntu 24.04's BlueZ 5.72 | None |
 
 ## Prepare the Environment
 
-Build the kernel and seed library using the [UML test environment](../README.md#build-the-linux-guest). Install 64-bit BlueZ on the host; [init.sh](../source/init.sh) starts `/usr/libexec/bluetooth/bluetoothd`, or `/usr/lib/bluetooth/bluetoothd` when the first is missing.
+Build the kernel and seed library using the [UML test environment](../README.md#prepare-the-environment), which also installs BlueZ. [init.sh](../source/init.sh) starts `/usr/libexec/bluetooth/bluetoothd`, or `/usr/lib/bluetooth/bluetoothd` when the first is missing.
 
 ## Build and Run
 

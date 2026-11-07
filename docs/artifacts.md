@@ -25,11 +25,11 @@ BSWorld appends `run-<timestamp>/<uid>` beneath the selected root. [pytest-xdist
 
 ## Docker and CI Results
 
-The [Docker commands](../docker/README.md#run-tests) bind-mount `/output` at `.cache/docker-results` on the host. The default image command saves `pytest.xml` there, alongside the `run-<timestamp>/<uid>` directories containing per-test logs and captures.
+The [Docker commands](../docker/README.md#run-tests) bind-mount `.cache/docker-results` on the host at `/output` in the container. The default image command saves `pytest.xml` there, alongside the `run-<timestamp>/<uid>` directories containing per-test logs and captures.
 
-In GitHub Actions, the `CI` workflow runs every check in parallel for pull requests and pushes to main: `Checks` (Ruff and the unit tests), `BSController`, `Bumble` (the Bumble and BabbleSim suites, run on the runner without an image), and the `Zephyr`, `NuttX`, `TrouBLE`, and `Linux` platform workflows, which each build their image and run its integration tests inside it. A failing check does not stop the others, and `CI result` passes only when all of them pass. Open **Actions → CI → the run** to view a result; each workflow can also be run alone from the Actions tab. Each platform run uploads a `bsworld-results-<platform>-<run-id>-<attempt>` artifact with `integration.xml`, `integration.log`, the image tag and metadata, and per-test logs and captures under `integration/`. The Bumble run uploads the same reports and logs as `bsworld-results-bumble-<run-id>-<attempt>`, without image metadata. Reports and logs are uploaded on failure too and retained for 14 days.
+In GitHub Actions, the `CI` workflow runs every check in parallel for pull requests and pushes to main: `Checks` (Ruff and the unit tests), `BSController`, `Bumble` (the Bumble and BabbleSim suites, run on the runner without an image), and the `Zephyr`, `NuttX`, `TrouBLE`, and `Linux` platform workflows, which each build their image and run its integration tests inside it. `CI result` passes only when all of them pass. Open **Actions → CI → the run** to view a result; each workflow can also be run alone from the Actions tab. Each platform run uploads a `bsworld-results-<platform>-<run-id>-<attempt>` artifact with `integration.xml`, `integration.log`, the image tag and metadata, and per-test logs and captures under `integration/`. Reports and logs are uploaded on failure too and retained for 14 days.
 
-See the [Docker guide](../docker/README.md#use-a-published-image) to select an image by `latest`, source commit, or Release tag.
+See the [Docker guide](../docker/README.md#select-a-version) to select an image by `latest`, source commit, or Release tag.
 
 ## Directory Layout
 
@@ -48,8 +48,6 @@ A typical NuttX scanning test produces this layout:
                                 babblesim/
                                     bs_2G4_phy_v1.log
                                     ellisys.bttrp
-                                    att_matrix.txt
-                                    timed_att_0_1_0.txt
                                 nuttx/
                                     scanners/
                                         nuttx_btsak_scanner/
@@ -61,7 +59,7 @@ A typical NuttX scanning test produces this layout:
                                             hci1.snoop
 ```
 
-A test that uses `ZephyrController` also writes `bt_virt_controller/bt_virt_controller_hciN.log`. `att_matrix.txt` and `timed_att_*.txt` appear only when the test defines matching static or time-varying attenuation paths.
+A test that uses `ZephyrController` also writes `bt_virt_controller/bt_virt_controller_hciN.log`.
 
 ## Artifact Reference
 
@@ -153,7 +151,7 @@ Follow the data path from top to bottom:
 
 1. Check `bsworld.log` for process commands, HCI socket and device-lock barriers, or an early process exit.
 2. Check the Application logs to locate the last business state and verify whether the text expected by `wait_log()` appeared.
-3. Check the Virtual Controller logs and `hciN.snoop` to verify Host commands and Controller events.
+3. Check `hciN.snoop`, and with `ZephyrController` also `bt_virt_controller/*.log`, to verify Host commands and Controller events.
 4. Check `ellisys.bttrp` to determine whether packets reached the RF environment and whether attenuation, interference, or collisions explain a receive failure.
 5. For an unexpected RF topology, compare the resolved device IDs, directions, and activation times in `att_matrix.txt` and `timed_att_*.txt`.
 

@@ -25,11 +25,11 @@ OUT_DIR=/path/to/artifacts pytest tests/
 
 ## Docker 与 CI 结果
 
-[Docker 命令](../../docker/README.zh-CN.md#运行测试)将 `/output` 挂载到主机的 `.cache/docker-results`。镜像默认命令在其中保存 `pytest.xml`，各测试的日志和抓包文件保存在同级的 `run-<timestamp>/<uid>` 目录下。
+[Docker 命令](../../docker/README.zh-CN.md#运行测试)将主机的 `.cache/docker-results` 挂载到容器的 `/output`。镜像默认命令在其中保存 `pytest.xml`，各测试的日志和抓包文件保存在同级的 `run-<timestamp>/<uid>` 目录下。
 
-在 GitHub Actions 中，`CI` 工作流在 pull request 和推送到 main 时并行运行全部检查：`Checks`（Ruff 和单元测试）、`BSController`、`Bumble`（Bumble 和 BabbleSim 套件，直接在 runner 上运行，不构建镜像），以及 `Zephyr`、`NuttX`、`TrouBLE`、`Linux` 平台工作流，后者各自构建平台镜像并在镜像内运行集成测试。某项检查失败不会中止其他检查，只有全部通过时 `CI result` 才通过。打开 **Actions → CI → 运行记录** 查看结果；每个工作流也可以在 Actions 页面单独运行。每个平台运行上传 `bsworld-results-<platform>-<run-id>-<attempt>` 附件，包含 `integration.xml`、`integration.log`、镜像标签和信息，以及 `integration/` 下各测试的日志和抓包。Bumble 运行以 `bsworld-results-bumble-<run-id>-<attempt>` 上传同样的报告和日志，但没有镜像信息。失败时也会上传报告与日志，保留 14 天。
+在 GitHub Actions 中，`CI` 工作流在 pull request 和推送到 main 时并行运行全部检查：`Checks`（Ruff 和单元测试）、`BSController`、`Bumble`（Bumble 和 BabbleSim 套件，直接在 runner 上运行，不构建镜像），以及 `Zephyr`、`NuttX`、`TrouBLE`、`Linux` 平台工作流，后者各自构建平台镜像并在镜像内运行集成测试。只有全部通过时 `CI result` 才通过。打开 **Actions → CI → 运行记录** 查看结果；每个工作流也可以在 Actions 页面单独运行。每个平台运行上传 `bsworld-results-<platform>-<run-id>-<attempt>` 附件，包含 `integration.xml`、`integration.log`、镜像标签和信息，以及 `integration/` 下各测试的日志和抓包。失败时也会上传报告与日志，保留 14 天。
 
-通过 `latest`、源码提交或 Release tag 选择镜像，见 [Docker 使用说明](../../docker/README.zh-CN.md#使用已发布镜像)。
+通过 `latest`、源码提交或 Release tag 选择镜像，见 [Docker 使用说明](../../docker/README.zh-CN.md#选择版本)。
 
 ## 目录结构
 
@@ -48,8 +48,6 @@ OUT_DIR=/path/to/artifacts pytest tests/
                                 babblesim/
                                     bs_2G4_phy_v1.log
                                     ellisys.bttrp
-                                    att_matrix.txt
-                                    timed_att_0_1_0.txt
                                 nuttx/
                                     scanners/
                                         nuttx_btsak_scanner/
@@ -61,7 +59,7 @@ OUT_DIR=/path/to/artifacts pytest tests/
                                             hci1.snoop
 ```
 
-使用 `ZephyrController` 的测试还会生成 `bt_virt_controller/bt_virt_controller_hciN.log`。`att_matrix.txt` 和 `timed_att_*.txt` 只在测试配置了对应的固定或时变路径衰减时生成。
+使用 `ZephyrController` 的测试还会生成 `bt_virt_controller/bt_virt_controller_hciN.log`。
 
 ## 各类产物
 
@@ -153,7 +151,7 @@ PHY dump 与 Ellisys 转换默认始终开启。
 
 1. 查看 `bsworld.log`，确认所有进程命令、HCI socket 和设备锁是否正常，是否有进程提前退出。
 2. 查看业务程序日志，确认业务状态机停在哪一步，以及 `wait_log()` 等待的文本是否真实出现。
-3. 查看虚拟 Controller 日志和 `hciN.snoop`，确认 Host 是否发送预期命令、Controller 是否返回预期事件。
+3. 查看 `hciN.snoop`，使用 `ZephyrController` 时再查看 `bt_virt_controller/*.log`，确认 Host 是否发送预期命令、Controller 是否返回预期事件。
 4. 查看 `ellisys.bttrp`，确认报文是否进入 RF 环境，以及接收失败是否来自衰减、干扰或碰撞。
 5. RF 场景不符合预期时，对照 `att_matrix.txt` 和 `timed_att_*.txt` 检查实际设备编号、方向和生效时间。
 
