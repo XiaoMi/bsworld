@@ -27,7 +27,7 @@ OUT_DIR=/path/to/artifacts pytest tests/
 
 [Docker 命令](../../docker/README.zh-CN.md#运行测试)将 `/output` 挂载到主机的 `.cache/docker-results`。镜像默认命令在其中保存 `pytest.xml`，各测试的日志和抓包文件保存在同级的 `run-<timestamp>/<uid>` 目录下。
 
-在 GitHub Actions 中，`CI` 工作流在 pull request 和推送到 main 时并行运行全部检查：`Checks`（Ruff 和单元测试）、`BSController`，以及 `Zephyr`、`NuttX`、`TrouBLE`、`Linux` 平台工作流，后者各自构建平台镜像并在镜像内运行集成测试。某项检查失败不会中止其他检查，只有全部通过时 `CI result` 才通过。打开 **Actions → CI → 运行记录** 查看结果；每个工作流也可以在 Actions 页面单独运行。每个平台运行上传 `bsworld-results-<platform>-<run-id>-<attempt>` 附件，包含 `integration.xml`、`integration.log`、镜像标签和信息，以及 `integration/` 下各测试的日志和抓包。失败时也会上传报告与日志，保留 14 天。
+在 GitHub Actions 中，`CI` 工作流在 pull request 和推送到 main 时并行运行全部检查：`Checks`（Ruff 和单元测试）、`BSController`、`Bumble`（Bumble 和 BabbleSim 套件，直接在 runner 上运行，不构建镜像），以及 `Zephyr`、`NuttX`、`TrouBLE`、`Linux` 平台工作流，后者各自构建平台镜像并在镜像内运行集成测试。某项检查失败不会中止其他检查，只有全部通过时 `CI result` 才通过。打开 **Actions → CI → 运行记录** 查看结果；每个工作流也可以在 Actions 页面单独运行。每个平台运行上传 `bsworld-results-<platform>-<run-id>-<attempt>` 附件，包含 `integration.xml`、`integration.log`、镜像标签和信息，以及 `integration/` 下各测试的日志和抓包。Bumble 运行以 `bsworld-results-bumble-<run-id>-<attempt>` 上传同样的报告和日志，但没有镜像信息。失败时也会上传报告与日志，保留 14 天。
 
 通过 `latest`、源码提交或 Release tag 选择镜像，见 [Docker 使用说明](../../docker/README.zh-CN.md#使用已发布镜像)。
 

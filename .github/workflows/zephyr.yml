@@ -32,5 +32,5 @@ jobs:
       packages: write
     with:
       platform: zephyr
-      suites: tests/integration/zephyr tests/integration/bumble tests/integration/babblesim
+      suites: tests/integration/zephyr
       rebuild_image: ${{ inputs.rebuild_image || false }}

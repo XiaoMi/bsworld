@@ -105,8 +105,7 @@ RUN . "$ZEPHYR_WORKSPACE/.venv/bin/activate" \
         -DDTC_OVERLAY_FILE="$ZEPHYR_BASE/tests/bluetooth/shell/xterm-native-shell.overlay;/opt/bsworld-build/zephyr/shell/bsim_host_only.overlay" \
     && strip --strip-unneeded "$ZEPHYR_WORKSPACE/build/bsworld_zephyr_shell/zephyr/zephyr.exe"
 
-# The image runs its suites by default, and also the Bumble and BabbleSim
-# suites, which need no firmware of their own.
+# The image runs its suites by default.
 FROM runtime-base AS runtime-zephyr
 COPY --from=zephyr-controller /opt/zephyrproject/build/bsworld_bt_virt_controller/zephyr/zephyr.exe /opt/firmware/zephyr/bt_virt_controller
 COPY --from=zephyr-shell /opt/zephyrproject/build/bsworld_zephyr_full_shell/zephyr/zephyr.exe /opt/firmware/zephyr/full_shell
@@ -116,4 +115,4 @@ ENV BSWORLD_BT_VIRT_CONTROLLER_BIN=/opt/firmware/zephyr/bt_virt_controller \
     BSWORLD_ZEPHYR_SHELL_BIN=/opt/firmware/zephyr/shell
 RUN bsworld-check-binaries /opt/firmware/zephyr/bt_virt_controller \
         /opt/firmware/zephyr/full_shell /opt/firmware/zephyr/shell
-CMD ["pytest", "tests/integration/zephyr", "tests/integration/bumble", "tests/integration/babblesim", "-n", "auto", "--out-dir", "/output", "--junitxml=/output/pytest.xml"]
+CMD ["pytest", "tests/integration/zephyr", "-n", "auto", "--out-dir", "/output", "--junitxml=/output/pytest.xml"]
