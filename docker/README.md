@@ -2,11 +2,11 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Each platform has its own image with BSWorld, the tests, the Zephyr Controller and that platform's compiled firmware. The images need a Linux/x86_64 host with [Docker Engine](https://docs.docker.com/engine/install/ubuntu/).
+Each platform has its own image with BSWorld, the tests and that platform's compiled firmware. The images need a Linux/x86_64 host with [Docker Engine](https://docs.docker.com/engine/install/ubuntu/).
 
 | Image | Firmware | Default suites |
 |---|---|---|
-| `ghcr.io/xiaomi/bsworld-zephyr` | Zephyr Bluetooth shells | `tests/integration/zephyr`, `tests/integration/bumble`, `tests/integration/babblesim` |
+| `ghcr.io/xiaomi/bsworld-zephyr` | Zephyr Controller and Bluetooth shells | `tests/integration/zephyr`, `tests/integration/bumble`, `tests/integration/babblesim` |
 | `ghcr.io/xiaomi/bsworld-nuttx` | NuttX BTSak and NimBLE | `tests/integration/nuttx` |
 | `ghcr.io/xiaomi/bsworld-trouble` | TrouBLE `ble_bas` | `tests/integration/trouble` |
 | `ghcr.io/xiaomi/bsworld-linux` | [User Mode Linux](../tests/integration/uml/README.md) kernel, Ubuntu BlueZ, NimBLE Linux | `tests/integration/uml` |
@@ -147,8 +147,8 @@ The image is tagged `bsworld-zephyr:dev`. `BUILD_JOBS` sets the compile parallel
 
 | File | Stages |
 |---|---|
-| `base.Dockerfile` | `build-base`, `bsworld` (Python project dependencies), `python-test` (installed project and tests), `babblesim`, `zephyr-workspace` (Zephyr workspace and SDK), `zephyr-controller`, `runtime-base` (runtime libraries, BabbleSim and the Zephyr Controller) |
-| `zephyr.Dockerfile` | `zephyr-shell`, `runtime-zephyr` |
+| `base.Dockerfile` | `build-base`, `bsworld` (Python project dependencies), `python-test` (installed project and tests), `babblesim`, `runtime-base` (runtime libraries and BabbleSim) |
+| `zephyr.Dockerfile` | `zephyr-workspace` (Zephyr workspace and SDK), `zephyr-controller`, `zephyr-shell`, `runtime-zephyr` |
 | `nuttx.Dockerfile` | `nuttx`, `runtime-nuttx` |
 | `trouble.Dockerfile` | `trouble`, `runtime-trouble` |
 | `linux.Dockerfile` | `uml` (kernel and seed library), `nimble-linux`, `runtime-linux` |

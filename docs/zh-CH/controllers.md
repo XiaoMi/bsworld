@@ -10,7 +10,7 @@ BSWorld 提供两种实现：
 |---|---|---|
 | 实现 | Zephyr 上游 `hci_virt` sample，编译目标为 `nrf52_bsim`（[说明](#使用-zephyr-controller)） | Python Controller（[bscontroller](../../components/bscontroller/README.zh-CN.md)） |
 | 运行方式 | 原生仿真进程，每个 Controller 一个进程 | pytest 进程内的 worker 线程 |
-| 依赖 | `BSWORLD_BT_VIRT_CONTROLLER_BIN`（Docker 镜像已内置） | 安装 BSWorld 即可，无其他依赖 |
+| 依赖 | `BSWORLD_BT_VIRT_CONTROLLER_BIN`（Zephyr Docker 镜像已内置） | 安装 BSWorld 即可，无其他依赖 |
 | 配置 | 由 Zephyr 编译配置决定 | 可按 Controller 分别设置缓冲、列表大小、上限、版本（见[下文](#配置-bscontroller)） |
 | 默认 | 显式选择 | 是 |
 
@@ -44,7 +44,7 @@ await topo.start()
 
 ## 用两种 Controller 运行同一场景
 
-覆盖 `bsworld_default_controller_type` fixture 可设置 `topo` fixture 的默认 `controller_type`，显式传入的 `controller_type` 仍然优先。集成测试通过 [tests/integration/controllers.py](../../tests/integration/controllers.py) 共享这一覆盖，未设置 `BSWORLD_BT_VIRT_CONTROLLER_BIN` 时跳过 `[zephyr]` 用例：
+覆盖 `bsworld_default_controller_type` fixture 可设置 `topo` fixture 的默认 `controller_type`，显式传入的 `controller_type` 仍然优先。例如，在 `conftest.py` 中定义下面的 fixture，其下的每个场景都会在两种 Controller 上运行：
 
 ```python
 import pytest
@@ -56,11 +56,11 @@ def bsworld_default_controller_type(request):
     return request.param
 ```
 
-用参数 ID 选择其中一种实现：
+集成测试使用 BSController。只有 Zephyr 测试集通过 [tests/integration/zephyr/controllers.py](../../tests/integration/zephyr/controllers.py) 中的 `controller_type` fixture，把纯 Host 场景在两种 Controller 上各运行一遍；未设置 `BSWORLD_BT_VIRT_CONTROLLER_BIN` 时跳过 `[zephyr]` 用例。用参数 ID 选择其中一种实现：
 
 ```sh
-pytest tests/integration -n auto -k '[zephyr]'
-pytest tests/integration -n auto -k '[bscontroller]'
+pytest tests/integration/zephyr -n auto -k '[zephyr]'
+pytest tests/integration/zephyr -n auto -k '[bscontroller]'
 ```
 
 ## 配置 BSController
@@ -109,7 +109,7 @@ Zephyr Controller 直接使用 Zephyr 上游的 [`samples/bluetooth/hci_virt`](h
 
 ### 编译 Zephyr Controller
 
-[Docker 测试镜像](../../docker/README.zh-CN.md#使用已发布镜像)已包含 Controller。本机构建先按[仓库构建说明](README.md#构建与测试)构建 BabbleSim，并准备 [Zephyr 工作区](../../tests/integration/zephyr/README.zh-CN.md#准备-zephyr-工作区)。
+[Zephyr Docker 镜像](../../docker/README.zh-CN.md#使用已发布镜像)已包含 Controller。本机构建先按[仓库构建说明](README.md#构建与测试)构建 BabbleSim，并准备 [Zephyr 工作区](../../tests/integration/zephyr/README.zh-CN.md#准备-zephyr-工作区)。
 
 叠加 BSWorld overlay 编译 sample：
 

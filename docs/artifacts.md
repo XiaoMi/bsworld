@@ -33,7 +33,7 @@ See the [Docker guide](../docker/README.md#use-a-published-image) to select an i
 
 ## Directory Layout
 
-A typical NuttX scanning test produces this layout for its `[zephyr]` case:
+A typical NuttX scanning test produces this layout:
 
 ```text
 /tmp/run-<timestamp>/<uid>/
@@ -43,16 +43,13 @@ A typical NuttX scanning test produces this layout for its `[zephyr]` case:
                 nuttx/
                     btsak/
                         test_btsak_scan_advertise/
-                            test_nuttx_btsak_scanner_finds_advertiser_zephyr/
+                            test_nuttx_btsak_scanner_finds_advertiser/
                                 bsworld.log
                                 babblesim/
                                     bs_2G4_phy_v1.log
                                     ellisys.bttrp
                                     att_matrix.txt
                                     timed_att_0_1_0.txt
-                                bt_virt_controller/
-                                    bt_virt_controller_hci0.log
-                                    bt_virt_controller_hci1.log
                                 nuttx/
                                     scanners/
                                         nuttx_btsak_scanner/
@@ -64,7 +61,7 @@ A typical NuttX scanning test produces this layout for its `[zephyr]` case:
                                             hci1.snoop
 ```
 
-The `[bscontroller]` case writes the same files under `..._bscontroller/`, without `bt_virt_controller/`. `att_matrix.txt` and `timed_att_*.txt` appear only when the test defines matching static or time-varying attenuation paths.
+A test that uses `ZephyrController` also writes `bt_virt_controller/bt_virt_controller_hciN.log`. `att_matrix.txt` and `timed_att_*.txt` appear only when the test defines matching static or time-varying attenuation paths.
 
 ## Artifact Reference
 

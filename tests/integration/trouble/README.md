@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-These tests run two [TrouBLE](https://github.com/embassy-rs/trouble) Rust Hosts as native Linux processes. Each process connects to its own Virtual Controller and is verified by pytest through its log. [`source/src/bsim/`](source/src/bsim) provides the Unix transport, executor and BabbleSim clock.
+These tests run two [TrouBLE](https://github.com/embassy-rs/trouble) Rust Hosts as native Linux processes. Each process connects to its own BSController, the default [Virtual Controller](../../../docs/controllers.md), and is verified by pytest through its log. [`source/src/bsim/`](source/src/bsim) provides the Unix transport, executor and BabbleSim clock.
 
 | Executable | Upstream entry point | Executable variable |
 |---|---|---|
@@ -15,8 +15,6 @@ The [TrouBLE Docker image](../../../docker/README.md#select-a-suite) includes th
 Prepare BSWorld using the [local Linux setup](../../../README.md#local-linux) and build BabbleSim using the [repository instructions](../../../README.md#build-and-test).
 
 Install Rust with [rustup](https://rustup.rs/). The first Cargo command installs the toolchain pinned by [rust-toolchain.toml](source/rust-toolchain.toml).
-
-The `[zephyr]` case also needs the [Zephyr Virtual Controller](../../../docs/controllers.md#building-the-zephyr-controller).
 
 ## Build and Run
 

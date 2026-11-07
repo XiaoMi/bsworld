@@ -2,11 +2,11 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-每个平台有各自的镜像，包含 BSWorld、测试用例、Zephyr Controller 和该平台编译好的固件，需要安装了 [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) 的 Linux/x86_64 主机。
+每个平台有各自的镜像，包含 BSWorld、测试用例和该平台编译好的固件，需要安装了 [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) 的 Linux/x86_64 主机。
 
 | 镜像 | 固件 | 默认测试套件 |
 |---|---|---|
-| `ghcr.io/xiaomi/bsworld-zephyr` | Zephyr Bluetooth shell | `tests/integration/zephyr`、`tests/integration/bumble`、`tests/integration/babblesim` |
+| `ghcr.io/xiaomi/bsworld-zephyr` | Zephyr Controller 与 Bluetooth shell | `tests/integration/zephyr`、`tests/integration/bumble`、`tests/integration/babblesim` |
 | `ghcr.io/xiaomi/bsworld-nuttx` | NuttX BTSak 与 NimBLE | `tests/integration/nuttx` |
 | `ghcr.io/xiaomi/bsworld-trouble` | TrouBLE `ble_bas` | `tests/integration/trouble` |
 | `ghcr.io/xiaomi/bsworld-linux` | [User Mode Linux](../tests/integration/uml/README.zh-CN.md) 内核、Ubuntu 的 BlueZ、NimBLE Linux | `tests/integration/uml` |
@@ -147,8 +147,8 @@ sudo BUILD_UID="$(id -u)" BUILD_GID="$(id -g)" BUILD_JOBS=4 \
 
 | 文件 | 构建阶段 |
 |---|---|
-| `base.Dockerfile` | `build-base`、`bsworld`（Python 项目依赖）、`python-test`（已安装的项目和测试）、`babblesim`、`zephyr-workspace`（Zephyr workspace 和 SDK）、`zephyr-controller`、`runtime-base`（运行库、BabbleSim 和 Zephyr Controller） |
-| `zephyr.Dockerfile` | `zephyr-shell`、`runtime-zephyr` |
+| `base.Dockerfile` | `build-base`、`bsworld`（Python 项目依赖）、`python-test`（已安装的项目和测试）、`babblesim`、`runtime-base`（运行库和 BabbleSim） |
+| `zephyr.Dockerfile` | `zephyr-workspace`（Zephyr workspace 和 SDK）、`zephyr-controller`、`zephyr-shell`、`runtime-zephyr` |
 | `nuttx.Dockerfile` | `nuttx`、`runtime-nuttx` |
 | `trouble.Dockerfile` | `trouble`、`runtime-trouble` |
 | `linux.Dockerfile` | `uml`（内核和随机种子库）、`nimble-linux`、`runtime-linux` |

@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-本组测试在 pytest 的 asyncio event loop 中运行 [Bumble](https://github.com/google/bumble) Python Host，与测试共用仿真时钟。每个设备连接自己的虚拟 Controller。[common/](common/) 存放共用的设备辅助函数。
+本组测试在 pytest 的 asyncio event loop 中运行 [Bumble](https://github.com/google/bumble) Python Host，与测试共用仿真时钟。每个设备连接自己的 BSController，即默认的[虚拟 Controller](../../../docs/zh-CH/controllers.md)。[common/](common/) 存放共用的设备辅助函数。
 
 | Host | 上游 | 版本 |
 |---|---|---|
@@ -13,8 +13,6 @@
 ## 准备环境
 
 先按[本地 Linux 环境搭建](../../../docs/zh-CH/README.md#本地-linux)准备 BSWorld（同时安装 Bumble），并按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim。
-
-`[zephyr]` 用例还需要构建 [Zephyr 虚拟 Controller](../../../docs/zh-CH/controllers.md#编译-zephyr-controller)。
 
 ## 构建与运行
 

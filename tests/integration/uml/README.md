@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Runs a Linux guest in User Mode Linux (UML): a mainline Linux kernel built as an ordinary host program. The guest runs programs from the host's file system. Its `/dev/ttyS0` connects to a Virtual Controller, and UML time-travel synchronizes the guest clock with BabbleSim simulation time.
+Runs a Linux guest in User Mode Linux (UML): a mainline Linux kernel built as an ordinary host program. The guest runs programs from the host's file system. Its `/dev/ttyS0` connects to a BSController, the default [Virtual Controller](../../../docs/controllers.md), and UML time-travel synchronizes the guest clock with BabbleSim simulation time.
 
 ## Validated Versions
 
@@ -14,7 +14,7 @@ Runs a Linux guest in User Mode Linux (UML): a mainline Linux kernel built as an
 
 The [Linux Docker image](../../../docker/README.md#select-a-suite) includes the kernel, the seed library and `nimble-linux`, and sets the variables. Its guest runs the BlueZ and D-Bus packaged by Ubuntu 24.04. UML maps its memory from a file in `TMPDIR`, otherwise in `/dev/shm`, which Docker mounts noexec, so the image sets `TMPDIR=/tmp`. The steps below are for native Linux builds.
 
-Build BabbleSim and the [Virtual Controller](../../../docs/controllers.md#building-the-zephyr-controller) using the [repository instructions](../../../README.md#build-and-test) first.
+Build BabbleSim using the [repository instructions](../../../README.md#build-and-test) first.
 
 The guest mounts the host's root file system read-only and runs its programs. A 64-bit UML kernel cannot run 32-bit programs, so every program the guest runs must be 64-bit, including the `dbus-daemon` and `bluetoothd` that [init.sh](source/init.sh) starts and `btattach`; check with `file /usr/bin/dbus-daemon`.
 

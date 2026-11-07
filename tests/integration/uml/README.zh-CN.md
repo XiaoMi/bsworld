@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-在 User Mode Linux（UML）中运行 Linux Guest。UML 是编译成普通主机程序的主线 Linux 内核，Guest 运行主机文件系统中的程序。Guest 的 `/dev/ttyS0` 连接到虚拟 Controller，Guest 时钟通过 UML time-travel 与 BabbleSim 仿真时间同步。
+在 User Mode Linux（UML）中运行 Linux Guest。UML 是编译成普通主机程序的主线 Linux 内核，Guest 运行主机文件系统中的程序。Guest 的 `/dev/ttyS0` 连接到 BSController（默认的[虚拟 Controller](../../../docs/zh-CH/controllers.md)），Guest 时钟通过 UML time-travel 与 BabbleSim 仿真时间同步。
 
 ## 已验证版本
 
@@ -14,7 +14,7 @@
 
 [Linux Docker 镜像](../../../docker/README.zh-CN.md#选择测试套件)已包含内核、随机种子库和 `nimble-linux`，并设置好变量。镜像中的 Guest 运行 Ubuntu 24.04 打包的 BlueZ 和 D-Bus。UML 把内存映射到 `TMPDIR` 下的文件，未设置时使用 `/dev/shm`，而 Docker 以 noexec 挂载 `/dev/shm`，因此镜像设置了 `TMPDIR=/tmp`。以下步骤用于本机 Linux 构建。
 
-先按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim 和[虚拟 Controller](../../../docs/zh-CH/controllers.md#编译-zephyr-controller)。
+先按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim。
 
 Guest 以只读方式挂载主机的根文件系统并运行其中的程序。64 位 UML 内核不能运行 32 位程序，因此 Guest 运行的程序都必须是 64 位，包括 [init.sh](source/init.sh) 启动的 `dbus-daemon`、`bluetoothd` 以及 `btattach`，可以用 `file /usr/bin/dbus-daemon` 检查。
 

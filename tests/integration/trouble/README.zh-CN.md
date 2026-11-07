@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-本组测试将两个 [TrouBLE](https://github.com/embassy-rs/trouble) Rust Host 作为原生 Linux 进程运行，每个进程连接自己的虚拟 Controller，由 pytest 通过日志验证。[`source/src/bsim/`](source/src/bsim) 提供 Unix 传输、执行器和 BabbleSim 时钟。
+本组测试将两个 [TrouBLE](https://github.com/embassy-rs/trouble) Rust Host 作为原生 Linux 进程运行，每个进程连接自己的 BSController（默认的[虚拟 Controller](../../../docs/zh-CH/controllers.md)），由 pytest 通过日志验证。[`source/src/bsim/`](source/src/bsim) 提供 Unix 传输、执行器和 BabbleSim 时钟。
 
 | 程序 | 上游入口 | 可执行文件变量 |
 |---|---|---|
@@ -15,8 +15,6 @@
 先按[本地 Linux 环境搭建](../../../docs/zh-CH/README.md#本地-linux)准备 BSWorld，并按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim。
 
 用 [rustup](https://rustup.rs/) 安装 Rust。首次执行 Cargo 命令时会自动安装 [rust-toolchain.toml](source/rust-toolchain.toml) 固定的工具链。
-
-`[zephyr]` 用例还需要构建 [Zephyr 虚拟 Controller](../../../docs/zh-CH/controllers.md#编译-zephyr-controller)。
 
 ## 构建与运行
 

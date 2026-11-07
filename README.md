@@ -90,22 +90,22 @@ export BSIM_BUILD_FAIL_ASAP=1
 make -j"$(nproc)" everything
 ```
 
-Run the Bumble scenarios on BSController, which need no other binaries:
+Run the Bumble scenarios, which need no other binaries:
 
 ```sh
 cd "$BSWORLD_ROOT"
-pytest tests/integration/bumble -n auto -k '[bscontroller]'
+pytest tests/integration/bumble -n auto
 ```
 
 ### Test Controller Variants
 
-Integration scenarios run with both the Zephyr Controller (`[zephyr]`) and Python BSController (`[bscontroller]`); `[zephyr]` cases are skipped when the Zephyr Controller is not built. See [Virtual Controllers](docs/controllers.md).
+Integration scenarios use BSController, the default Controller. The Zephyr suite also runs each Host-only scenario on the Zephyr Controller (`[zephyr]`) and on BSController (`[bscontroller]`); `[zephyr]` cases are skipped when the Zephyr Controller is not built. See [Virtual Controllers](docs/controllers.md).
 
 Select one implementation with its pytest parameter ID:
 
 ```sh
-pytest tests/integration -n auto -v -k '[zephyr]'
-pytest tests/integration -n auto -v -k '[bscontroller]'
+pytest tests/integration/zephyr -n auto -v -k '[zephyr]'
+pytest tests/integration/zephyr -n auto -v -k '[bscontroller]'
 ```
 
 ## Supported Integrations

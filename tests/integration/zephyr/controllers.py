@@ -1,7 +1,11 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run unchanged Host scenarios against both Controller implementations."""
+"""Run unchanged Zephyr Host scenarios against both Controller implementations.
+
+Only the Zephyr suite covers both; the other suites use the framework default,
+BSController.
+"""
 
 import pytest
 from tests.integration.applications import require_artifact
@@ -21,12 +25,4 @@ def controller_type(request):
     return request.param
 
 
-@pytest.fixture
-def bsworld_default_controller_type(controller_type):
-    # Overrides the framework fixture, so the `topo` fixture keeps its own
-    # lifecycle and per-node output directories. Explicit controller_type
-    # arguments can still select a mixed topology.
-    return controller_type
-
-
-__all__ = ["bsworld_default_controller_type", "controller_type", "require_controller"]
+__all__ = ["controller_type", "require_controller"]

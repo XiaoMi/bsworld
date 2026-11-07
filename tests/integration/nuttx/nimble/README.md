@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-These tests run the [Apache NimBLE](https://github.com/apache/mynewt-nimble) examples from nuttx-apps: `nimble_bleprph` as the Peripheral and `nimble_blecent` as the Central. Each process connects to its own Virtual Controller and is driven by pytest through shell commands.
+These tests run the [Apache NimBLE](https://github.com/apache/mynewt-nimble) examples from nuttx-apps: `nimble_bleprph` as the Peripheral and `nimble_blecent` as the Central. Each process connects to its own BSController, the default [Virtual Controller](../../../../docs/controllers.md), and is driven by pytest through shell commands.
 
 | Executable | Upstream configuration | Executable variable |
 |---|---|---|
@@ -12,7 +12,7 @@ The [NuttX Docker image](../../../../docker/README.md#select-a-suite) includes t
 
 ## Prepare the Environment
 
-Prepare the `$NUTTX_NIMBLE_DIR` and `$NUTTX_NIMBLE_APPS_DIR` workspaces using the [NuttX test environment](../README.md#prepare-the-environment), and build BabbleSim and the [Virtual Controller](../../../../docs/controllers.md#building-the-zephyr-controller).
+Prepare the `$NUTTX_NIMBLE_DIR` and `$NUTTX_NIMBLE_APPS_DIR` workspaces using the [NuttX test environment](../README.md#prepare-the-environment), and build BabbleSim.
 
 ## Build and Run
 

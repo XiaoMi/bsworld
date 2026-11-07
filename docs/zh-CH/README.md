@@ -91,22 +91,22 @@ export BSIM_BUILD_FAIL_ASAP=1
 make -j"$(nproc)" everything
 ```
 
-在 BSController 上运行 Bumble 场景，不需要其他二进制：
+运行 Bumble 场景，不需要其他二进制：
 
 ```sh
 cd "$BSWORLD_ROOT"
-pytest tests/integration/bumble -n auto -k '[bscontroller]'
+pytest tests/integration/bumble -n auto
 ```
 
 ### 选择测试用的 Controller
 
-集成场景分别使用 Zephyr Controller（`[zephyr]`）和 Python BSController（`[bscontroller]`）运行；未编译 Zephyr Controller 时跳过 `[zephyr]` 用例。参见[虚拟 Controller](controllers.md)。
+集成场景使用默认的 BSController。Zephyr 测试集还会把每个纯 Host 场景分别在 Zephyr Controller（`[zephyr]`）和 BSController（`[bscontroller]`）上运行；未编译 Zephyr Controller 时跳过 `[zephyr]` 用例。参见[虚拟 Controller](controllers.md)。
 
 通过 pytest 参数 ID 选择一种实现：
 
 ```sh
-pytest tests/integration -n auto -v -k '[zephyr]'
-pytest tests/integration -n auto -v -k '[bscontroller]'
+pytest tests/integration/zephyr -n auto -v -k '[zephyr]'
+pytest tests/integration/zephyr -n auto -v -k '[bscontroller]'
 ```
 
 ## 支持的集成环境

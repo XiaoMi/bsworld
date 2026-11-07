@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-本组测试运行 NuttX 自带的 `btsak`。每个进程连接自己的虚拟 Controller，由 pytest 通过 shell 命令驱动，充当广播者或扫描者。
+本组测试运行 NuttX 自带的 `btsak`。每个进程连接自己的 BSController（默认的[虚拟 Controller](../../../../docs/zh-CH/controllers.md)），由 pytest 通过 shell 命令驱动，充当广播者或扫描者。
 
 | 程序 | 上游配置 | 可执行文件变量 |
 |---|---|---|
@@ -12,7 +12,7 @@
 
 ## 准备环境
 
-先按 [NuttX 测试环境](../README.zh-CN.md#准备环境)准备 `$NUTTX_DIR` 和 `$NUTTX_APPS_DIR` 工作区，并构建 BabbleSim 和[虚拟 Controller](../../../../docs/zh-CH/controllers.md#编译-zephyr-controller)。
+先按 [NuttX 测试环境](../README.zh-CN.md#准备环境)准备 `$NUTTX_DIR` 和 `$NUTTX_APPS_DIR` 工作区，并构建 BabbleSim。
 
 ## 构建与运行
 
