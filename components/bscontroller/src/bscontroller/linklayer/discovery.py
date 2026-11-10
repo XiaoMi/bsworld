@@ -62,6 +62,10 @@ class Advertising:
     # Assigned when periodic advertising is enabled, not while configuring a set.
     periodic_aa: int = 0
     periodic_crc: int = 0
+    # Periodic data has its own Advertising DID (Core Vol 6, Part B, 4.4.2.11).
+    # AUX_SYNC_IND carries it in an ADI field only while the Host enabled one.
+    periodic_did: int = 0
+    periodic_adi: bool = False
     events: int = 0
     target: Address | None = None
     high_duty: bool = False
@@ -217,6 +221,10 @@ class PeriodicSync:
     use_list: bool = False
     handle: int = 0
     channel_map_update: tuple[int, int] | None = None
+    # Duplicate filtering compares the ADI of the previous report that carried
+    # one, or None if that report was truncated (Core Vol 6, Part B, 4.4.5.1.1).
+    filter_duplicates: bool = False
+    reported_adi: int | None = None
 
     def receive_channel_map(self, acad: bytes) -> None:
         """Keep the last valid future ChM/Instant update; malformed AD structures end

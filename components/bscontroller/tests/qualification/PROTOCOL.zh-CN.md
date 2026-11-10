@@ -6,7 +6,7 @@
 
 ## 测试范围
 
-当前选取 612 个协议用例：133 个 HCI 用例、479 个 LL 用例，分布在 17 个测试文件中。覆盖设备发现、广播、连接、定时、报文编码、跳频、安全及数据传输，也包含隐私和基于决策的广播过滤（DBAF）相关测试。
+当前选取 614 个协议用例：133 个 HCI 用例、481 个 LL 用例，分布在 17 个测试文件中。覆盖设备发现、广播、连接、定时、报文编码、跳频、安全及数据传输，也包含隐私和基于决策的广播过滤（DBAF）相关测试。
 
 用例保留测试规范中的编号，可按编号查找和运行。下表的章节号对应测试规范章节。
 
@@ -21,7 +21,7 @@
 | `hci/` | 4.10 Controller Configuration | [controller_configuration_test.py](hci/controller_configuration_test.py) | 32 |
 | `hci/` | 4.13 LE Connection Management | [connection_management_test.py](hci/connection_management_test.py) | 7 |
 | `hci/` | 4.17 Event Versioning | [event_versioning_test.py](hci/event_versioning_test.py) | 5 |
-| `ll/` | 4.2 Device Discovery | [device_discovery_test.py](ll/device_discovery_test.py) | 149 |
+| `ll/` | 4.2 Device Discovery | [device_discovery_test.py](ll/device_discovery_test.py) | 151 |
 | `ll/` | 4.3 Connection | [connection_test.py](ll/connection_test.py) | 219 |
 | `ll/` | 4.4 Timing | [timing_test.py](ll/timing_test.py) | 21 |
 | `ll/` | 4.5 Encoding | [encoding_test.py](ll/encoding_test.py) | 7 |
@@ -65,7 +65,7 @@ pytest 的 `passed` 表示用例执行的断言通过；协议裁决及其限制
 - `limited`：涉及亚微秒级要求，测试采用 1 微秒时间分辨率，结果带有精度限制。
 - `source_conflict`：测试规范的步骤、分支或预期结果仍存在解释限制；具体影响见用例说明。
 
-跳过原因中的 `Not applicable` 表示当前 Controller 不满足用例的适用条件。未配置 BabbleSim 时，射频用例也会跳过，因此应同时检查执行数量和跳过原因。
+未配置 BabbleSim 时，射频用例会跳过，因此应同时检查执行数量和跳过原因。
 
 ## 查看日志与限制
 

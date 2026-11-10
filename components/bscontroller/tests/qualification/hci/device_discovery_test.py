@@ -12,6 +12,10 @@ from bscontroller.linklayer import (
     LL_ADV_PRIMARY_CHANNELS,
     LL_PERIODIC_INTERVAL_MAX,
     LL_PERIODIC_INTERVAL_MIN,
+    LL_PERIODIC_INTERVAL_UNIT_US,
+    LL_PERIODIC_SYNC_ESTABLISHMENT_EVENTS,
+    PDU_ADV_ADI_DID_BITS,
+    PDU_ADV_ADI_DID_MASK,
     AdvertisingPduType,
 )
 from bscontroller.radio.base import Phy
@@ -21,6 +25,7 @@ from tests.qualification.cases import (
     procedure_cases,
     verify_case,
 )
+from tests.qualification.link import REPORT_DELIVERY_US
 from tests.qualification.periodic import (
     PeriodicAdvertiser,
     PeriodicTrain,
@@ -32,6 +37,7 @@ from tests.qualification.tester import (
     create_sync,
     extended_enable,
     extended_parameters,
+    le_features,
     legacy_parameters,
     receive_extended,
     scan_parameters,
@@ -43,6 +49,17 @@ Properties = (
 )
 AdvType = hci.HCI_LE_Set_Advertising_Parameters_Command.AdvertisingType
 Operation = hci.HCI_LE_Set_Extended_Advertising_Data_Command.Operation
+SyncOptions = hci.HCI_LE_Periodic_Advertising_Create_Sync_Command.Options
+ExtendedReport = hci.HCI_LE_Extended_Advertising_Report_Event
+PeriodicReport = hci.HCI_LE_Periodic_Advertising_Report_Event
+SyncEstablished = hci.HCI_LE_Periodic_Advertising_Sync_Established_Event
+SyncLost = hci.HCI_LE_Periodic_Advertising_Sync_Lost_Event
+# Core Vol 4, Part E, 7.7.65.14: valid periodic synchronization handles.
+SYNC_HANDLE_MAX = 0x0EFF
+# Selected 20-ms announcement interval plus 500-us advertising delay.
+PERIODIC_ANNOUNCEMENT_INTERVAL_US = 20500
+# Selected delay before the Lower Tester train's first anchor.
+PERIODIC_TRAIN_DELAY_US = 100_000
 
 
 def _advertising_parameters(properties=0, **changes):
@@ -1018,64 +1035,219 @@ async def periodic_enable_before_parameters(tester):
         await tester.command(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(0, 0))
 
 
-async def invalid_sync_options(tester):
-    """Reject LE Periodic Advertising Create Sync Command With Disallowed Reporting
-    Options, Periodic Advertising ADI not supported.
+async def create_sync_reporting_disabled(tester):
+    """LE Periodic Advertising Create Sync Command, Reporting Disabled.
 
     Initial Condition:
-        An independent peer announces an extended/periodic train. The scanning IUT has
-        received its address/type and SID. Periodic Advertising ADI is not declared.
+        The Lower Tester advertises with extended and periodic advertising and the
+        IUT scans for extended advertising. The IUT supports Periodic Advertising
+        ADI.
 
     Test Steps:
-        1. Send LE Periodic Advertising Create Sync for the peer with Options =
-           0x04 (do not use list, reporting enabled, duplicate filtering enabled).
-        2. Select the returned event's alternative:
-           2A.1. The IUT returns successful Command Status.
-           2A.2. The IUT returns Sync Established with a valid error status.
-           2B.1. Alternatively, Command Status itself returns a valid error.
-        3. Send Create Sync with Options = 0x05 (use list, reporting enabled,
-           duplicate filtering enabled).
-        4. Select the returned event's alternative:
-           4A.1. The IUT returns successful Command Status.
-           4A.2. The IUT returns Sync Established with a valid error status.
-           4B.1. Alternatively, Command Status itself returns a valid error.
+        1. The IUT receives AUX_ADV_IND from the Lower Tester and sends LE
+           Extended Advertising Report with its Advertising SID, address type and
+           address.
+        2. If the round's Options include Use List, add that identity to the
+           Periodic Advertiser List; require successful Command Complete.
+        3. Send LE Periodic Advertising Create Sync with the round's Options;
+           require successful Command Status.
+        4. Receive LE Periodic Advertising Sync Established with the identity
+           from step 3 and a valid Sync_Handle.
+        5. Receive no LE Periodic Advertising Report for three periodic
+           advertising intervals.
+        6. Immediately after three periodic events, send Terminate Sync with the
+           step 4 handle; require successful Command Complete.
+        7. If the round uses the list, send LE Clear Periodic Advertiser List;
+           require successful Command Complete.
+        8. Repeat steps 1-7 for each round.
+
+    Test Case Configuration:
+        Table 4.19 rounds use Options 0x02, 0x03, 0x06 and 0x07: reporting is
+        disabled in every round, with and without the list and duplicate
+        filtering.
 
     Observation Setup:
-        Read local features to verify that Periodic Advertising ADI is absent.
-        Establish extended scanning, announce the periodic train and check its
-        complete HCI report before step 1. This realizes the initial condition
-        rather than adding a source procedure step.
+        Read the local features to establish the ADI initial condition. The
+        Lower Tester announces its 100-ms train every 20.5 ms and gives each
+        AUX_SYNC_IND an ADI with a new DID, so duplicate filtering cannot be the
+        reason that reports are absent. Sync_Timeout is three periodic
+        intervals. These are local choices, not source steps.
 
     Expected Outcome:
-        Pass verdict: both requests end in a valid nonzero error through a permitted
-        event path. The source allows other valid errors besides 0x11; final Success is
-        forbidden.
+        Pass verdict: every round establishes the sync and no periodic report
+        reaches the Upper Tester during its three periodic intervals.
+
+    Postamble:
+        Stop announcing and disable extended scanning.
 
     Reference:
-        HCI.TS.p39.pdf, Section 4.7, HCI/DDI/BI-49-C, Figure 4.41; PDF/printed pages
-        84-86.
+        HCI.TS.p39.pdf, Section 4.7, HCI/DDI/BV-08-C, Figure 4.42, Table 4.19;
+        PDF/printed pages 86-87, steps 1-8.
         Source reference [13], Section 7.8.67.
     """
-    features = await tester.command(hci.HCI_LE_Read_Local_Supported_Features_Command())
-    assert not (
-        int.from_bytes(features.le_features, 'little')
-        & hci.LeFeatureMask.PERIODIC_ADVERTISING_ADI_SUPPORT
+    assert await le_features(tester) & (
+        hci.LeFeatureMask.PERIODIC_ADVERTISING_ADI_SUPPORT
+    ), 'this source requires Periodic Advertising ADI Support'
+    await tester.command(scan_parameters(extended=True))
+    await tester.command(hci.HCI_LE_Set_Extended_Scan_Enable_Command(1, 0, 0, 0))
+    train = PeriodicTrain(tester.radio.now_us + PERIODIC_TRAIN_DELAY_US)
+    advertiser = PeriodicAdvertiser(
+        train,
+        tester.radio.now_us + REPORT_DELIVERY_US,
+        PERIODIC_ANNOUNCEMENT_INTERVAL_US,
+        address=PEER_ADDRESS,
     )
-    await _start_scanning(tester)
-    valid_errors = tuple(
-        error
-        for error in ErrorCode
-        if error not in (ErrorCode.SUCCESS, ErrorCode.RESERVED_FOR_FUTURE_USE)
+    timeout = (
+        3
+        * train.interval
+        * LL_PERIODIC_INTERVAL_UNIT_US
+        // hci.HCI_LE_PERIODIC_SYNC_TIMEOUT_UNIT_US
     )
-    for options in (4, 5):
-        result = await tester.command(
-            create_sync(options=options), (ErrorCode.SUCCESS, *valid_errors)
+
+    async def transmit():
+        did = train.counter & PDU_ADV_ADI_DID_MASK
+        await advertiser.transmit(
+            tester, b'periodic', adi=advertiser.sid << PDU_ADV_ADI_DID_BITS | did
         )
-        if result.status == ErrorCode.SUCCESS:
-            event = await tester.event(
-                hci.HCI_LE_Periodic_Advertising_Sync_Established_Event
+        await tester.wait(REPORT_DELIVERY_US)
+
+    for options in (0x02, 0x03, 0x06, 0x07):
+        while tester.take(lambda event: isinstance(event, ExtendedReport)):
+            pass
+        await transmit()
+        (report,) = (await tester.event(ExtendedReport)).reports
+        assert report.address == PEER_ADDRESS
+        assert report.address_type == PEER_ADDRESS.address_type
+        assert report.advertising_sid == advertiser.sid
+        assert report.periodic_advertising_interval == train.interval
+        use_list = bool(options & SyncOptions.USE_PERIODIC_ADVERTISER_LIST)
+        if use_list:
+            await tester.command(
+                hci.HCI_LE_Add_Device_To_Periodic_Advertiser_List_Command(
+                    report.address_type, report.address, report.advertising_sid
+                )
             )
-            assert event.status in valid_errors
+        await tester.command(
+            create_sync(
+                options=options,
+                advertising_sid=report.advertising_sid,
+                advertiser_address_type=report.address_type,
+                advertiser_address=report.address,
+                sync_timeout=timeout,
+            )
+        )
+        established = None
+        for _ in range(LL_PERIODIC_SYNC_ESTABLISHMENT_EVENTS):
+            await transmit()
+            established = tester.take(lambda event: isinstance(event, SyncEstablished))
+            if established is not None:
+                break
+        assert established is not None, 'periodic synchronization was not established'
+        assert established.status == ErrorCode.SUCCESS
+        assert 0 <= established.sync_handle <= SYNC_HANDLE_MAX
+        assert established.advertising_sid == report.advertising_sid
+        assert established.advertiser_address == report.address
+        assert established.advertiser_address_type == report.address_type
+        for _ in range(3):
+            await transmit()
+            assert not any(
+                isinstance(event, (PeriodicReport, SyncLost)) for event in tester.events
+            ), 'reporting-disabled synchronization reported or lost the train'
+        await tester.command(
+            hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(
+                established.sync_handle
+            )
+        )
+        if use_list:
+            await tester.command(hci.HCI_LE_Clear_Periodic_Advertiser_List_Command())
+    advertiser.advertising = False
+    await tester.command(hci.HCI_LE_Set_Extended_Scan_Enable_Command(0, 0, 0, 0))
+
+
+async def periodic_disable_with_adi_support(tester):
+    """LE Periodic Advertising Enable Command, Disable Periodic Advertising,
+    Periodic Advertising ADI Supported.
+
+    Initial Condition:
+        Extended and periodic advertising parameters are configured on one
+        advertising handle. The IUT supports Periodic Advertising ADI.
+
+    Test Steps:
+        1. The IUT has started periodic advertising for the handle.
+        2. Send LE Set Periodic Advertising Enable with Enable 0x00 for that
+           handle; require successful Command Complete.
+        3. The Lower Tester receives no periodic advertising for the next three
+           periodic advertising events.
+        4. Immediately after those three events, send Enable 0x01 to restart
+           periodic advertising; require successful Command Complete.
+        5. After three periodic advertising events, send Enable 0x02 for the
+           same handle; require successful Command Complete.
+        6. The Lower Tester receives no periodic advertising for the next three
+           periodic advertising events.
+
+    Observation Setup:
+        Read the local features to establish the ADI initial condition. Use a
+        100-ms periodic interval and 31 random data octets, and start step 1
+        with Enable 0x01 and extended advertising. The Lower Tester acquires the
+        train from AUX_ADV_IND SyncInfo and receives three events before step 2
+        and after step 4. Steps 3 and 6 listen at each event of the last
+        observed train. These are local choices, not source steps.
+
+    Additional Checks and Postamble:
+        After steps 3 and 6, the next AUX_ADV_IND has no SyncInfo, since no
+        periodic train remains. Disable extended advertising afterwards.
+
+    Expected Outcome:
+        Pass verdict: the Lower Tester receives no periodic advertising in steps
+        3 and 6, and every Enable command succeeds; Enable 0x02 disables the train
+        because bit 1 is ignored when bit 0 is 0.
+
+    Reference:
+        HCI.TS.p39.pdf, Section 4.7, HCI/DDI/BV-09-C, Figure 4.43;
+        PDF/printed pages 87-89, steps 1-6.
+        Source reference [13], Section 7.8.63.
+    """
+    assert await le_features(tester) & (
+        hci.LeFeatureMask.PERIODIC_ADVERTISING_ADI_SUPPORT
+    ), 'this source requires Periodic Advertising ADI Support'
+    await tester.command(_advertising_parameters())
+    await tester.command(
+        _periodic_parameters(
+            periodic_advertising_interval_min=80, periodic_advertising_interval_max=80
+        )
+    )
+    data = random.Random(0).randbytes(31)
+    await tester.command(
+        hci.HCI_LE_Set_Periodic_Advertising_Data_Command(
+            0, Operation.COMPLETE_DATA, data
+        )
+    )
+
+    async def observe():
+        _, packet, fields = await receive_extended(tester)
+        train = PeriodicTrain.from_advertisement(packet, fields)
+        for _ in range(3):
+            assert await train.receive(tester) == data
+        return train
+
+    async def absent(train):
+        for _ in range(3):
+            assert await train.receive(tester, required=False) is None, (
+                'periodic advertising continued after disable'
+            )
+        _, _, fields = await receive_extended(tester)
+        assert 'sync' not in fields, 'AUX_ADV_IND still points to a periodic train'
+
+    await tester.command(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 0))
+    await tester.command(extended_enable())
+    train = await observe()
+    await tester.command(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(0, 0))
+    await absent(train)
+    await tester.command(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 0))
+    train = await observe()
+    await tester.command(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(0b10, 0))
+    await absent(train)
+    await tester.command(extended_enable(0))
 
 
 async def interval_too_short(tester, *, phy=Phy.LE_1M):
@@ -2121,16 +2293,28 @@ PROCEDURES |= procedure_cases(
     },
 )
 
-# Verify invalid duplicate-filtering reporting options without Periodic Advertising ADI
-# support.
+# Verify that each reporting-disabled Create Sync option establishes a silent
+# synchronization, with and without the Periodic Advertiser List and duplicate
+# filtering.
 PROCEDURES |= procedure_cases(
-    invalid_sync_options,
+    create_sync_reporting_disabled,
     {
-        'HCI/DDI/BI-49-C': (
+        'HCI/DDI/BV-08-C': (
+            'LE Periodic Advertising Create Sync Command, Reporting Disabled',
+            {},
+        ),
+    },
+)
+
+# Verify that Enable 0x00 and Enable 0x02 both stop periodic advertising when
+# Periodic Advertising ADI is supported.
+PROCEDURES |= procedure_cases(
+    periodic_disable_with_adi_support,
+    {
+        'HCI/DDI/BV-09-C': (
             (
-                'Reject LE Periodic Advertising Create Sync Command With '
-                'Disallowed Reporting Options, Periodic Advertising ADI not'
-                ' supported'
+                'LE Periodic Advertising Enable Command, Disable Periodic '
+                'Advertising, Periodic Advertising ADI Supported'
             ),
             {},
         ),
@@ -2341,32 +2525,6 @@ PROCEDURES |= procedure_cases(
     },
 )
 
-# Verify rejection of disallowed reporting options in LE Periodic Advertising Create
-# Sync.
-PROCEDURES |= procedure_cases(
-    None,
-    {
-        'HCI/DDI/BI-03-C': pytest.param(
-            (
-                'Reject LE Periodic Advertising Create Sync Command With '
-                'Disallowed Reporting Options'
-            ),
-            {},
-            marks=[
-                pytest.mark.skip(
-                    reason=(
-                        'Not applicable: ICS requires no LE Set Periodic '
-                        'Advertising Receive Enable support (HCI6/30 AND '
-                        'NOT6/37); this DUT supports the command and initially'
-                        ' disabled reporting.'
-                    ),
-                ),
-            ],
-        ),
-    },
-)
-
-
 # Verify that advertising and scanning enable commands reject an unset random address
 # after successful parameter configuration.
 PROCEDURES |= procedure_cases(
@@ -2393,8 +2551,9 @@ RADIO_CASES = [
     "HCI/DDI/BV-12-C",
     "HCI/DDI/BV-03-C",
     "HCI/DDI/BV-04-C",
+    "HCI/DDI/BV-08-C",
+    "HCI/DDI/BV-09-C",
     "HCI/DDI/BI-04-C",
-    "HCI/DDI/BI-49-C",
     "HCI/DDI/BI-50-C",
     "HCI/DDI/BI-51-C",
 ]

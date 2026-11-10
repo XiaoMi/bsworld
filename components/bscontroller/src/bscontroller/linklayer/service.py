@@ -217,12 +217,22 @@ class AdvertisingService:
         item = self.link.advertisers[handle]
         setattr(item, field, bytearray(data))
         if renew:
-            self.renew_data_identity(handle)
+            self.renew_data_identity(handle, field)
 
-    def renew_data_identity(self, handle: int) -> None:
-        # Preserve existing DID policy here; it is independent of HCI assembly.
-        # TODO: separate random DIDs (Core Vol 6, Part B, 4.4.2.11).
+    def renew_data_identity(self, handle: int, field: str) -> None:
+        """Advance the DID of the payload the Host just provided again.
+
+        The advertising set and its periodic train have separate DIDs (Core Vol 6,
+        Part B, 4.4.2.11). The periodic DID takes a new random value that differs
+        from the last one.
+        """
         item = self.link.advertisers[handle]
+        if field == 'periodic_data':
+            value = self.link.random.randrange(PDU_ADV_ADI_DID_MASK)
+            item.periodic_did = value + (value >= item.periodic_did)
+            return
+        # Preserve existing DID policy here; it is independent of HCI assembly.
+        # TODO: random advertising-set DIDs (Core Vol 6, Part B, 4.4.2.11).
         item.did = (item.did + 1) & PDU_ADV_ADI_DID_MASK
 
     def validate_data(self, handle: int, field: str, value: bytes) -> int:
@@ -362,10 +372,21 @@ class AdvertisingService:
             >= maximum * LL_PERIODIC_INTERVAL_UNIT_US
         ):
             return TOO_LONG
+        if not item.periodic_interval:
+            # The first periodic configuration seeds a random DID (4.4.2.11).
+            item.periodic_did = self.link.random.randrange(PDU_ADV_ADI_DID_MASK + 1)
         item.periodic_interval = minimum
         return SUCCESS
 
-    def enable_periodic(self, handle: int, enable: bool) -> int:
+    def enable_periodic(
+        self, handle: int, enable: bool, *, include_adi: bool = False
+    ) -> int:
+        """Enable or disable the train, checking airtime with the requested ADI.
+
+        The ADI adds two octets to AUX_SYNC_IND and to every AUX_CHAIN_IND, so
+        the interval checks use the train as it would be transmitted. Disabling
+        ignores ``include_adi`` (Core Vol 4, Part E, 7.8.63).
+        """
         item = self.link.advertisers[handle]
         if (
             not item.extended
@@ -374,20 +395,23 @@ class AdvertisingService:
             or item.anonymous
         ):
             return DISALLOWED
+        candidate = replace(item, periodic_adi=enable and include_adi)
         if (
             enable
-            and periodic_time_us(item) + LL_MAFS_US
+            and periodic_time_us(candidate) + LL_MAFS_US
             >= item.periodic_interval * LL_PERIODIC_INTERVAL_UNIT_US
         ):
             return TOO_LONG
         if (
             enable
-            and advertising_time_us(replace(item, periodic_enabled=True))
-            + periodic_time_us(item)
+            and advertising_time_us(replace(candidate, periodic_enabled=True))
+            + periodic_time_us(candidate)
             + LL_MAFS_US
             >= item.periodic_interval * LL_PERIODIC_INTERVAL_UNIT_US
         ):
             return DISALLOWED
+        # Re-enabling a running train only changes whether it carries the ADI.
+        item.periodic_adi = candidate.periodic_adi
         self.link.roles.advertising.set_periodic_enabled(item, enable)
         return SUCCESS
 
@@ -593,6 +617,7 @@ class LinkLayerService:
             config.skip,
             config.reports_enabled,
             use_list=config.use_list,
+            filter_duplicates=config.filter_duplicates,
         )
         self.link.roles.synchronization.start(sync)
         return SUCCESS
@@ -606,15 +631,19 @@ class LinkLayerService:
 
     def terminate_synchronization(self, handle: int) -> int:
         if handle not in self.link.syncs:
-            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+            return UNKNOWN_ADV
         self.link.roles.synchronization.terminate(handle)
         return SUCCESS
 
-    def has_synchronization(self, handle: int) -> bool:
-        return handle in self.link.syncs
-
-    def enable_periodic_reports(self, handle: int, enabled: bool) -> None:
-        self.link.roles.synchronization.enable_reports(handle, enabled)
+    def configure_periodic_reports(
+        self, handle: int, *, enabled: bool, filter_duplicates: bool
+    ) -> int:
+        if handle not in self.link.syncs:
+            return UNKNOWN_ADV
+        self.link.roles.synchronization.configure_reports(
+            handle, enabled=enabled, filter_duplicates=filter_duplicates
+        )
+        return SUCCESS
 
     @property
     def scanning_enabled(self) -> bool:

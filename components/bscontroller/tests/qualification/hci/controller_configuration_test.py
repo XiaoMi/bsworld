@@ -10,6 +10,8 @@ import pytest
 
 from bscontroller import hci
 from bscontroller.linklayer import (
+    LL_ADV_PRIMARY_CHANNEL_MAP_ALL,
+    LL_PERIODIC_INTERVAL_MIN,
     PDU_DATA_PAYLOAD_SIZE_MAX,
     PDU_DATA_PAYLOAD_SIZE_MIN,
     PDU_DATA_PAYLOAD_TIME_CODED_MAX_US,
@@ -28,16 +30,23 @@ from tests.qualification.tester import (
     PEER_ADDRESS,
     create_connection,
     create_sync,
+    extended_enable,
     extended_parameters,
+    le_features,
     legacy_parameters,
     scan_parameters,
 )
 
 ErrorCode = hci.HCI_ErrorCode
 Opcode = ControlOpcode
+Operation = hci.HCI_LE_Set_Extended_Advertising_Data_Command.Operation
 
 # Capacity declared for this DUT configuration, not read from its implementation.
 EXPECTED_PERIODIC_ADVERTISER_LIST_SIZE = 8
+# HCI/CCO/BI-33-C: one hundred random periodic data octets.
+PERIODIC_DATA_LENGTH = 100
+# Selected 100-ms extended advertising interval for HCI/CCO/BI-33-C.
+SELECTED_ADVERTISING_INTERVAL = 160
 
 
 def _periodic_parameters(**changes):
@@ -368,50 +377,97 @@ async def periodic_list_commands(tester):
     await tester.command(add(random_address.address_type, random_address, 3))
 
 
-async def periodic_adi_not_supported(tester):
-    """Invalid LE Set Periodic Advertising Enable Parameters, Periodic Advertising ADI
-    Not Supported.
+async def invalid_periodic_data_parameters(tester):
+    """Invalid LE Set Periodic Advertising Data Parameters.
 
     Initial Condition:
-        The IUT is in standby with compatible extended and periodic parameters.
-        Its reported feature mask does not advertise periodic ADI support.
+        The IUT is in standby. Its feature mask declares Periodic Advertising ADI
+        Support.
 
     Test Steps:
-        1. Send LE Set Periodic Advertising Enable with Enable bits 0 and 1 set.
-        2. Require Command Complete with a valid error status.
-        3. Send the same command with Enable bit 0 clear and bit 1 set.
-        4. Require Command Complete with a valid error status.
+        1. Send LE Set Extended Advertising Parameters on all advertising
+           channels with a selected supported interval, properties 0x0000,
+           public own address and LE 1M on both PHYs; require Success.
+        2. Send LE Set Periodic Advertising Parameters on that handle with the
+           minimum periodic interval; require Success.
+        3. Send LE Set Periodic Advertising Data with Operation 0x03 and 100
+           random octets in 1..254; require Success.
+        4. Send LE Set Periodic Advertising Data with Operation 0x04.
+        5. Require Command Complete with Invalid HCI Command Parameters (0x12).
+        6. Enable periodic advertising with Enable bit 0 set; require Success.
+        7. Enable extended advertising with Duration[0] 0x0000; require Success.
+        8. Send LE Set Periodic Advertising Data with Operation 0x04 and 100
+           random octets in 1..254.
+        9. Require Command Complete with Invalid HCI Command Parameters (0x12).
+        10. Send Operation 0x04 with Advertising_Data_Length 0; require Success.
+        11. Send Operation 0x03 with Advertising_Data_Length 0; require Success.
+        12. Send LE Set Periodic Advertising Data with Operation 0x04.
+        13. Require Command Complete with Invalid HCI Command Parameters (0x12).
+
+    Test Case Configuration:
+        Steps 4 and 12 do not give a data length; send zero octets, so the
+        disabled train (step 4) and the missing data (step 12) are the only
+        invalid conditions. The selected extended interval is 100 ms and the
+        minimum periodic interval is 0x0006 (7.5 ms).
 
     Observation Setup:
-        Verify the absent ADI feature and configure compatible extended and
-        periodic parameters on handle zero before step 1, establishing the
-        initial condition. Keep that handle in both enable commands.
+        Read the local features before step 1 to establish the ADI initial
+        condition.
 
     Expected Outcome:
-        Pass verdict: both completions report valid nonzero errors with matching
-        opcode and credit. The source does not prescribe one particular error.
+        Pass verdict: steps 5, 9 and 13 return 0x12 and step 10 returns Success,
+        each with the matching opcode and a command credit.
+
+    Postamble:
+        Disable periodic and extended advertising.
 
     Reference:
-        HCI.TS.p39.pdf, Section 4.10, HCI/CCO/BI-34-C;
-        PDF/printed page 185, steps 1-4.
-        Source reference [13], Section 7.8.63.
+        HCI.TS.p39.pdf, Section 4.10, HCI/CCO/BI-33-C;
+        PDF/printed pages 183-184, steps 1-13.
+        Source reference [13], Section 7.8.62.
     """
-    features = await tester.command(hci.HCI_LE_Read_Local_Supported_Features_Command())
-    assert (
-        not int.from_bytes(features.le_features, 'little')
-        & hci.LeFeatureMask.PERIODIC_ADVERTISING_ADI_SUPPORT
-    )
-    await tester.command(extended_parameters())
-    await tester.command(_periodic_parameters())
-    errors = tuple(
-        code
-        for code in ErrorCode
-        if code not in (ErrorCode.SUCCESS, ErrorCode.RESERVED_FOR_FUTURE_USE)
-    )
-    for enable in (0b11, 0b10):
-        await tester.command(
-            hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(enable, 0), errors
+    assert await le_features(tester) & (
+        hci.LeFeatureMask.PERIODIC_ADVERTISING_ADI_SUPPORT
+    ), 'this source requires Periodic Advertising ADI Support'
+    generator = random.Random(0)
+    data = bytes(generator.randint(1, 254) for _ in range(PERIODIC_DATA_LENGTH))
+    command = hci.HCI_LE_Set_Periodic_Advertising_Data_Command
+    await tester.command(
+        extended_parameters(
+            primary_advertising_channel_map=LL_ADV_PRIMARY_CHANNEL_MAP_ALL,
+            primary_advertising_interval_min=SELECTED_ADVERTISING_INTERVAL,
+            primary_advertising_interval_max=SELECTED_ADVERTISING_INTERVAL,
         )
+    )
+    await tester.command(
+        _periodic_parameters(
+            periodic_advertising_interval_min=LL_PERIODIC_INTERVAL_MIN,
+            periodic_advertising_interval_max=LL_PERIODIC_INTERVAL_MIN,
+        )
+    )
+    await tester.command(command(0, Operation.COMPLETE_DATA, data))
+    await tester.command(
+        command(0, Operation.UNCHANGED_DATA, b''),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    await tester.command(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 0))
+    await tester.command(extended_enable())
+    await tester.command(
+        command(
+            0,
+            Operation.UNCHANGED_DATA,
+            bytes(generator.randint(1, 254) for _ in range(PERIODIC_DATA_LENGTH)),
+        ),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    await tester.command(command(0, Operation.UNCHANGED_DATA, b''))
+    await tester.command(command(0, Operation.COMPLETE_DATA, b''))
+    await tester.command(
+        command(0, Operation.UNCHANGED_DATA, b''),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    await tester.command(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(0, 0))
+    await tester.command(extended_enable(0))
 
 
 async def invalid_data_length(tester):
@@ -953,15 +1009,13 @@ PROCEDURES |= procedure_cases(
     },
 )
 
-# Verify rejection of both ADI-requesting Enable values when ADI is unsupported.
+# Verify the Unchanged Data operation's conditions for periodic advertising data with
+# Periodic Advertising ADI support.
 PROCEDURES |= procedure_cases(
-    periodic_adi_not_supported,
+    invalid_periodic_data_parameters,
     {
-        'HCI/CCO/BI-34-C': (
-            (
-                'Invalid LE Set Periodic Advertising Enable Parameters, '
-                'Periodic Advertising ADI Not Supported'
-            ),
+        'HCI/CCO/BI-33-C': (
+            'Invalid LE Set Periodic Advertising Data Parameters',
             {},
         ),
     },

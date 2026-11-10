@@ -14,7 +14,7 @@ ProcedureFunction: TypeAlias = Callable[..., Awaitable[None]]
 
 @dataclass(frozen=True)
 class Procedure:
-    function: ProcedureFunction | None
+    function: ProcedureFunction
     description: str
     parameters: dict[str, Any]
     marks: tuple[Any, ...] = ()
@@ -23,7 +23,7 @@ class Procedure:
 ProcedureMap: TypeAlias = dict[str, Procedure]
 
 
-def procedure_cases(procedure: ProcedureFunction | None, variants) -> ProcedureMap:
+def procedure_cases(procedure: ProcedureFunction, variants) -> ProcedureMap:
     """Register case descriptions, arguments and optional pytest parameter marks."""
     cases = {}
     for identifier, variant in variants.items():
@@ -46,8 +46,6 @@ def collect_cases(procedures: ProcedureMap, *, radio_cases=(), radio=False):
             continue
         marks = (*getattr(case.function, 'pytestmark', ()), *case.marks)
         names = {mark.name for mark in marks}
-        if case.function is None:
-            assert 'skip' in names, f'{identifier} has no procedure or skip reason'
         if 'limited' in names and 'source_conflict' not in names:
             assert 'skip' not in names, 'timing precision cannot skip a case'
         cases.append(

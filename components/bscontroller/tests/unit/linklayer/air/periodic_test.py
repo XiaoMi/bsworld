@@ -29,6 +29,7 @@ from bscontroller.linklayer import (
 )
 from bscontroller.linklayer.advertising import AuxPtr, ExtendedPdu, SyncInfo
 from bscontroller.linklayer.channel_selection import channel_selection_2
+from bscontroller.linklayer.pdu import PDU_ADV_ADI_DID_BITS, PDU_ADV_ADI_DID_MASK
 from bscontroller.radio.base import Phy
 from tests.support import AD_CHANNEL_MAP_UPDATE_INDICATION, advertising_data
 from tests.unit.linklayer.air.extended_advertising_test import (
@@ -411,6 +412,84 @@ def test_periodic_data_too_long_for_interval(iut):
     )
 
 
+def test_periodic_adi_in_sync_and_chain(iut):
+    """With Enable bit 1 every train PDU carries the periodic ADI.
+
+    Purpose: Verify that a train enabled with Include ADI puts an ADI field with
+    the set's SID and the periodic DID in AUX_SYNC_IND and in every
+    AUX_CHAIN_IND, and that the data still reassembles (Vol 6, Part B, 2.3.1.7,
+    2.3.1.8, 4.6.34; Vol 4, Part E, 7.8.63).
+
+    Steps:
+        1. Configure a 500-ms periodic set with 500 octets of data, which needs
+           AUX_CHAIN_IND PDUs, and enable it with Enable 0x03.
+        2. Run one periodic interval and take the train PDUs.
+
+    Expected:
+        - The train has more than one PDU and reassembles to the data.
+        - Every PDU's ADI has the set's SID and the periodic DID.
+    """
+    data = bytes(range(250)) * 2
+    configure_extended(iut)
+    iut.ut(hci.HCI_LE_Set_Periodic_Advertising_Parameters_Command(0, 400, 400, 0))
+    command = hci.HCI_LE_Set_Periodic_Advertising_Data_Command
+    iut.ut(command(0, Operation.FIRST_FRAGMENT, data[:250]))
+    iut.ut(command(0, Operation.LAST_FRAGMENT, data[250:]))
+    iut.ut(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(0b11, 0))
+    item = iut.link.advertisers[0]
+    iut.run(400 * LL_PERIODIC_INTERVAL_UNIT_US + 10_000)
+    train = trains(iut.lt_rx_all(), item)
+    assert len(train) > 1
+    assert b''.join(packet.ext.data for packet in train) == data
+    adi = item.sid << PDU_ADV_ADI_DID_BITS | item.periodic_did
+    assert all(packet.ext.adi == adi for packet in train)
+
+
+def test_periodic_did_follows_periodic_data_only(iut):
+    """The AUX_SYNC_IND DID follows the periodic data, not the advertising set.
+
+    Purpose: Verify on air that Operation 0x04 and new periodic data each give
+    AUX_SYNC_IND a new DID with the same SID, while the set's AUX_ADV_IND keeps
+    its ADI (Vol 6, Part B, 4.4.2.11; Vol 4, Part E, 7.8.62).
+
+    Steps:
+        1. Configure a periodic set with data, enable it with Enable 0x03 and
+           enable extended advertising; run one periodic interval.
+        2. Send Operation 0x04 and run one interval.
+        3. Store the same data again with Operation 0x03 and run one interval.
+
+    Expected:
+        - Each step's last AUX_SYNC_IND carries the same data, the set's SID and
+          a DID that differs from the previous step's.
+        - Every AUX_ADV_IND carries the same ADI.
+    """
+    periodic(iut, b'periodic', enable=False)
+    iut.ut(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(0b11, 0))
+    enable_extended(iut)
+    item = iut.link.advertisers[0]
+    command = hci.HCI_LE_Set_Periodic_Advertising_Data_Command
+    dids, auxiliary_adis = [], set()
+    for update in (
+        None,
+        command(0, Operation.UNCHANGED_DATA, b''),
+        command(0, Operation.COMPLETE_DATA, b'periodic'),
+    ):
+        if update is not None:
+            iut.ut(update)
+        iut.run(PERIODIC_US)
+        packets = iut.lt_rx_all()
+        last = trains(packets, item)[-1]
+        assert last.ext.data == b'periodic'
+        assert last.ext.adi >> PDU_ADV_ADI_DID_BITS == item.sid
+        dids.append(last.ext.adi & PDU_ADV_ADI_DID_MASK)
+        _, auxiliary = split(
+            [packet for packet in packets if packet.access_address is None]
+        )
+        auxiliary_adis |= {packet.ext.adi for packet in auxiliary}
+    assert dids[0] != dids[1] and dids[1] != dids[2]
+    assert len(auxiliary_adis) == 1
+
+
 # ---------------------------------------------------------------------------
 # Synchronizer: Lower Tester advertises a periodic train
 # ---------------------------------------------------------------------------
@@ -741,7 +820,7 @@ def test_sync_lost_after_timeout(iut):
         train.send(skip=True)
     train.run_through()
     event = iut.ut_rx(LOST)
-    assert not iut.ll.has_synchronization(event.sync_handle)
+    assert event.sync_handle not in iut.link.syncs
 
 
 def test_reception_refreshes_sync_timeout(iut):
@@ -866,33 +945,228 @@ def test_reports_disabled_at_creation_and_reenabled(iut):
     iut.ut_rx_q_is_empty()
 
 
+def adi(did, sid=3):
+    return sid << PDU_ADV_ADI_DID_BITS | did
+
+
+def test_duplicate_filtering_initially_enabled(iut):
+    """Create Sync bit 2 filters reports that repeat the last reported ADI.
+
+    Purpose: Verify that with duplicate filtering initially enabled an event is
+    reported only when its ADI differs from that of the previous report with an
+    ADI, and that events without ADI are always reported (Vol 4, Part E, 7.8.67;
+    Vol 6, Part B, 4.4.5.1.1).
+
+    Steps:
+        1. Create a sync with Options bit 2 and establish it on an AUX_SYNC_IND
+           with DID 5.
+        2. Send DID 5 twice, DID 6 with new data twice, then two PDUs without
+           ADI; run through them.
+
+    Expected:
+        - Reports carry "a" (the first DID 5 event), "b" (the first DID 6
+          event) and "c" twice; nothing else is reported.
+    """
+    train = Train(iut)
+    acquire(iut, train, options=Options.DUPLICATE_FILTERING_INITIALLY_ENABLED)
+    train.send(b'a', adi=adi(5))
+    train.run_through()
+    iut.ut_rx(ESTABLISHED, status=0)
+    for data, did in ((b'a', 5), (b'a', 5), (b'b', 6), (b'b', 6)):
+        train.send(data, adi=adi(did))
+    train.send(b'c')
+    train.send(b'c')
+    train.run_through()
+    assert drain_periodic(iut) == [b'a', b'b', b'c', b'c']
+    iut.ut_rx_q_is_empty()
+
+
+def test_reporting_initially_disabled_ignores_duplicate_filtering(iut):
+    """Create Sync ignores bit 2 when bit 1 disables reporting.
+
+    Purpose: Verify that a sync created with reporting initially disabled and
+    duplicate filtering initially enabled starts with both reporting and
+    filtering off (Vol 4, Part E, 7.8.67).
+
+    Steps:
+        1. Establish a sync with Options bits 1 and 2.
+
+    Expected:
+        - No report reaches the Host; the sync reports and filters nothing.
+    """
+    train = Train(iut)
+    event = establish(
+        iut,
+        train,
+        options=Options.REPORTING_INITIALLY_DISABLED
+        | Options.DUPLICATE_FILTERING_INITIALLY_ENABLED,
+    )
+    iut.ut_rx_q_is_empty()
+    sync = iut.link.syncs[event.sync_handle]
+    assert not sync.reports_enabled and not sync.filter_duplicates
+
+
+def test_receive_enable_toggles_duplicate_filtering(iut):
+    """Receive Enable bit 1 starts and stops periodic duplicate filtering.
+
+    Purpose: Verify that enabling filtering on a running sync suppresses data
+    that was already reported, reports a new DID once, and that disabling it
+    reports every event again (Vol 4, Part E, 7.8.88; Vol 6, Part B, 4.4.5.1.1).
+
+    Steps:
+        1. Establish a sync without filtering on DID 5 and send DID 5 again.
+        2. Send Receive Enable 0x03; send DID 5, then DID 6 twice.
+        3. Send Receive Enable 0x01; send DID 6 twice.
+
+    Expected:
+        - Step 1 reports both events.
+        - Step 2 reports only the first DID 6 event.
+        - Step 3 reports both events.
+    """
+    train = Train(iut)
+    acquire(iut, train)
+    train.send(b'a', adi=adi(5))
+    train.run_through()
+    handle = iut.ut_rx(ESTABLISHED, status=0).sync_handle
+    train.send(b'a', adi=adi(5))
+    train.run_through()
+    assert drain_periodic(iut) == [b'a', b'a']
+    receive_enable = hci.HCI_LE_Set_Periodic_Advertising_Receive_Enable_Command
+    iut.ut(receive_enable(handle, 0b11))
+    for data, did in ((b'a', 5), (b'b', 6), (b'b', 6)):
+        train.send(data, adi=adi(did))
+    train.run_through()
+    assert drain_periodic(iut) == [b'b']
+    iut.ut(receive_enable(handle, 0b01))
+    for _ in range(2):
+        train.send(b'b', adi=adi(6))
+    train.run_through()
+    assert drain_periodic(iut) == [b'b', b'b']
+
+
+def test_truncated_report_clears_the_duplicate_record(iut):
+    """A truncated report makes no ADI a duplicate.
+
+    Purpose: Verify that a truncated report becomes the train's previous report
+    without filtering anything: the next copy of its data is reported, and so is
+    the DID reported before it. Complete data is then filtered as usual (Vol 6,
+    Part B, 4.4.5.1.1 and 4.4.3.5; Vol 4, Part E, 7.7.65.15).
+
+    Steps:
+        1. Create a sync with duplicate filtering initially enabled and
+           establish it on an AUX_SYNC_IND with DID 5.
+        2. Send DID 7 whose AuxPtr leads to no AUX_CHAIN_IND, then DID 7 with
+           complete data twice.
+        3. Send DID 9 whose AuxPtr leads to no AUX_CHAIN_IND, then DID 7 with
+           complete data.
+
+    Expected:
+        - Step 1 reports "a".
+        - Step 2 reports "head" as incomplete and an empty truncated report,
+          then "full" once, as complete.
+        - Step 3 reports "head" and an empty truncated report, then "full".
+    """
+
+    def truncated(did):
+        train.send(b'head', adi=adi(did), aux_ptr=AuxPtr(AUX_CHANNEL, 3000))
+
+    train = Train(iut)
+    acquire(iut, train, options=Options.DUPLICATE_FILTERING_INITIALLY_ENABLED)
+    train.send(b'a', adi=adi(5))
+    train.run_through()
+    iut.ut_rx(ESTABLISHED, status=0)
+    iut.ut_rx(PERIODIC_REPORT, data=b'a', data_status=0)
+    truncated(7)
+    for _ in range(2):
+        train.send(b'full', adi=adi(7))
+    truncated(9)
+    train.send(b'full', adi=adi(7))
+    train.run_through()
+    for _ in range(2):
+        iut.ut_rx(PERIODIC_REPORT, data=b'head', data_status=1)
+        iut.ut_rx(PERIODIC_REPORT, data=b'', data_status=2)
+        iut.ut_rx(PERIODIC_REPORT, data=b'full', data_status=0)
+    iut.ut_rx_q_is_empty()
+
+
+def test_reporting_disabled_skips_the_chain(iut):
+    """A sync that reports nothing does not follow AUX_CHAIN_IND.
+
+    Purpose: Verify that while reporting is disabled the synchronizer receives
+    only AUX_SYNC_IND, which keeps it synchronized, and does not listen for the
+    chain, whose data it would not report (Vol 6, Part B, 4.4.5.1.1).
+
+    Steps:
+        1. Establish a sync with reporting initially disabled.
+        2. Send an AUX_SYNC_IND whose AuxPtr points 3 ms later and run past it.
+        3. Enable reporting and repeat step 2.
+
+    Expected:
+        - In step 2 the synchronizer opens no window after the AUX_SYNC_IND
+          and reports nothing.
+        - In step 3 it listens for the AUX_CHAIN_IND and reports "head" as
+          incomplete, then an empty truncated report.
+    """
+    train = Train(iut)
+    event = establish(iut, train, options=Options.REPORTING_INITIALLY_DISABLED)
+
+    def chain_listens():
+        mark, anchor = len(iut.radio.listens), train.anchor_us
+        train.send(b'head', aux_ptr=AuxPtr(AUX_CHANNEL, 3000))
+        iut.run_until(anchor + 10_000)
+        return [entry for entry in iut.radio.listens[mark:] if entry[0] > anchor]
+
+    assert chain_listens() == []
+    iut.ut_rx_q_is_empty()
+    iut.ut(
+        hci.HCI_LE_Set_Periodic_Advertising_Receive_Enable_Command(event.sync_handle, 1)
+    )
+    assert [channel for _, _, channel, _ in chain_listens()] == [AUX_CHANNEL]
+    iut.ut_rx(PERIODIC_REPORT, data=b'head', data_status=1)
+    iut.ut_rx(PERIODIC_REPORT, data=b'', data_status=2)
+    iut.ut_rx_q_is_empty()
+
+
 def test_receive_enable_validation(iut):
     """Set Periodic Advertising Receive Enable validates handle and enable.
 
     Purpose: Verify that Set Periodic Advertising Receive Enable reports Unknown
-    Connection Identifier for an unknown sync handle and Unsupported Feature for
-    an out-of-range enable value (Vol 4, Part E, 7.8.88).
+    Advertising Identifier for an unknown sync handle, accepts the reporting and
+    duplicate-filtering bits, and reports Unsupported Feature for a reserved bit
+    (Vol 4, Part E, 7.8.88).
 
     Steps:
         1. Send Receive Enable for a nonexistent sync handle.
         2. Establish a sync.
-        3. Send Receive Enable with enable value 2 for that handle.
+        3. Send Receive Enable with each value 0x00 to 0x03, then with 0x04.
 
     Expected:
         - The unknown-handle command fails with
-          UNKNOWN_CONNECTION_IDENTIFIER_ERROR.
-        - The bad-enable command fails with
+          UNKNOWN_ADVERTISING_IDENTIFIER_ERROR.
+        - Values 0x00 to 0x03 succeed and set both flags of the sync.
+        - The reserved bit fails with
           UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR.
     """
     iut.ut(
         hci.HCI_LE_Set_Periodic_Advertising_Receive_Enable_Command(5, 1),
-        ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR,
+        ErrorCode.UNKNOWN_ADVERTISING_IDENTIFIER_ERROR,
     )
     train = Train(iut)
     event = establish(iut, train)
+    sync = iut.link.syncs[event.sync_handle]
+    for enable in range(4):
+        iut.ut(
+            hci.HCI_LE_Set_Periodic_Advertising_Receive_Enable_Command(
+                event.sync_handle, enable
+            )
+        )
+        assert (sync.reports_enabled, sync.filter_duplicates) == (
+            bool(enable & 1),
+            bool(enable & 2),
+        )
     iut.ut(
         hci.HCI_LE_Set_Periodic_Advertising_Receive_Enable_Command(
-            event.sync_handle, 2
+            event.sync_handle, 0b100
         ),
         ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR,
     )
@@ -902,8 +1176,8 @@ def test_terminate_sync(iut):
     """Terminating a sync stops reports and frees the handle.
 
     Purpose: Verify that Periodic Advertising Terminate Sync stops further
-    reports and that terminating the same handle again reports Unknown Connection
-    Identifier (Vol 4, Part E, 7.8.69).
+    reports and that terminating the same handle again reports Unknown
+    Advertising Identifier (Vol 4, Part E, 7.8.69).
 
     Steps:
         1. Establish a sync and drain reports.
@@ -913,7 +1187,7 @@ def test_terminate_sync(iut):
 
     Expected:
         - No report reaches the Host after termination.
-        - The second terminate fails with UNKNOWN_CONNECTION_IDENTIFIER_ERROR.
+        - The second terminate fails with UNKNOWN_ADVERTISING_IDENTIFIER_ERROR.
     """
     train = Train(iut)
     event = establish(iut, train)
@@ -924,7 +1198,7 @@ def test_terminate_sync(iut):
     iut.ut_rx_q_is_empty()
     iut.ut(
         hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(event.sync_handle),
-        ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR,
+        ErrorCode.UNKNOWN_ADVERTISING_IDENTIFIER_ERROR,
     )
 
 
@@ -990,18 +1264,15 @@ def test_create_sync_rules(iut):
         (dict(timeout=9), ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR),
         (dict(skip=0x01F4), ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR),
         (dict(sid=16), ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR),
-        (
-            dict(options=Options.DUPLICATE_FILTERING_INITIALLY_ENABLED),
-            ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR,
-        ),
+        (dict(options=1 << 3), ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR),
     ],
 )
 def test_create_sync_validation(iut, changes, status):
     """Create Sync rejects invalid and unsupported parameters.
 
     Purpose: Verify that Create Sync rejects a too-small timeout, an out-of-range
-    skip, an out-of-range SID, and the unsupported duplicate-filtering option,
-    and that synchronizing does not start (Vol 4, Part E, 7.8.67).
+    skip, an out-of-range SID, and a reserved Options bit, and that synchronizing
+    does not start (Vol 4, Part E, 7.8.67).
 
     Steps:
         1. Send Create Sync with the invalid field set.
@@ -1011,7 +1282,7 @@ def test_create_sync_validation(iut, changes, status):
         - The controller is not synchronizing.
 
     Parameters range over too-small timeout, out-of-range skip, out-of-range SID,
-    and duplicate-filtering enabled.
+    and reserved Options bit 3.
     """
     create_sync(iut, status=status, **changes)
     assert not iut.ll.synchronizing

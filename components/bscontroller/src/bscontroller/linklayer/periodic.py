@@ -20,7 +20,7 @@ from bscontroller.linklayer import (
 from bscontroller.linklayer.advertising import ExtendedPdu
 from bscontroller.linklayer.channel_selection import channel_selection_2
 from bscontroller.linklayer.discovery import Advertising, PeriodicSync
-from bscontroller.linklayer.extended import periodic_time_us
+from bscontroller.linklayer.extended import periodic_pdu, periodic_time_us
 from bscontroller.linklayer.results import PeriodicPacketReceived
 from bscontroller.linklayer.scheduler import RadioPriority
 from bscontroller.linklayer.timing import window_widening
@@ -52,7 +52,7 @@ async def periodic_transmit(link: RadioLink, item: Advertising) -> None:
         return
     await link.extended.transmit_chain(
         channel,
-        ExtendedPdu(),
+        periodic_pdu(item),
         item.periodic_data,
         item.periodic_next_us,
         item.secondary_phy,
@@ -96,13 +96,19 @@ async def periodic_receive(link: RadioLink, sync: PeriodicSync) -> None:
         except ValueError:
             ext = None
         if ext is not None and ext.mode == AdvertisingMode.NONCONNECTABLE_NONSCANNABLE:
-            if not link.roles.synchronization.received(
-                PeriodicPacketReceived(sync, packet, ext)
-            ):
+            synchronization = link.roles.synchronization
+            if not synchronization.received(PeriodicPacketReceived(sync, packet, ext)):
+                return
+            # Decide once per event, before following the chain: the Link Layer
+            # need not receive data it will not report (Core Vol 6, Part B,
+            # 4.4.5.1.1). received() has already refreshed the timing and applied
+            # the ACAD, which AUX_CHAIN_IND does not carry.
+            if not synchronization.reportable(sync, ext.adi):
+                synchronization.completed(sync)
                 return
 
             def report_fragment(data, status, received):
-                link.roles.synchronization.report(
+                synchronization.report(
                     sync,
                     data,
                     received.rssi,
@@ -118,4 +124,5 @@ async def periodic_receive(link: RadioLink, sync: PeriodicSync) -> None:
                 crc_init=info.crc_init,
             )
             report_fragment(data, status, packet)
+            synchronization.reported(sync, ext.adi, status)
     link.roles.synchronization.completed(sync)
