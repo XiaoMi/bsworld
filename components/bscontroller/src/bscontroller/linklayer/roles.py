@@ -52,6 +52,7 @@ from bscontroller.linklayer.scheduler import (
     RadioReservation,
     first_radio_gap,
 )
+from bscontroller.linklayer.state import DataStatus
 from bscontroller.linklayer.timing import (
     LL_CONN_EVENT_GUARD_US,
     LL_DEFAULT_SCAN_INTERVAL_US,
@@ -492,8 +493,12 @@ class SynchronizationManager:
     def terminate(self, handle: int) -> None:
         del self.active[handle]
 
-    def enable_reports(self, handle: int, enabled: bool) -> None:
-        self.active[handle].reports_enabled = enabled
+    def configure_reports(
+        self, handle: int, *, enabled: bool, filter_duplicates: bool
+    ) -> None:
+        sync = self.active[handle]
+        sync.reports_enabled = enabled
+        sync.filter_duplicates = filter_duplicates
 
     def contexts(self) -> list[PeriodicSync]:
         return list(self.active.values()) + ([self.pending] if self.pending else [])
@@ -599,6 +604,32 @@ class SynchronizationManager:
         # A callback may remove this context before the next fragment arrives.
         if self.active.get(sync.handle) is sync and sync.reports_enabled:
             self.link.listener.on_periodic_report(sync, data, rssi, tx_power, status)
+
+    def reportable(self, sync: PeriodicSync, adi: int | None) -> bool:
+        """Whether this event's data goes to the Host.
+
+        Not while reporting is disabled, nor when filtering finds a duplicate: an
+        ADI equal to that of the train's previous report that carried one (Core
+        Vol 6, Part B, 4.4.5.1.1). A PDU without ADI is never a duplicate.
+        """
+        return sync.reports_enabled and not (
+            sync.filter_duplicates and adi is not None and adi == sync.reported_adi
+        )
+
+    def reported(self, sync: PeriodicSync, adi: int | None, status: int) -> None:
+        """Remember the ADI of the report just completed for the Host.
+
+        Record it whether or not filtering is enabled, so enabling filtering later
+        suppresses the data already reported. A truncated report becomes the
+        previous report but makes nothing a duplicate, so the next copy of its
+        data is reported, as for an incomplete advertising report (4.4.3.5).
+        """
+        if (
+            adi is not None
+            and self.active.get(sync.handle) is sync
+            and sync.reports_enabled
+        ):
+            sync.reported_adi = adi if status == DataStatus.COMPLETE else None
 
 
 class LinkRoles:

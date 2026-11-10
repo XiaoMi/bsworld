@@ -150,9 +150,23 @@ def chain_time_us(packets, phy: Phy) -> int:
     )
 
 
+def periodic_pdu(item: Advertising) -> ExtendedPdu:
+    """First AUX_SYNC_IND fields: the ADI only while the Host includes it.
+
+    Its SID matches the superior AUX_ADV_IND; its DID is the periodic data's own
+    (Core Vol 6, Part B, 2.3.1.7, 4.4.2.11 and 4.4.2.12.1). fragments() repeats
+    the ADI in every AUX_CHAIN_IND, as Table 2.7 C.1 requires.
+    """
+    return ExtendedPdu(
+        adi=item.sid << PDU_ADV_ADI_DID_BITS | item.periodic_did
+        if item.periodic_adi
+        else None
+    )
+
+
 def periodic_time_us(item: Advertising) -> int:
     return chain_time_us(
-        fragments(ExtendedPdu(), item.periodic_data, 0, item.secondary_phy),
+        fragments(periodic_pdu(item), item.periodic_data, 0, item.secondary_phy),
         item.secondary_phy,
     )
 

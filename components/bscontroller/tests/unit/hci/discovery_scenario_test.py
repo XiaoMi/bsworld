@@ -17,8 +17,9 @@ import pytest
 from bscontroller import hci
 from bscontroller.config import ControllerConfig
 from bscontroller.hci import HCI_LE_ADV_DATA_SIZE_MAX
+from bscontroller.linklayer import LL_MAFS_US, LL_PERIODIC_INTERVAL_UNIT_US
 from bscontroller.linklayer.discovery import Advertising, PeriodicSync
-from bscontroller.linklayer.extended import advertising_time_us
+from bscontroller.linklayer.extended import advertising_time_us, periodic_time_us
 from bscontroller.linklayer.state import (
     AdvertisingProperties,
     AdvertisingReport,
@@ -622,25 +623,118 @@ def test_unchanged_data_requires_enabled_set_with_data(host):
     )
 
 
-def test_periodic_unchanged_data_is_not_supported(host):
-    """Periodic advertising does not support the unchanged-data operation.
+def test_periodic_unchanged_data_renews_only_the_periodic_did(host):
+    """Periodic UNCHANGED_DATA follows Vol 4, Part E, 7.8.62.
 
-    Purpose: Verify Set Periodic Advertising Data rejects the UNCHANGED_DATA
-    operation (Vol 4, Part E, 7.8.62).
+    Purpose: Verify that Operation 0x04 needs enabled periodic advertising, stored
+    periodic data and an empty payload, and that it renews only the periodic DID,
+    keeping the data and the advertising set's DID (Vol 4, Part E, 7.8.62;
+    Vol 6, Part B, 4.4.2.11).
 
     Steps:
-        1. Configure a set and its periodic parameters.
-        2. Send periodic UNCHANGED_DATA with empty payload.
+        1. Configure a periodic set with data; send 0x04 while periodic
+           advertising is disabled.
+        2. Enable periodic advertising; send 0x04 with data, then without data.
+        3. Clear the data with Operation 0x03 and an empty payload; send 0x04.
 
     Expected:
-        - The command returns INVALID_COMMAND_PARAMETERS.
+        - Step 1 and the 0x04 command with data return INVALID_COMMAND_PARAMETERS.
+        - The empty 0x04 command succeeds, changes the periodic DID and keeps
+          the data and the advertising set's DID.
+        - Clearing succeeds; 0x04 without stored data returns
+          INVALID_COMMAND_PARAMETERS.
     """
     host.cmd(extended_parameters(advertising_event_properties=0))
     host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Parameters_Command(0, 80, 80, 0))
+    host.cmd(periodic_data(0, Operation.COMPLETE_DATA, b'periodic'))
     host.cmd(
         periodic_data(0, Operation.UNCHANGED_DATA, b''),
         ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
     )
+    host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 0))
+    host.cmd(
+        periodic_data(0, Operation.UNCHANGED_DATA, b'periodic'),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    item = host.link.advertisers[0]
+    did, periodic_did = item.did, item.periodic_did
+    host.cmd(periodic_data(0, Operation.UNCHANGED_DATA, b''))
+    assert item.periodic_did != periodic_did and item.did == did
+    assert bytes(item.periodic_data) == b'periodic'
+    host.cmd(periodic_data(0, Operation.COMPLETE_DATA, b''))
+    host.cmd(
+        periodic_data(0, Operation.UNCHANGED_DATA, b''),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+
+
+def test_advertising_and_periodic_data_have_separate_dids(host):
+    """Each payload renews only its own DID.
+
+    Purpose: Verify that the advertising set and its periodic train keep separate
+    Advertising DIDs: new periodic data renews the periodic DID only, and new
+    advertising data renews the set's DID only, even when the data is the same
+    (Vol 6, Part B, 4.4.2.11).
+
+    Steps:
+        1. Configure a periodic set.
+        2. Store the same periodic data twice.
+        3. Store advertising data.
+
+    Expected:
+        - Each periodic store changes the periodic DID to a new value and keeps
+          the set's DID.
+        - The advertising store changes the set's DID and keeps the periodic DID.
+    """
+    host.cmd(extended_parameters(advertising_event_properties=0))
+    host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Parameters_Command(0, 80, 80, 0))
+    item = host.link.advertisers[0]
+    for _ in range(2):
+        did, periodic_did = item.did, item.periodic_did
+        host.cmd(periodic_data(0, Operation.COMPLETE_DATA, b'same'))
+        assert item.periodic_did != periodic_did and item.did == did
+    periodic_did = item.periodic_did
+    host.cmd(data(0, Operation.COMPLETE_DATA, b'advertising'))
+    assert item.did != did and item.periodic_did == periodic_did
+
+
+def test_periodic_did_is_random_and_never_repeats(host, monkeypatch):
+    """The periodic DID is chosen at random and differs from the last one.
+
+    Purpose: Verify that the first periodic configuration draws the DID from all
+    4096 values, and that each renewal draws from the 4095 values other than the
+    current DID, so 0 and 0xFFF are both reachable (Vol 6, Part B, 4.4.2.11).
+
+    Steps:
+        1. Make the Controller's random source return 0, 0, 0xFFE and 0xFFE.
+        2. Configure a periodic set, then set its periodic parameters again.
+        3. Store periodic data three times.
+
+    Expected:
+        - The first configuration draws from 4096 values and sets DID 0; the
+          second configuration keeps it.
+        - The three stores draw from 4095 values each and set DIDs 1, 0xFFF and
+          0xFFE: a draw at or above the current DID skips over it.
+    """
+    draws = iter([0, 0, 0xFFE, 0xFFE])
+    ranges = []
+
+    def randrange(stop):
+        ranges.append(stop)
+        return next(draws)
+
+    monkeypatch.setattr(host.link.random, 'randrange', randrange)
+    host.cmd(extended_parameters(advertising_event_properties=0))
+    for _ in range(2):
+        host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Parameters_Command(0, 80, 80, 0))
+    item = host.link.advertisers[0]
+    assert (item.periodic_did, ranges) == (0, [4096])
+    dids = []
+    for _ in range(3):
+        host.cmd(periodic_data(0, Operation.COMPLETE_DATA, b'same'))
+        dids.append(item.periodic_did)
+    assert dids == [1, 0xFFF, 0xFFE]
+    assert ranges == [4096, 4095, 4095, 4095]
 
 
 def test_active_data_update_that_does_not_fit_discards_data(host):
@@ -837,18 +931,20 @@ def test_periodic_enable_requires_compatible_set(host):
     """Periodic enable requires a configured, compatible, existing set.
 
     Purpose: Verify Set Periodic Advertising Enable needs periodic parameters
-    first, forbids making a running periodic set connectable, and rejects an
-    unknown set (Vol 4, Part E, 7.8.61, 7.8.53).
+    first, forbids making a running periodic set connectable, rejects an
+    unknown set and an Enable value with a reserved bit (Vol 4, Part E, 7.8.61,
+    7.8.53, 7.8.63).
 
     Steps:
         1. Configure a set and try to enable periodic before parameters.
         2. Set periodic parameters and enable; then reconfigure as connectable,
-           and enable an unknown set.
+           enable an unknown set and send Enable with reserved bit 2 set.
 
     Expected:
         - Enable before parameters returns COMMAND_DISALLOWED; after parameters
           it succeeds; the connectable reconfigure returns
           INVALID_COMMAND_PARAMETERS; enabling set 2 returns
+          UNKNOWN_ADVERTISING_IDENTIFIER; Enable 0x04 returns
           UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE.
     """
     host.cmd(extended_parameters(advertising_event_properties=0))
@@ -866,9 +962,86 @@ def test_periodic_enable_requires_compatible_set(host):
         ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
     )
     host.cmd(
-        hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(2, 0),
+        hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 2),
+        ErrorCode.UNKNOWN_ADVERTISING_IDENTIFIER_ERROR,
+    )
+    host.cmd(
+        hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(0b100, 0),
         ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR,
     )
+
+
+def test_periodic_enable_includes_adi_on_request(host):
+    """Enable bit 1 selects the ADI field; disabling ignores it.
+
+    Purpose: Verify Set Periodic Advertising Enable records whether AUX_SYNC_IND
+    carries an ADI, that a later enable without bit 1 removes it from the
+    running train, and that Enable 0x02 disables the train (Vol 4, Part E,
+    7.8.63).
+
+    Steps:
+        1. Configure a periodic set and enable it with Enable 0x03.
+        2. Re-enable the running train with Enable 0x01.
+        3. Send Enable 0x02.
+
+    Expected:
+        - After step 1 the train is enabled with the ADI; after step 2 it is
+          still enabled, without the ADI; step 3 succeeds and disables it.
+    """
+    host.cmd(extended_parameters(advertising_event_properties=0))
+    host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Parameters_Command(0, 80, 80, 0))
+    item = host.link.advertisers[0]
+    host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(0b11, 0))
+    assert item.periodic_enabled and item.periodic_adi
+    host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(0b01, 0))
+    assert item.periodic_enabled and not item.periodic_adi
+    host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(0b10, 0))
+    assert not item.periodic_enabled and not item.periodic_adi
+
+
+def test_periodic_enable_counts_adi_airtime(host):
+    """Enabling with the ADI checks the longer train against the interval.
+
+    Purpose: Verify that the two ADI octets in AUX_SYNC_IND and each
+    AUX_CHAIN_IND count toward the periodic interval budget, so data that fits
+    without the ADI can be too long with it (Vol 4, Part E, 7.8.63; Vol 6,
+    Part B, 2.3.1.7, 2.3.1.8).
+
+    Steps:
+        1. Configure a periodic set with a 7.5-ms interval.
+        2. Store the longest data whose train fits only without the ADI.
+        3. Enable with Enable 0x03.
+
+    Expected:
+        - Enable 0x03 returns PACKET_TOO_LONG and leaves the train disabled.
+    """
+    host.cmd(extended_parameters(advertising_event_properties=0))
+    host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Parameters_Command(0, 6, 6, 0))
+    item = host.link.advertisers[0]
+    budget = 6 * LL_PERIODIC_INTERVAL_UNIT_US - LL_MAFS_US
+
+    def fits(length, adi):
+        candidate = replace(item, periodic_data=bytes(length), periodic_adi=adi)
+        return periodic_time_us(candidate) < budget
+
+    length = max(n for n in range(1, 1000) if fits(n, False))
+    assert not fits(length, True)
+    for offset in range(0, length, 250):
+        chunk = bytes(min(250, length - offset))
+        operation = (
+            Operation.FIRST_FRAGMENT
+            if not offset
+            else Operation.LAST_FRAGMENT
+            if offset + 250 >= length
+            else Operation.INTERMEDIATE_FRAGMENT
+        )
+        host.cmd(periodic_data(0, operation, chunk))
+    assert len(item.periodic_data) == length
+    host.cmd(
+        hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(0b11, 0),
+        ErrorCode.PACKET_TOO_LONG_ERROR,
+    )
+    assert not item.periodic_enabled
 
 
 # ---------------------------------------------------------------------------

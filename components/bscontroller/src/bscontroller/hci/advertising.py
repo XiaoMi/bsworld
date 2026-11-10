@@ -71,6 +71,10 @@ PERIODIC_INCOMPATIBLE_ADVERTISING_PROPERTIES = (
     | Properties.ANONYMOUS_ADVERTISING
 )
 
+PeriodicEnable = hci.HCI_LE_Set_Periodic_Advertising_Enable_Command.Enable
+# Enable bit 1 (Include ADI) needs Periodic Advertising ADI Support (7.8.63).
+PERIODIC_ENABLE_BITS = PeriodicEnable.ENABLE | PeriodicEnable.INCLUDE_ADI
+
 LEGACY_PDU_TYPES: dict[int, AdvertisingPduType] = {
     LegacyAdvertisingType.ADV_IND: AdvertisingPduType.ADV_IND,
     LegacyAdvertisingType.ADV_DIRECT_IND: AdvertisingPduType.ADV_DIRECT_IND,
@@ -489,16 +493,16 @@ class LeAdvertisingCommands(LeControllerContext):
             # Require a complete replacement while the advertiser is active, keeping
             # partially assembled data out of the running train.
             return hci.HCI_StatusReturnParameters(DISALLOWED)
-        if field == 'periodic_data' and operation == DataOperation.UNCHANGED_DATA:
-            # TODO: support periodic UNCHANGED_DATA (Vol 4, Part E, 7.8.62).
-            return hci.HCI_StatusReturnParameters(INVALID)
         if operation == DataOperation.UNCHANGED_DATA:
             # TODO: reject this operation for scan-response data (7.8.55).
-            if data or not item.enabled or not getattr(item, field):
+            # Periodic data requires its own train to be enabled (7.8.62).
+            enabled = (
+                item.periodic_enabled if field == 'periodic_data' else item.enabled
+            )
+            if data or not enabled or not getattr(item, field):
                 return hci.HCI_StatusReturnParameters(INVALID)
             # Renew the data identity without replacing the payload bytes.
-            # TODO: use separate, randomly renewed DIDs (Vol 6, Part B, 4.4.2.11).
-            self.ll.advertising.renew_data_identity(handle)
+            self.ll.advertising.renew_data_identity(handle, field)
             return hci.HCI_StatusReturnParameters(SUCCESS)
 
         if (
@@ -547,10 +551,10 @@ class LeAdvertisingCommands(LeControllerContext):
                 self.fragments.pop(key, None)
                 return hci.HCI_StatusReturnParameters(DISALLOWED)
 
-            # Publish only on LAST/COMPLETE. Advance the data identity once and
-            # release staging storage after the payload becomes visible to LL.
-            self.ll.advertising.store_data(handle, field, value)
-            self.ll.advertising.renew_data_identity(handle)
+            # Publish only on LAST/COMPLETE, renewing the payload's data identity
+            # once, and release staging storage after the payload becomes visible
+            # to LL.
+            self.ll.advertising.store_data(handle, field, value, renew=True)
             self.fragments.pop(key, None)
         else:
             self.fragments[key] = value
@@ -689,15 +693,16 @@ class LeAdvertisingCommands(LeControllerContext):
         item = self.ll.advertising.snapshot(command.advertising_handle)
         if item is None:
             return hci.HCI_StatusReturnParameters(UNKNOWN_ADV)
-        if command.enable not in (0, 1):
+        if command.enable & ~int(PERIODIC_ENABLE_BITS):
             return hci.HCI_StatusReturnParameters(UNSUPPORTED)
-        if (
-            command.enable
-            and (command.advertising_handle, 'periodic_data') in self.fragments
-        ):
+        enable = bool(command.enable & PeriodicEnable.ENABLE)
+        if enable and (command.advertising_handle, 'periodic_data') in self.fragments:
             return hci.HCI_StatusReturnParameters(DISALLOWED)
+        # Bit 1 asks for the ADI in AUX_SYNC_IND; disabling ignores it (7.8.63).
         return hci.HCI_StatusReturnParameters(
             self.ll.advertising.enable_periodic(
-                command.advertising_handle, bool(command.enable)
+                command.advertising_handle,
+                enable,
+                include_adi=bool(command.enable & PeriodicEnable.INCLUDE_ADI),
             )
         )

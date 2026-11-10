@@ -447,6 +447,12 @@ def extended_enable(enable=1, handle=0):
     )
 
 
+async def le_features(tester):
+    """Return the IUT's LE features page 0 as an integer mask."""
+    result = await tester.command(hci.HCI_LE_Read_Local_Supported_Features_Command())
+    return int.from_bytes(result.le_features, 'little')
+
+
 def adv_pdu(
     kind=AdvertisingPduType.ADV_IND, *, address=PEER_ADDRESS, data=b'test', csa2=False
 ):

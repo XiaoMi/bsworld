@@ -187,8 +187,6 @@ HCI_LE_ALL_PHYS_RX_MASK = 1 << 1
 HCI_LE_PHY_OPTIONS_NO_PREFERENCE = 0
 HCI_LE_PHY_OPTIONS_S2_PREFERRED = 1
 HCI_LE_PHY_OPTIONS_S8_PREFERRED = 2
-# Periodic sync option bit 1 disables initial reports.
-HCI_LE_PERIODIC_SYNC_REPORTS_DISABLED_MASK = 1 << 1
 # HCI reset defaults: Core Vol 4, Part E, 7.3.1 and 7.8.1.
 HCI_EVENT_MASK_DEFAULT = 0x00001FFFFFFFFFFF
 # Core Vol 4, Part E, 7.3.69: page-2 bit 0 corresponds to event code 0x40.
@@ -3082,6 +3080,10 @@ class HCI_LE_Set_Periodic_Advertising_Enable_Command(
 
     enable: int = field(metadata=metadata(1))
     advertising_handle: int = field(metadata=metadata(1))
+
+    class Enable(SpecableFlag):
+        ENABLE = 1 << 0
+        INCLUDE_ADI = 1 << 1
 
 
 # -----------------------------------------------------------------------------

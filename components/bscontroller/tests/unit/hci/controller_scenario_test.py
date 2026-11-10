@@ -303,9 +303,9 @@ def test_read_le_features_and_states(host):
         2. Read the supported states.
 
     Expected:
-        - Encryption, extended/periodic advertising, 2M/Coded PHY and the
-          minimum-used-channels feature are set; the states field is 8 octets
-          and not all zero.
+        - Encryption, extended/periodic advertising, Periodic Advertising ADI
+          Support, 2M/Coded PHY and the minimum-used-channels feature are set;
+          the states field is 8 octets and not all zero.
     """
     features = int.from_bytes(
         host.cmd(hci.HCI_LE_Read_Local_Supported_Features_Command()).le_features,
@@ -315,6 +315,7 @@ def test_read_le_features_and_states(host):
         hci.LeFeatureMask.LE_ENCRYPTION,
         hci.LeFeatureMask.LE_EXTENDED_ADVERTISING,
         hci.LeFeatureMask.LE_PERIODIC_ADVERTISING,
+        hci.LeFeatureMask.PERIODIC_ADVERTISING_ADI_SUPPORT,
         hci.LeFeatureMask.LE_2M_PHY,
         hci.LeFeatureMask.LE_CODED_PHY,
         hci.LeFeatureMask.MINIMUM_NUMBER_OF_USED_CHANNELS_PROCEDURE,

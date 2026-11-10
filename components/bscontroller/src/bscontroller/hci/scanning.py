@@ -13,7 +13,6 @@ from bscontroller.capabilities import (
 from bscontroller.hci import (
     HCI_LE_DURATION_UNIT_US,
     HCI_LE_EXT_SCAN_INTERVAL_MAX,
-    HCI_LE_PERIODIC_SYNC_REPORTS_DISABLED_MASK,
     HCI_LE_PERIODIC_SYNC_SKIP_MAX,
     HCI_LE_PERIODIC_SYNC_TIMEOUT_MAX,
     HCI_LE_PERIODIC_SYNC_TIMEOUT_MIN,
@@ -41,6 +40,17 @@ from bscontroller.linklayer.filtering import (
 from bscontroller.radio.base import Phy
 
 SyncOptions = hci.HCI_LE_Periodic_Advertising_Create_Sync_Command.Options
+# Option bit 2 (duplicate filtering) needs Periodic Advertising ADI Support (7.8.67).
+SYNC_OPTION_BITS = (
+    SyncOptions.USE_PERIODIC_ADVERTISER_LIST
+    | SyncOptions.REPORTING_INITIALLY_DISABLED
+    | SyncOptions.DUPLICATE_FILTERING_INITIALLY_ENABLED
+)
+ReceiveEnable = hci.HCI_LE_Set_Periodic_Advertising_Receive_Enable_Command.Enable
+# Enable bit 1 (duplicate filtering) needs Periodic Advertising ADI Support (7.8.88).
+RECEIVE_ENABLE_BITS = (
+    ReceiveEnable.REPORTING_ENABLED | ReceiveEnable.DUPLICATE_FILTERING_ENABLED
+)
 
 
 class LeScanningCommands(LeControllerContext):
@@ -297,14 +307,7 @@ class LeScanningCommands(LeControllerContext):
         if status != SUCCESS:
             self.controller._send_hci_command_status(status, command.op_code)
             return
-        if (
-            command.options
-            & ~(
-                HCI_LE_PERIODIC_SYNC_REPORTS_DISABLED_MASK
-                | SyncOptions.USE_PERIODIC_ADVERTISER_LIST
-            )
-            or command.sync_cte_type
-        ):
+        if command.options & ~int(SYNC_OPTION_BITS) or command.sync_cte_type:
             self.controller._send_hci_command_status(UNSUPPORTED, command.op_code)
             return
         if (
@@ -328,14 +331,20 @@ class LeScanningCommands(LeControllerContext):
             return
         # Reserve a free handle for acquisition; publish it as an established
         # sync only after receiving the periodic train.
+        reports_enabled = not command.options & SyncOptions.REPORTING_INITIALLY_DISABLED
         status = self.ll.start_synchronizing(
             PeriodicSyncConfig(
                 command.advertiser_address,
                 command.advertising_sid,
                 command.sync_timeout * hci.HCI_LE_PERIODIC_SYNC_TIMEOUT_UNIT_US,
                 command.skip,
-                not command.options & HCI_LE_PERIODIC_SYNC_REPORTS_DISABLED_MASK,
+                reports_enabled,
                 use_list=use_list,
+                # With reporting initially disabled, bit 2 is ignored (7.8.67).
+                filter_duplicates=reports_enabled
+                and bool(
+                    command.options & SyncOptions.DUPLICATE_FILTERING_INITIALLY_ENABLED
+                ),
             )
         )
         self.controller._send_hci_command_status(status, command.op_code)
@@ -417,11 +426,14 @@ class LeScanningCommands(LeControllerContext):
         See Bluetooth spec Vol 4, Part E - 7.8.88 LE Set Periodic Advertising Receive
         Enable Command
         '''
-        if not self.ll.has_synchronization(command.sync_handle):
-            return hci.HCI_StatusReturnParameters(
-                hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
-            )
-        if command.enable not in (0, 1):
+        if command.enable & ~int(RECEIVE_ENABLE_BITS):
             return hci.HCI_StatusReturnParameters(UNSUPPORTED)
-        self.ll.enable_periodic_reports(command.sync_handle, bool(command.enable))
-        return hci.HCI_StatusReturnParameters(SUCCESS)
+        return hci.HCI_StatusReturnParameters(
+            self.ll.configure_periodic_reports(
+                command.sync_handle,
+                enabled=bool(command.enable & ReceiveEnable.REPORTING_ENABLED),
+                filter_duplicates=bool(
+                    command.enable & ReceiveEnable.DUPLICATE_FILTERING_ENABLED
+                ),
+            )
+        )

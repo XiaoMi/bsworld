@@ -6,7 +6,7 @@ This suite validates BSController HCI commands, events and Link Layer behavior a
 
 ## Coverage
 
-The suite selects 612 protocol cases: 133 HCI and 479 LL cases across 17 test files. Coverage includes discovery, advertising, connections, timing, packet encoding, frequency hopping, security and data transfer, including privacy and Decision-Based Advertising Filtering (DBAF).
+The suite selects 614 protocol cases: 133 HCI and 481 LL cases across 17 test files. Coverage includes discovery, advertising, connections, timing, packet encoding, frequency hopping, security and data transfer, including privacy and Decision-Based Advertising Filtering (DBAF).
 
 Cases retain their specification identifiers for lookup and selection. The chapter numbers below refer to the test specifications.
 
@@ -21,7 +21,7 @@ Cases retain their specification identifiers for lookup and selection. The chapt
 | `hci/` | 4.10 Controller Configuration | [controller_configuration_test.py](hci/controller_configuration_test.py) | 32 |
 | `hci/` | 4.13 LE Connection Management | [connection_management_test.py](hci/connection_management_test.py) | 7 |
 | `hci/` | 4.17 Event Versioning | [event_versioning_test.py](hci/event_versioning_test.py) | 5 |
-| `ll/` | 4.2 Device Discovery | [device_discovery_test.py](ll/device_discovery_test.py) | 149 |
+| `ll/` | 4.2 Device Discovery | [device_discovery_test.py](ll/device_discovery_test.py) | 151 |
 | `ll/` | 4.3 Connection | [connection_test.py](ll/connection_test.py) | 219 |
 | `ll/` | 4.4 Timing | [timing_test.py](ll/timing_test.py) | 21 |
 | `ll/` | 4.5 Encoding | [encoding_test.py](ll/encoding_test.py) | 7 |
@@ -65,7 +65,7 @@ A pytest `passed` result means the executed assertions passed. Consult the case'
 - `limited`: a requirement involves sub-microsecond timing, while the test uses 1-us timestamp resolution.
 - `source_conflict`: interpretation of the source steps, branches or expected outcome remains limited; see the case description for its effect.
 
-A `Not applicable` skip means the current Controller does not meet the case's applicability conditions. RF cases also skip when BabbleSim is not configured, so check both the execution count and skip reasons.
+RF cases skip when BabbleSim is not configured, so check both the execution count and skip reasons.
 
 ## Logs and limitations
 

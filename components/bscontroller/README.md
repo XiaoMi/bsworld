@@ -201,7 +201,7 @@ These are the Link Layer features of the Bluetooth Core specification, listed by
 | 5.2 | Isochronous Broadcaster |  |
 | 5.2 | Synchronized Receiver |  |
 | 5.2 | Connected Isochronous Stream (CIS) |  |
-| 5.3 | Periodic Advertising ADI Support |  |
+| 5.3 | Periodic Advertising ADI Support | * |
 | 5.3 | LE Channel Classification |  |
 | 5.3 | Connection Subrating |  |
 | 5.4 | Periodic Advertising with Responses |  |
@@ -249,6 +249,6 @@ python -m pytest tests/qualification -n auto -v -rs     # a few minutes, needs B
 python -m build                                         # sdist and wheel in dist/
 ```
 
-The qualification suite runs 612 selected HCI and Link Layer test cases from the Bluetooth test specifications against independent lower testers. Passing them does not make BSController Bluetooth-qualified. See [tests/README.md](tests/README.md) for the test scope.
+The qualification suite runs 614 selected HCI and Link Layer test cases from the Bluetooth test specifications against independent lower testers. Passing them does not make BSController Bluetooth-qualified. See [tests/README.md](tests/README.md) for the test scope.
 
 Licensing and third-party notices are in [LICENSE](LICENSE) and [NOTICE](NOTICE).

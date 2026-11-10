@@ -79,6 +79,8 @@ class PeriodicTrain:
     channel_map: int = LL_DATA_CHANNEL_MAP_ALL
     phy: Phy = Phy.LE_1M
     offset_unit: int = PDU_ADV_OFFSET_UNIT_30_US
+    # ADI (SID << 12 | DID) of the last AUX_SYNC_IND that receive() accepted.
+    received_adi: int | None = None
 
     @classmethod
     def from_advertisement(cls, packet, fields):
@@ -120,7 +122,12 @@ class PeriodicTrain:
         self.anchor += self.interval * LL_PERIODIC_INTERVAL_UNIT_US
         self.counter = (self.counter + 1) & LL_EVENT_COUNTER_MASK
 
-    async def receive(self, tester, *, required=True):
+    async def receive(self, tester, *, required=True, adi=False):
+        """Receive one IUT event; with ``adi``, require the ADI field.
+
+        ``chain`` requires every AUX_CHAIN_IND to repeat the AUX_SYNC_IND ADI
+        (Core Vol 6, Part B, 2.3.1.8, Table 2.7 C.1).
+        """
         packet = await tester.receive(
             self.channel,
             start_us=max(tester.radio.now_us + 1, self.anchor - 1),
@@ -142,7 +149,10 @@ class PeriodicTrain:
         assert (
             'address' not in fields and 'target' not in fields and 'sync' not in fields
         )
-        assert 'adi' not in fields
+        assert ('adi' in fields) == adi, 'unexpected AUX_SYNC_IND ADI presence'
+        self.received_adi = (
+            int.from_bytes(fields['adi'], 'little') if 'adi' in fields else None
+        )
         payload = await chain(
             tester, packet, fields, expected_phy=self.phy, **self.parameters
         )
@@ -150,8 +160,8 @@ class PeriodicTrain:
         self.next_event()
         return payload
 
-    async def transmit(self, tester, data=b'periodic'):
-        for offset, wire in self.packets(data):
+    async def transmit(self, tester, data=b'periodic', *, adi=None):
+        for offset, wire in self.packets(data, adi=adi):
             await tester.transmit(
                 self.channel,
                 wire,
@@ -160,15 +170,20 @@ class PeriodicTrain:
             )
         self.next_event()
 
-    def packets(self, data):
-        """Pack independent AUX_SYNC/CHAIN PDUs with full nonfinal payloads."""
+    def packets(self, data, *, adi=None):
+        """Pack independent AUX_SYNC/CHAIN PDUs with full nonfinal payloads.
+
+        With ``adi`` (SID << 12 | DID), every PDU carries that ADI field (Core
+        Vol 6, Part B, 2.3.1.7 and 2.3.1.8, Table 2.7 C.1).
+        """
         offset = consumed = 0
+        common = {'adi': adi} if adi is not None else {}
         while True:
             more = len(data) - consumed > (
-                PDU_ADV_EXT_PAYLOAD_SIZE_MAX - len(ext_pdu()) + PDU_HEADER_SIZE
+                PDU_ADV_EXT_PAYLOAD_SIZE_MAX - len(ext_pdu(**common)) + PDU_HEADER_SIZE
             )
             pointer = aux_pointer(self.channel, PDU_ADV_OFFSET_UNIT_30_US, self.phy)
-            fields = {'aux': pointer} if more else {}
+            fields = common | ({'aux': pointer} if more else {})
             capacity = (
                 PDU_ADV_EXT_PAYLOAD_SIZE_MAX - len(ext_pdu(**fields)) + PDU_HEADER_SIZE
             )
@@ -299,6 +314,6 @@ class PeriodicAdvertiser:
             )
             self.next_advertisement = start + self.advertising_interval_us
 
-    async def transmit(self, tester, data):
+    async def transmit(self, tester, data, *, adi=None):
         await self.announce_until(tester, self.train.anchor)
-        await self.train.transmit(tester, data)
+        await self.train.transmit(tester, data, adi=adi)

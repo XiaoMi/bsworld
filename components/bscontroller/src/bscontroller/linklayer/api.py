@@ -227,6 +227,7 @@ class PeriodicSyncConfig:
     skip: int = 0
     reports_enabled: bool = True
     use_list: bool = False
+    filter_duplicates: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, 'address', AddressSnapshot(self.address))
