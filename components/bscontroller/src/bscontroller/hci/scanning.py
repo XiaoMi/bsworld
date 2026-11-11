@@ -5,6 +5,7 @@
 """Scanning, filtering and periodic synchronization HCI commands."""
 
 import asyncio
+import enum
 
 from bscontroller import hci
 from bscontroller.capabilities import (
@@ -32,7 +33,11 @@ from bscontroller.hci.context import (
     LeControllerContext,
 )
 from bscontroller.linklayer import PDU_ADV_ADDRESS_SIZE, PDU_ADV_ADI_SID_MAX
-from bscontroller.linklayer.api import PeriodicSyncConfig, ScanWindowConfig
+from bscontroller.linklayer.api import (
+    PeriodicSyncConfig,
+    ScanWindowConfig,
+    SyncTransferConfig,
+)
 from bscontroller.linklayer.filtering import (
     EXTENDED_SCANNING_FILTER_POLICIES,
     LEGACY_SCANNING_FILTER_POLICIES,
@@ -51,6 +56,23 @@ ReceiveEnable = hci.HCI_LE_Set_Periodic_Advertising_Receive_Enable_Command.Enabl
 RECEIVE_ENABLE_BITS = (
     ReceiveEnable.REPORTING_ENABLED | ReceiveEnable.DUPLICATE_FILTERING_ENABLED
 )
+SyncCteType = hci.HCI_LE_Periodic_Advertising_Create_Sync_Command.CteType
+# Non-reserved CTE_Type bits of the transfer parameters (7.8.91, 7.8.92).
+TRANSFER_CTE_TYPE_BITS = (
+    SyncCteType.DO_NOT_SYNC_TO_PACKETS_WITH_AN_AOA_CONSTANT_TONE_EXTENSION
+    | SyncCteType.DO_NOT_SYNC_TO_PACKETS_WITH_AN_AOD_CONSTANT_TONE_EXTENSION_1US
+    | SyncCteType.DO_NOT_SYNC_TO_PACKETS_WITH_AN_AOD_CONSTANT_TONE_EXTENSION_2US
+    | SyncCteType.DO_NOT_SYNC_TO_PACKETS_WITHOUT_A_CONSTANT_TONE_EXTENSION
+)
+
+
+class TransferMode(enum.IntEnum):
+    """Periodic Advertising Sync Transfer Mode (Vol 4, Part E, 7.8.91)."""
+
+    IGNORE = 0x00
+    REPORTS_DISABLED = 0x01
+    REPORTS_ENABLED = 0x02
+    DUPLICATES_FILTERED = 0x03
 
 
 class LeScanningCommands(LeControllerContext):
@@ -437,3 +459,96 @@ class LeScanningCommands(LeControllerContext):
                 ),
             )
         )
+
+    def on_hci_le_periodic_advertising_sync_transfer_command(self, command):
+        '''
+        See Bluetooth spec Vol 4, Part E - 7.8.89 LE Periodic Advertising Sync
+        Transfer Command
+        '''
+        return hci.HCI_StatusAndConnectionHandleReturnParameters(
+            self.ll.transfer_synchronization(
+                command.connection_handle, command.service_data, command.sync_handle
+            ),
+            command.connection_handle,
+        )
+
+    def on_hci_le_periodic_advertising_set_info_transfer_command(self, command):
+        '''
+        See Bluetooth spec Vol 4, Part E - 7.8.90 LE Periodic Advertising Set Info
+        Transfer Command
+        '''
+        return hci.HCI_StatusAndConnectionHandleReturnParameters(
+            self.ll.transfer_advertising(
+                command.connection_handle,
+                command.service_data,
+                command.advertising_handle,
+            ),
+            command.connection_handle,
+        )
+
+    def _transfer_config(self, command) -> tuple[int, SyncTransferConfig | None]:
+        """Validate a transfer mode (Vol 4, Part E, 7.8.91 and 7.8.92).
+
+        Setting every defined CTE_Type bit is Command Disallowed; a reserved bit
+        is an unsupported value. The defined bits filter the first AUX_SYNC_IND.
+        """
+        if command.mode not in tuple(TransferMode) or (
+            command.mode == TransferMode.DUPLICATES_FILTERED
+            and not self.controller.le_features
+            & hci.LeFeatureMask.PERIODIC_ADVERTISING_ADI_SUPPORT
+        ):
+            return UNSUPPORTED, None
+        if (
+            not 0 <= command.skip <= HCI_LE_PERIODIC_SYNC_SKIP_MAX
+            or not HCI_LE_PERIODIC_SYNC_TIMEOUT_MIN
+            <= command.sync_timeout
+            <= HCI_LE_PERIODIC_SYNC_TIMEOUT_MAX
+        ):
+            return INVALID, None
+        if command.cte_type & TRANSFER_CTE_TYPE_BITS == TRANSFER_CTE_TYPE_BITS:
+            return DISALLOWED, None
+        if command.cte_type & ~int(TRANSFER_CTE_TYPE_BITS):
+            return UNSUPPORTED, None
+        return SUCCESS, SyncTransferConfig(
+            command.mode != TransferMode.IGNORE,
+            command.mode
+            in (TransferMode.REPORTS_ENABLED, TransferMode.DUPLICATES_FILTERED),
+            command.mode == TransferMode.DUPLICATES_FILTERED,
+            command.skip,
+            command.sync_timeout * hci.HCI_LE_PERIODIC_SYNC_TIMEOUT_UNIT_US,
+            command.cte_type,
+        )
+
+    def on_hci_le_set_periodic_advertising_sync_transfer_parameters_command(
+        self, command
+    ):
+        '''
+        See Bluetooth spec Vol 4, Part E - 7.8.91 LE Set Periodic Advertising Sync
+        Transfer Parameters Command
+        '''
+        status = (
+            SUCCESS
+            if self.ll.connection_snapshot(command.connection_handle) is not None
+            else hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+        )
+        if status == SUCCESS:
+            status, config = self._transfer_config(command)
+            if config is not None:
+                status = self.ll.configure_sync_transfer(
+                    command.connection_handle, config
+                )
+        return hci.HCI_StatusAndConnectionHandleReturnParameters(
+            status, command.connection_handle
+        )
+
+    def on_hci_le_set_default_periodic_advertising_sync_transfer_parameters_command(
+        self, command
+    ):
+        '''
+        See Bluetooth spec Vol 4, Part E - 7.8.92 LE Set Default Periodic Advertising
+        Sync Transfer Parameters Command
+        '''
+        status, config = self._transfer_config(command)
+        if config is not None:
+            self.ll.configure_default_sync_transfer(config)
+        return hci.HCI_StatusReturnParameters(status)

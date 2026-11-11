@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-本组测试让两个 Zephyr Bluetooth shell 互相通信。[conftest.py](conftest.py) 中的 `shell_pair` fixture 让每个场景在五种拓扑和角色组合下运行，并完成两个 shell 的初始化。[common.py](common.py) 存放连接、断连和 GATT 通知操作。
+本组测试让两个 Zephyr Bluetooth shell 互相通信。[conftest.py](conftest.py) 中的 `shell_pair` fixture 让每个场景在五种拓扑和角色组合下运行，并完成两个 shell 的初始化；`shell_trio` 在相同组合上再加一个完整固件 shell。[common.py](common.py) 存放连接、断连和 GATT 通知操作。
 
 | 参数 ID | Peripheral | Central |
 |---|---|---|
@@ -41,6 +41,7 @@ pytest tests/integration/zephyr/shell/shell_peer -k full-host-bscontroller -q
 | [test_link_updates.py](test_link_updates.py) | PHY、数据长度（双向）、Connection Update、Connection Parameters Request 与 Channel Map 更新，之后发送 200 字节通知 | 全部五种 |
 | [test_coded.py](test_coded.py) | Central 仅在 LE Coded 上发起连接（`coded no-1m`）；Peripheral 发起 PHY 更新 | 全部五种 |
 | [test_privacy.py](test_privacy.py) | 绑定、复用 LTK、Controller 解析 RPA，以及 `dir-rpa` 定向广播 | 全部五种 |
+| [test_sync_transfer.py](test_sync_transfer.py) | 由任一角色发起 Periodic Advertising Sync Transfer：Set Info Transfer 发送本机周期广播，Sync Transfer 转交第三个设备的周期广播 | 全部五种；Sync Transfer 另加一个完整固件设备 |
 | [test_radio.py](test_radio.py) | 定向干扰与恢复 | 三个完整固件设备，不参数化 |
 
 ## 添加场景

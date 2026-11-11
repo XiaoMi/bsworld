@@ -46,6 +46,8 @@ class SyncInfoReceived:
     sid: int
     info: SyncInfo
     packet: Received
+    # The AdvA as received, before address resolution.
+    advertiser: Address | None = None
 
 
 @dataclass(frozen=True)

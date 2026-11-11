@@ -11,6 +11,7 @@ at the start of a connection event before channel/PHY selection.
 from __future__ import annotations
 
 import struct
+from collections import deque
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -31,6 +32,7 @@ from bscontroller.linklayer import (
     PDU_CONTROL_INSTANT_SIZE,
     PDU_CONTROL_MIN_USED_CHANNELS_SIZE,
     PDU_CONTROL_OPCODE_SIZE,
+    PDU_CONTROL_PERIODIC_SYNC_SIZE,
     PDU_CONTROL_REJECT_EXT_SIZE,
     PDU_CONTROL_REJECT_SIZE,
     PDU_CONTROL_UNKNOWN_RSP_SIZE,
@@ -51,6 +53,11 @@ from bscontroller.linklayer.phy import PhyProcedure
 from bscontroller.linklayer.procedure import ProcedureContext, ProcedureResponseTimer
 from bscontroller.linklayer.state import Role
 from bscontroller.linklayer.timing import LL_INSTANT_PAST_THRESHOLD
+from bscontroller.linklayer.transfer import (
+    PeriodicSyncIndication,
+    TrainSource,
+    transfer_indication,
+)
 from bscontroller.radio.base import PHY_OCTET_MASK, Phy
 
 if TYPE_CHECKING:
@@ -89,6 +96,10 @@ class ControlProcedures:
         self.host_channel_map = connection.parameters.channel_map
         self.peer_minimum_channel_phys = 0
         self.peer_minimum_used_channels = LL_DATA_CHANNEL_COUNT_MIN
+        # LL_PERIODIC_SYNC_IND waiting for a describable train, and those already
+        # in the TX queue, both in transmission order.
+        self.transfers: deque[tuple[TrainSource, int]] = deque()
+        self.released: deque[tuple[TrainSource, int]] = deque()
 
     @property
     def feature_request(self) -> bool:
@@ -286,10 +297,56 @@ class ControlProcedures:
             raise ValueError('minimum used channels requires negotiated peer support')
         self.enqueue(bytes([Opcode.LL_MIN_USED_CHANNELS_IND, phys, minimum]))
 
-    def prepare(self, payload: bytes) -> bytes:
-        """Local strategy to preserve the recommended Instant lead (Core 6.3, Vol 6,
-        Part B, 5.5).
+    def transfer(self, source: TrainSource, service_data: int) -> None:
+        """Queue LL_PERIODIC_SYNC_IND for ``source``'s train.
+
+        The procedure has no response and completes once the PDU is sent, so it
+        holds no procedure slot and no response timer (Core Vol 6, Part B,
+        5.1.13). The PDU waits until the train can be described (2.4.2.27), and
+        is dropped if the train ends before that.
         """
+        self.transfers.append((source, service_data))
+        self.release_transfers()
+
+    def release_transfers(self) -> None:
+        """Queue each waiting transfer whose train can now be described.
+
+        The queued PDU describes the train relative to this event. prepare()
+        describes it again relative to the transmitting event, and keeps this
+        description only if the train can no longer be described then.
+        """
+        waiting: deque[tuple[TrainSource, int]] = deque()
+        for source, service_data in self.transfers:
+            if source.ended:
+                continue
+            train = source.reference()
+            payload = (
+                None
+                if train is None
+                else transfer_indication(train, self.connection, service_data)
+            )
+            if payload is None:
+                waiting.append((source, service_data))
+                continue
+            self.released.append((source, service_data))
+            self.connection.enqueue_control(payload)
+        self.transfers = waiting
+
+    def prepare(self, payload: bytes) -> bytes:
+        """Finalize a control PDU at its first transmission.
+
+        Describe a released sync transfer relative to the transmitting event,
+        and preserve the recommended Instant lead (Core 6.3, Vol 6, Part B,
+        2.4.2.27 and 5.5).
+        """
+        if payload[0] == Opcode.LL_PERIODIC_SYNC_IND and self.released:
+            source, service_data = self.released.popleft()
+            train = source.reference()
+            if train is not None:
+                payload = (
+                    transfer_indication(train, self.connection, service_data) or payload
+                )
+            return payload
         if self.connection.role == Role.PERIPHERAL and payload[0] in (
             Opcode.LL_PHY_REQ,
             Opcode.LL_PHY_RSP,
@@ -474,6 +531,16 @@ class ControlProcedures:
             self.peer_minimum_channel_phys = phys
             self.peer_minimum_used_channels = minimum
             self._refresh_channel_map()
+            return True
+        if (
+            opcode == Opcode.LL_PERIODIC_SYNC_IND
+            and len(payload) == PDU_CONTROL_PERIODIC_SYNC_SIZE
+            and connection.link.features
+            & LeFeatureMask.PERIODIC_ADVERTISING_SYNC_TRANSFER_RECIPIENT
+        ):
+            connection.link.roles.synchronization.transfer_received(
+                connection, PeriodicSyncIndication.decode(payload)
+            )
             return True
         if opcode == Opcode.LL_VERSION_IND and len(payload) == PDU_CONTROL_VERSION_SIZE:
             # Cache the first peer version and send ours at most once. Repeated

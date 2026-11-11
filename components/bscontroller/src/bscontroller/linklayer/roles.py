@@ -10,6 +10,7 @@ This is an implementation boundary inside Core Vol 6, Part B's Link Layer.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -27,6 +28,7 @@ from bscontroller.linklayer import (
     PDU_CRC_SIZE,
     PDU_HEADER_SIZE,
 )
+from bscontroller.linklayer.advertising import SyncInfo
 from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.discovery import (
     Advertising,
@@ -34,6 +36,7 @@ from bscontroller.linklayer.discovery import (
     PeriodicSync,
     Scanning,
     ScanWindow,
+    TransferOrigin,
     scan_window_at,
 )
 from bscontroller.linklayer.extended import periodic_time_us
@@ -58,6 +61,7 @@ from bscontroller.linklayer.timing import (
     LL_DEFAULT_SCAN_INTERVAL_US,
     window_widening,
 )
+from bscontroller.linklayer.transfer import indication_valid, transfer_timing
 from bscontroller.radio.base import PHY_OCTET_BITS, RADIO_SWITCH_TIME_US, Phy
 
 if TYPE_CHECKING:
@@ -68,6 +72,7 @@ if TYPE_CHECKING:
         PeriodicPacketReceived,
         SyncInfoReceived,
     )
+    from bscontroller.linklayer.transfer import PeriodicSyncIndication
 
 
 def connection_window(connection: Connection) -> RadioReservation:
@@ -113,7 +118,10 @@ def periodic_receive_window(sync: PeriodicSync) -> RadioReservation:
     4.2.4).
     """
     assert sync.info is not None
-    widening = window_widening(sync.next_us - sync.last_rx_us, sync.info.sca)
+    widening = (
+        window_widening(sync.next_us - sync.last_rx_us, sync.info.sca)
+        + sync.transfer_widening_us
+    )
     return RadioReservation(
         sync.next_us - widening - RADIO_SWITCH_TIME_US,
         2 * widening
@@ -375,6 +383,7 @@ class AdvertisingManager:
         item.periodic_enabled = enable
         item.periodic_next_us = next_us
         item.periodic_counter = 0
+        item.periodic_last_counter = None
 
     def periodic_completed(self, item: Advertising, *, missed: bool = False) -> None:
         """Advance anchor and counter together, including radio-conflicted events.
@@ -477,13 +486,27 @@ class SynchronizationManager:
         self.link = link
         self.pending: PeriodicSync | None = None
         self.active: dict[int, PeriodicSync] = {}
+        # Synchronizing from LL_PERIODIC_SYNC_IND; the Host learns these handles
+        # only from the transfer event (Core Vol 4, Part E, 7.7.65.24).
+        self.transfers: dict[int, PeriodicSync] = {}
+
+    def _free_handle(self) -> int | None:
+        used = self.active.keys() | self.transfers.keys()
+        if self.pending is not None:
+            used.add(self.pending.handle)
+        return next(
+            (
+                handle
+                for handle in range(1, self.link.config.max_periodic_syncs + 1)
+                if handle not in used
+            ),
+            None,
+        )
 
     def start(self, sync: PeriodicSync) -> None:
-        sync.handle = next(
-            handle
-            for handle in range(1, self.link.config.max_periodic_syncs + 1)
-            if handle not in self.active
-        )
+        handle = self._free_handle()
+        assert handle is not None, 'synchronization_status admits a free handle'
+        sync.handle = handle
         self.pending = sync
 
     def cancel(self) -> PeriodicSync | None:
@@ -501,23 +524,48 @@ class SynchronizationManager:
         sync.filter_duplicates = filter_duplicates
 
     def contexts(self) -> list[PeriodicSync]:
-        return list(self.active.values()) + ([self.pending] if self.pending else [])
+        return (
+            list(self.active.values())
+            + list(self.transfers.values())
+            + ([self.pending] if self.pending else [])
+        )
+
+    def tracking(self, address: Address, sid: int) -> bool:
+        """Already synchronized with, or synchronizing with, this train (5.1.13)."""
+        pending = self.pending
+        return any(
+            sync.address == address and sync.sid == sid
+            for sync in (*self.active.values(), *self.transfers.values())
+        ) or bool(
+            pending
+            and (pending.info is not None or not pending.use_list)
+            and pending.address == address
+            and pending.sid == sid
+        )
+
+    @staticmethod
+    def _establishment_failed(link: RadioLink, sync: PeriodicSync) -> bool:
+        """Six events without an AUX_SYNC_IND end establishment (4.4.5.1)."""
+        assert sync.info is not None
+        return (
+            link.now_us >= sync.deadline_us
+            or (sync.counter - sync.info.event_counter) & LL_EVENT_COUNTER_MASK
+            >= LL_PERIODIC_SYNC_ESTABLISHMENT_EVENTS
+        )
 
     def expire(self) -> None:
         link, sync = self.link, self.pending
-        if (
-            sync
-            and sync.info is not None
-            and (
-                link.now_us >= sync.deadline_us
-                or (sync.counter - sync.info.event_counter) & LL_EVENT_COUNTER_MASK
-                >= LL_PERIODIC_SYNC_ESTABLISHMENT_EVENTS
-            )
-        ):
+        if sync and sync.info is not None and self._establishment_failed(link, sync):
             self.pending = None
             link.listener.on_sync_established(
                 sync, ErrorCode.CONNECTION_FAILED_TO_BE_ESTABLISHED_ERROR
             )
+        for handle, transfer in list(self.transfers.items()):
+            if self._establishment_failed(link, transfer):
+                del self.transfers[handle]
+                link.listener.on_sync_transfer_received(
+                    transfer, ErrorCode.CONNECTION_FAILED_TO_BE_ESTABLISHED_ERROR
+                )
         for handle, active in list(self.active.items()):
             if link.now_us >= active.deadline_us:
                 del self.active[handle]
@@ -543,7 +591,7 @@ class SynchronizationManager:
         link = self.link
         if any(
             active.address == result.address and active.sid == result.sid
-            for active in self.active.values()
+            for active in (*self.active.values(), *self.transfers.values())
         ):
             return
         if not (
@@ -554,6 +602,7 @@ class SynchronizationManager:
             return
         info, packet = result.info, result.packet
         sync.address, sync.sid = result.address, result.sid
+        sync.advertiser_address = result.advertiser
         sync.info, sync.next_us, sync.counter = (
             info,
             packet.start_us + info.offset_us,
@@ -566,21 +615,105 @@ class SynchronizationManager:
             * LL_PERIODIC_INTERVAL_UNIT_US
         )
 
+    def transfer_received(
+        self, connection: Connection, indication: PeriodicSyncIndication
+    ) -> None:
+        """Synchronize with a transferred train, then notify the Host.
+
+        Core Vol 6, Part B, 5.1.13: act only if the Host enabled receipt and the
+        train is neither synchronized nor synchronizing; ignore a PDU without
+        exactly one supported PHY bit. Like those, a SyncInfo that cannot
+        describe a train, or counters that break 2.4.2.27, are ignored before
+        any handle or radio time is taken. The Periodic Advertiser List does not
+        apply.
+        """
+        config = connection.sync_transfer
+        phy = indication.transferred_phy
+        if not config.enabled or phy is None:
+            return
+        try:
+            info = SyncInfo.decode(indication.sync_info, transfer=True)
+        except ValueError:
+            return
+        if not indication_valid(indication, info, connection):
+            return
+        link = self.link
+        advertiser = indication.advertiser
+        address = link.privacy.identity(advertiser)
+        if address is None or self.tracking(address, indication.sid):
+            return
+        sync = PeriodicSync(
+            address,
+            indication.sid,
+            config.timeout_us,
+            0,
+            config.skip,
+            config.reports_enabled,
+            phy=phy,
+            filter_duplicates=config.filter_duplicates,
+            advertiser_address=advertiser,
+            transfer=TransferOrigin(connection.handle, indication.identifier),
+            cte_type=config.cte_type,
+        )
+        handle = self._free_handle()
+        if handle is None:
+            sync.info = info
+            link.listener.on_sync_transfer_received(
+                sync, ErrorCode.MEMORY_CAPACITY_EXCEEDED_ERROR
+            )
+            return
+        timing = transfer_timing(indication, info, connection)
+        sync.handle = handle
+        # Count establishment events from the first one listened for.
+        sync.info = replace(info, event_counter=timing.counter)
+        sync.next_us, sync.counter = timing.anchor_us, timing.counter
+        sync.last_rx_us = timing.reference_us
+        sync.transfer_widening_us = timing.widening_us
+        sync.deadline_us = sync.next_us + (
+            LL_PERIODIC_SYNC_ESTABLISHMENT_EVENTS
+            * info.interval
+            * LL_PERIODIC_INTERVAL_UNIT_US
+        )
+        self.transfers[handle] = sync
+
     def received(self, result: PeriodicPacketReceived) -> bool:
-        """A validated AUX_SYNC_IND refreshes the role, then publishes success."""
+        """A validated AUX_SYNC_IND refreshes the role, then publishes success.
+
+        While synchronizing, an excluded CTE type, or the absence of a CTE,
+        fails the attempt (Core Vol 6, Part B, 4.4.3.4). Only a transfer can
+        set CTE_Type; it reports Unsupported Remote Feature, as Create Sync
+        does (Vol 4, Part E, 7.8.67).
+        """
         sync, packet = result.sync, result.packet
-        if self.pending is not sync and self.active.get(sync.handle) is not sync:
+        if (
+            self.pending is not sync
+            and self.active.get(sync.handle) is not sync
+            and self.transfers.get(sync.handle) is not sync
+        ):
+            return False
+        if not sync.established and sync.excludes(result.pdu.cte):
+            if self.transfers.get(sync.handle) is sync:
+                del self.transfers[sync.handle]
+                self.link.listener.on_sync_transfer_received(
+                    sync, ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
+                )
             return False
         sync.next_us = packet.start_us
         sync.last_rx_us = packet.start_us
+        sync.last_counter = sync.counter
+        sync.transfer_widening_us = 0
         sync.deadline_us = packet.end_us + sync.timeout_us
         sync.receive_channel_map(result.pdu.acad)
         if not sync.established:
             sync.established = True
             if self.pending is sync:
                 self.pending = None
+            transferred = self.transfers.pop(sync.handle, None) is sync
             self.active[sync.handle] = sync
-            self.link.listener.on_sync_established(sync, ErrorCode.SUCCESS)
+            if transferred:
+                self.link.listener.on_sync_transfer_received(sync, ErrorCode.SUCCESS)
+            else:
+                self.link.listener.on_sync_established(sync, ErrorCode.SUCCESS)
         return True
 
     def completed(
@@ -647,6 +780,7 @@ class LinkRoles:
         self.scanning.cursor = 0
         self.synchronization.cancel()
         self.synchronization.active.clear()
+        self.synchronization.transfers.clear()
 
     def reservations(self, exclude: object = None) -> list[RadioReservation]:
         return (

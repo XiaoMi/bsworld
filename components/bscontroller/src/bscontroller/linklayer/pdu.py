@@ -142,6 +142,11 @@ PDU_ADV_DECISION_EXT_FLAGS_MASK = (
     | PDU_ADV_EXT_TX_POWER_MASK
 )
 PDU_ADV_CTE_INFO_SIZE = 1
+# CTEInfo: CTETime in bits 0-4, CTEType in bits 6-7 (Core Vol 6, Part B, 2.5.2).
+PDU_ADV_CTE_TYPE_SHIFT = 6
+# Sync CTE_Type: bit n excludes CTEType n, this bit a packet without a CTE
+# (Core Vol 4, Part E, 7.8.67, 7.8.91).
+LL_SYNC_CTE_TYPE_ABSENT = 1 << 4
 PDU_ADV_ADI_SIZE = 2
 PDU_ADV_TX_POWER_SIZE = 1
 # ADI: 12-bit DID followed by 4-bit SID.
@@ -293,6 +298,17 @@ PDU_CONTROL_CHANNEL_MAP_SIZE = (
 # Connection Parameter Request: six candidate offsets; 0xFFFF = unspecified.
 PDU_CONTROL_CONN_PARAM_OFFSET_COUNT = 6
 PDU_CONTROL_CONN_PARAM_OFFSET_UNSPECIFIED = 0xFFFF
+# LL_PERIODIC_SYNC_IND: Opcode and 34 CtrData octets (Vol 6 Part B 2.4.2.27).
+PDU_CONTROL_PERIODIC_SYNC_SIZE = 35
+# The longest LL Control PDU this Link Layer interprets. Core 4.5.11 restricts
+# only transmission of longer CtrData before Feature Exchange.
+PDU_CONTROL_PAYLOAD_SIZE_MAX = PDU_CONTROL_PERIODIC_SYNC_SIZE
+# lastPaEventCounter may be more than one event from the SyncInfo counter only
+# within this time (Vol 6 Part B 2.4.2.27).
+LL_PERIODIC_SYNC_COUNTER_SPAN_US = 5_000_000
+# connEventCount lies strictly within this many events of the event that
+# (re)transmits LL_PERIODIC_SYNC_IND (Vol 6 Part B 2.4.2.27).
+LL_PERIODIC_SYNC_CONN_EVENT_SPAN = 1 << 14
 
 # Event spacing: Core Vol 6, Part B, 4.1.1 and 4.1.2.
 # Inter Frame Space, measured from the preceding packet's end.

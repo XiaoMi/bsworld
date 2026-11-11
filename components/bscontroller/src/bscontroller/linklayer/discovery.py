@@ -22,6 +22,8 @@ from bscontroller.linklayer import (
     LL_SCAN_BACKOFF_COUNT_MIN,
     LL_SCAN_BACKOFF_OUTCOME_COUNT,
     LL_SCAN_BACKOFF_SCALE,
+    LL_SYNC_CTE_TYPE_ABSENT,
+    PDU_ADV_CTE_TYPE_SHIFT,
     PDU_CONTROL_INSTANT_SIZE,
     AdvertisingMode,
     AdvertisingPduType,
@@ -66,6 +68,9 @@ class Advertising:
     # AUX_SYNC_IND carries it in an ADI field only while the Host enabled one.
     periodic_did: int = 0
     periodic_adi: bool = False
+    # paEventCounter of the last AUX_SYNC_IND actually transmitted, if any.
+    # A sync transfer names it as lastPaEventCounter (Core Vol 6, Part B, 2.4.2.27).
+    periodic_last_counter: int | None = None
     events: int = 0
     target: Address | None = None
     high_duty: bool = False
@@ -204,6 +209,16 @@ class Initiating:
     backoff: ScanBackoff = field(default_factory=ScanBackoff)
 
 
+@dataclass(frozen=True)
+class TransferOrigin:
+    """The connection and peer Service_Data that delivered a sync (Core Vol 6, Part
+    B, 5.1.13; Vol 4, Part E, 7.7.65.24).
+    """
+
+    connection_handle: int
+    service_data: int
+
+
 @dataclass
 class PeriodicSync:
     address: Address
@@ -225,6 +240,28 @@ class PeriodicSync:
     # one, or None if that report was truncated (Core Vol 6, Part B, 4.4.5.1.1).
     filter_duplicates: bool = False
     reported_adi: int | None = None
+    # paEventCounter of the AUX_SYNC_IND received at last_rx_us.
+    last_counter: int = 0
+    # The AdvA that described this train on air: an RPA stays unresolved here,
+    # unlike ``address`` (Core Vol 6, Part B, 2.4.2.27).
+    advertiser_address: Address | None = None
+    # Set while synchronizing from LL_PERIODIC_SYNC_IND, and kept for its event.
+    transfer: TransferOrigin | None = None
+    # Sender clock drift since syncConnEventCount, widening only the first
+    # receive windows (Core Vol 6, Part B, 5.1.13.1).
+    transfer_widening_us: int = 0
+    # CTE_Type: CTEs, or their absence, that fail synchronization at the first
+    # AUX_SYNC_IND; ignored once synchronized (Core Vol 6, Part B, 4.4.3.4).
+    cte_type: int = 0
+
+    def excludes(self, cte_info: int | None) -> bool:
+        """CTE_Type excludes a packet with this CTEInfo, or without one."""
+        kind = (
+            LL_SYNC_CTE_TYPE_ABSENT
+            if cte_info is None
+            else 1 << (cte_info >> PDU_ADV_CTE_TYPE_SHIFT)
+        )
+        return bool(self.cte_type & kind)
 
     def receive_channel_map(self, acad: bytes) -> None:
         """Keep the last valid future ChM/Instant update; malformed AD structures end

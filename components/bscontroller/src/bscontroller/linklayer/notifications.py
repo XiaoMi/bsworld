@@ -92,6 +92,9 @@ class NotificationSink(Protocol):
     def on_scan_timeout(self) -> None: ...
     def on_scan_period(self) -> None: ...
     def on_sync_established(self, sync: PeriodicSyncSnapshot, status: int) -> None: ...
+    def on_sync_transfer_received(
+        self, sync: PeriodicSyncSnapshot, status: int
+    ) -> None: ...
     def on_periodic_report(
         self,
         sync: PeriodicSyncSnapshot,
@@ -222,6 +225,9 @@ class NotificationAdapter:
 
     def on_sync_established(self, sync: PeriodicSync, status: int) -> None:
         self.sink.on_sync_established(synchronization_snapshot(sync), status)
+
+    def on_sync_transfer_received(self, sync: PeriodicSync, status: int) -> None:
+        self.sink.on_sync_transfer_received(synchronization_snapshot(sync), status)
 
     def on_periodic_report(
         self,

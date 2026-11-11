@@ -6,6 +6,7 @@
 import pytest
 
 from bscontroller import hci
+from bscontroller.linklayer import LL_PERIODIC_INTERVAL_UNIT_US
 from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
@@ -16,8 +17,13 @@ from tests.qualification.hci.device_discovery_test import (
     _start_scanning,
 )
 from tests.qualification.ll import security_test as security
-from tests.qualification.peer import host_send
-from tests.qualification.tester import create_connection, create_sync
+from tests.qualification.peer import establish, host_send
+from tests.qualification.tester import (
+    LOWER_PERIPHERAL_PUBLIC_ADDRESS,
+    create_connection,
+    create_sync,
+)
+from tests.qualification.transfer import SERVICE_DATA, TransferSession, lower_train
 
 ErrorCode = hci.HCI_ErrorCode
 ReportDataStatus = hci.HCI_LE_Periodic_Advertising_Report_Event.DataStatus
@@ -37,6 +43,11 @@ REPORT_EVENTS = (
     hci.HCI_LE_Periodic_Advertising_Report_Event,
     hci.HCI_LE_Periodic_Advertising_Report_V2_Event,
 )
+TRANSFER_EVENTS = (
+    hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_Event,
+    hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_V2_Event,
+)
+TRANSFER_ADVERTISER = hci.Address('00:5A:A5:00:5A:A5', hci.AddressType.PUBLIC_DEVICE)
 CONNECTION_EVENTS = (
     hci.HCI_LE_Connection_Complete_Event,
     hci.HCI_LE_Enhanced_Connection_Complete_Event,
@@ -293,6 +304,79 @@ async def periodic_report_versions(tester):
     await tester.command(hci.HCI_LE_Set_Extended_Scan_Enable_Command(0, 0, 0, 0))
 
 
+async def sync_transfer_received_versions(tester):
+    """Check correct handling of HCI LE Periodic Advertising Sync Transfer
+    Received event with two versions.
+
+    Initial Condition:
+        An ACL connection exists between the Central IUT and the Peripheral
+        Lower Tester. Table 4.124 alternative A: only v1 is supported.
+
+    Test Steps:
+        1. Enable both Sync Transfer Received v1 and v2 in LE Event Mask.
+        2. Set the connection's transfer mode: Mode 0x02, Skip 0 and a
+           Sync_Timeout of three periodic intervals.
+        3. Send LL_PERIODIC_SYNC_IND with nonzero ID and a SyncInfo whose train
+           is never transmitted, so synchronization is not possible.
+        4. Select alternative 4A.1: receive Sync Transfer Received v1 with
+           status 0x3E.
+        5. Enable Sync Transfer Received v2 and mask v1.
+        6. Send LL_PERIODIC_SYNC_IND as in Step 3.
+        7. Select alternative 7A.1: receive no Sync Transfer Received event.
+        8. Step 8's Terminate Sync is not sent; see Source Correction.
+        9. Enable Sync Transfer Received v1 and mask v2.
+        10. Send LL_PERIODIC_SYNC_IND as in Step 3.
+        11. Receive Sync Transfer Received v1 with status 0x3E.
+
+    Expected Outcome:
+        Pass verdict:
+            Steps 4A.1 and 11 deliver v1 with Connection Failed To Be
+            Established, the connection handle and Service_Data; Step 7A.1
+            emits neither version.
+
+    Source Correction:
+        Step 1 names the event without "Received". Step 8 terminates a sync
+        that never existed; Terminate Sync would return Unknown Advertising
+        Identifier (Core Vol 4, Part E, 7.8.69), not success, so it is not
+        sent. The verdict's "4A.1 and 12" refers to Steps 4A.1 and 11.
+
+    Coverage Note:
+        Each failure is observed for eight periodic intervals: the six
+        establishment events of Core Vol 6, Part B, 4.4.5.1 plus a selected
+        margin.
+
+    Reference:
+        HCI.TS.p39.pdf, 4.17.5, HCI/EVV/BV-11-C, Table 4.124, Steps 1-11 and
+        alternative A; PDF/printed 377-378; source [17] 7.7.65.24.
+    """
+    link = await establish(
+        tester,
+        central=True,
+        extended=True,
+        peer_address=LOWER_PERIPHERAL_PUBLIC_ADDRESS,
+    )
+    session = TransferSession(tester, link, lower_train(link), mode='silent')
+    period_us = session.train.interval * LL_PERIODIC_INTERVAL_UNIT_US
+    for index, (v1, v2) in enumerate(((True, True), (False, True), (True, False))):
+        await _le_versions(tester, TRANSFER_EVENTS, v1=v1, v2=v2)
+        if not index:
+            await session.command(
+                hci.HCI_LE_Set_Periodic_Advertising_Sync_Transfer_Parameters_Command(
+                    link.handle, 0x02, 0, -(-3 * period_us // 10_000), 0
+                )
+            )
+        await session.send_control(session.indication(address=TRANSFER_ADVERTISER))
+        await session.run_for(8 * period_us)
+        event = _version_result(
+            tester, TRANSFER_EVENTS, TRANSFER_EVENTS[0] if v1 else None
+        )
+        if event is not None:
+            assert event.status == ErrorCode.CONNECTION_FAILED_TO_BE_ESTABLISHED_ERROR
+            assert event.connection_handle == link.handle
+            assert event.service_data == SERVICE_DATA
+    await link.disconnect(local=False)
+
+
 async def central_connection_complete_versions(tester):
     """Check correct handling of LE Enhanced Connection Complete Event
     with two versions and legacy LE Connection Complete Event, Central.
@@ -399,6 +483,21 @@ PROCEDURES |= procedure_cases(
             (
                 'Check correct handling of LE Periodic Advertising Sync '
                 'Established event with two versions'
+            ),
+            {},
+        ),
+    },
+)
+
+# Verify Sync Transfer Received version selection under both-enabled, v2-only and
+# v1-only LE event masks for a Controller supporting only v1.
+PROCEDURES |= procedure_cases(
+    sync_transfer_received_versions,
+    {
+        'HCI/EVV/BV-11-C': (
+            (
+                'Check correct handling of HCI LE Periodic Advertising Sync '
+                'Transfer Received event with two versions'
             ),
             {},
         ),

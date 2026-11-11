@@ -6,7 +6,7 @@
 
 ## 测试范围
 
-当前选取 614 个协议用例：133 个 HCI 用例、481 个 LL 用例，分布在 17 个测试文件中。覆盖设备发现、广播、连接、定时、报文编码、跳频、安全及数据传输，也包含隐私和基于决策的广播过滤（DBAF）相关测试。
+当前选取 679 个协议用例：134 个 HCI 用例、545 个 LL 用例，分布在 18 个测试文件中。覆盖设备发现、广播、连接、定时、报文编码、跳频、安全及数据传输，也包含隐私和基于决策的广播过滤（DBAF）相关测试。
 
 用例保留测试规范中的编号，可按编号查找和运行。下表的章节号对应测试规范章节。
 
@@ -20,9 +20,10 @@
 | `hci/` | 4.8 Host Flow Control | [host_flow_control_test.py](hci/host_flow_control_test.py) | 1 |
 | `hci/` | 4.10 Controller Configuration | [controller_configuration_test.py](hci/controller_configuration_test.py) | 32 |
 | `hci/` | 4.13 LE Connection Management | [connection_management_test.py](hci/connection_management_test.py) | 7 |
-| `hci/` | 4.17 Event Versioning | [event_versioning_test.py](hci/event_versioning_test.py) | 5 |
+| `hci/` | 4.17 Event Versioning | [event_versioning_test.py](hci/event_versioning_test.py) | 6 |
 | `ll/` | 4.2 Device Discovery | [device_discovery_test.py](ll/device_discovery_test.py) | 151 |
 | `ll/` | 4.3 Connection | [connection_test.py](ll/connection_test.py) | 219 |
+| `ll/` | 4.3.7 Periodic Advertising Sync Transfer | [sync_transfer_test.py](ll/sync_transfer_test.py) | 64 |
 | `ll/` | 4.4 Timing | [timing_test.py](ll/timing_test.py) | 21 |
 | `ll/` | 4.5 Encoding | [encoding_test.py](ll/encoding_test.py) | 7 |
 | `ll/` | 4.6 Frequency Hopping | [frequency_hopping_test.py](ll/frequency_hopping_test.py) | 6 |

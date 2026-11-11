@@ -40,6 +40,7 @@ from bscontroller.linklayer.state import Role
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.connection import Connection
+    from bscontroller.linklayer.transfer import TrainSource
 
 SUCCESS = ErrorCode.SUCCESS
 DISALLOWED = ErrorCode.COMMAND_DISALLOWED_ERROR
@@ -296,6 +297,7 @@ class LlcpCoordinator:
 
     def event_prepare(self) -> None:
         self.controls.apply()
+        self.controls.release_transfers()
         self.start_deferred()
         self._prune_exchanges()
 
@@ -471,3 +473,19 @@ class LlcpCoordinator:
         return self._admit(
             'data_length', lambda: self.controls.data_length.request(octets, time_us)
         )
+
+    def transfer(self, source: TrainSource, service_data: int) -> int:
+        """Start the Periodic Advertising Sync Transfer procedure (Core Vol 6, Part
+        B, 5.1.13; Vol 4, Part E, 7.8.89 and 7.8.90).
+
+        Require the Recipient feature from the peer. Unknown peer features are
+        not an indication of support, and the 34-octet CtrData may not be sent
+        before a Feature Exchange anyway (Core Vol 6, Part B, 4.5.11).
+        """
+        if not (
+            (self.connection.peer_features or 0)
+            & LeFeatureMask.PERIODIC_ADVERTISING_SYNC_TRANSFER_RECIPIENT
+        ):
+            return ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
+        self.controls.transfer(source, service_data)
+        return SUCCESS

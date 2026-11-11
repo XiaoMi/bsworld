@@ -207,13 +207,21 @@ class SyncInfo:
             else offset_unit_us(self.offset_us)
         )
 
-    def encode(self) -> bytes:
+    def encode(self, *, transfer: bool = False) -> bytes:
+        """Encode the field; ``transfer`` selects the LL_PERIODIC_SYNC_IND rules.
+
+        There, a zero offset has no special meaning and offsets from 2.4576 s
+        use Offset Adjust (Core Vol 6, Part B, 2.3.4.6 and 2.4.2.27).
+        """
         unit = self.unit_us
         if unit not in (PDU_ADV_OFFSET_UNIT_30_US, PDU_ADV_OFFSET_UNIT_300_US):
             raise ValueError('invalid SyncInfo offset unit')
-        offset = self.offset_us // unit
+        adjust = transfer and self.offset_us >= PDU_ADV_SYNC_OFFSET_ADJUST_US
+        offset = (
+            self.offset_us - (PDU_ADV_SYNC_OFFSET_ADJUST_US if adjust else 0)
+        ) // unit
         if (
-            not 1 <= offset <= PDU_ADV_OFFSET_VALUE_MASK
+            not int(not transfer) <= offset <= PDU_ADV_OFFSET_VALUE_MASK
             or not LL_PERIODIC_INTERVAL_MIN <= self.interval <= LL_PERIODIC_INTERVAL_MAX
         ):
             raise ValueError('invalid SyncInfo timing')
@@ -227,7 +235,8 @@ class SyncInfo:
                     PDU_ADV_SYNC_OFFSET_UNITS_MASK
                     if unit == PDU_ADV_OFFSET_UNIT_300_US
                     else 0
-                ),
+                )
+                | (PDU_ADV_SYNC_OFFSET_ADJUST_MASK if adjust else 0),
                 self.interval,
             )
             + (self.channel_map | self.sca << LL_DATA_CHANNEL_COUNT).to_bytes(
@@ -241,7 +250,8 @@ class SyncInfo:
         )
 
     @classmethod
-    def decode(cls, data: bytes):
+    def decode(cls, data: bytes, *, transfer: bool = False):
+        """Decode the field; with ``transfer``, a zero offset is valid (2.4.2.27)."""
         if len(data) != PDU_ADV_SYNC_INFO_SIZE:
             raise ValueError('invalid SyncInfo size')
         # Separate the timing flags from the offset, and SCA from the channel map
@@ -280,7 +290,7 @@ class SyncInfo:
             offset_unit=unit,
         )
         if (
-            not offset & PDU_ADV_OFFSET_VALUE_MASK
+            not (transfer or offset & PDU_ADV_OFFSET_VALUE_MASK)
             or interval < LL_PERIODIC_INTERVAL_MIN
             or not valid_channel_map(result.channel_map)
         ):

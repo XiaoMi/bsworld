@@ -7,9 +7,9 @@ The suites separate implementation invariants from Bluetooth protocol behavior. 
 | Directory | Scope | BabbleSim Requirement |
 |---|---|---|
 | `unit/` | Controller algorithms, state ownership, scheduler and FIFO/thread/clock boundaries, organized by implementation module. | No native PHY is required. |
-| `qualification/hci/`, `qualification/ll/` | All 614 selected HCI/LL cases, organized by their normative source chapters, with independent lower testers. | Required for RF cases; pure HCI checks run without it. |
+| `qualification/hci/`, `qualification/ll/` | All 679 selected HCI/LL cases, organized by their normative source chapters, with independent lower testers. | Required for RF cases; pure HCI checks run without it. |
 
-The [protocol chapter map](qualification/PROTOCOL.md) lists the 17 primary test files, selected case counts, result meaning, and limits. Each unit test file states its scope in its module docstring, and each test documents its purpose, steps and expected result.
+The [protocol chapter map](qualification/PROTOCOL.md) lists the 18 primary test files, selected case counts, result meaning, and limits. Each unit test file states its scope in its module docstring, and each test documents its purpose, steps and expected result.
 
 These independently implemented tests do not constitute Bluetooth qualification or imply complete LL.TS/HCI.TS coverage.
 

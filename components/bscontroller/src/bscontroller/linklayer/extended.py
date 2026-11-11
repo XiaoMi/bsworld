@@ -667,7 +667,7 @@ class ExtendedProcedures:
         info = ext.sync_info
         if info is not None and sid is not None:
             link.roles.synchronization.acquired(
-                SyncInfoReceived(identity, sid, info, received)
+                SyncInfoReceived(identity, sid, info, received, address)
             )
         if (
             link.scan
