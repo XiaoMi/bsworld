@@ -72,6 +72,12 @@ class Connection:
             + parameters.window_offset * LL_CONN_INTERVAL_UNIT_US
         )
         self.event_counter: int = 0
+        # The latest event with a received packet and the one before it, for
+        # syncConnEventCount; None until there is one.
+        self.rx_event_counters: tuple[int | None, int | None] = (None, None)
+        # Transfer mode, from the defaults when the connection is created (Core
+        # Vol 4, Part E, 7.8.92).
+        self.sync_transfer = link.sync_transfer
         self.unmapped_channel = 0
         self.established = False
         # Defaults belong to LL connection creation, before any notification.
@@ -160,6 +166,27 @@ class Connection:
         if not self.reported:
             self.reported = True
             self.listener.on_connected(self)
+
+    def received_in_event(self) -> None:
+        """Record that this event received a packet from the peer."""
+        latest, _ = self.rx_event_counters
+        if latest != self.event_counter:
+            self.rx_event_counters = (self.event_counter, latest)
+
+    @property
+    def sync_event_counter(self) -> int:
+        """syncConnEventCount: the latest earlier event with a received packet.
+
+        Core Vol 6, Part B, 2.4.2.27 also allows this event once its packet is
+        received. An earlier event costs the recipient one more interval of
+        window widening, but keeps syncConnEventCount different from the
+        transmitting event, which some recipients require. This event is used
+        only when no earlier one received a packet.
+        """
+        latest, earlier = self.rx_event_counters
+        if latest == self.event_counter and earlier is not None:
+            return earlier
+        return self.event_counter if latest is None else latest
 
     def establish(self) -> None:
         """Connection established on first reception from the peer, CRC valid or not

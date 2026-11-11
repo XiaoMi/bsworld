@@ -47,11 +47,11 @@ DISCONNECTED = hci.HCI_Disconnection_Complete_Event
 REMOTE = ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR
 LOCAL = ErrorCode.CONNECTION_TERMINATED_BY_LOCAL_HOST_ERROR
 
-# Opcodes this Controller does not implement (CTE, ISO, PAST, power control, ...).
+# Opcodes this Controller does not implement (CTE, ISO, PAwR, power control, ...).
 UNSUPPORTED = [
     Opcode.LL_CTE_REQ,
     Opcode.LL_CTE_RSP,
-    Opcode.LL_PERIODIC_SYNC_IND,
+    Opcode.LL_PERIODIC_SYNC_WR_IND,
     Opcode.LL_CLOCK_ACCURACY_REQ,
     Opcode.LL_CLOCK_ACCURACY_RSP,
     Opcode.LL_CIS_REQ,
@@ -75,7 +75,7 @@ def test_unsupported_and_undefined_rem(iut, role, opcode):
     """An unsupported or undefined opcode is answered with LL_UNKNOWN_RSP.
 
     Purpose: Verify that receiving an opcode this Controller does not implement
-    (CTE, ISO, PAST, power control, ...) or a reserved/undefined opcode draws
+    (CTE, ISO, PAwR, power control, ...) or a reserved/undefined opcode draws
     LL_UNKNOWN_RSP and leaves the link up and idle (2.4.2). Runs for every
     unsupported and undefined opcode and for both roles.
 

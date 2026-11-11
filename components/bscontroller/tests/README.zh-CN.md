@@ -7,9 +7,9 @@
 | 目录 | 范围 | BabbleSim 需求 |
 |---|---|---|
 | `unit/` | Controller 算法、状态归属、调度器以及 FIFO/线程/时钟边界，按实现模块组织。 | 无需原生 PHY。 |
-| `qualification/hci/`、`qualification/ll/` | 全部 614 个选定的 HCI/LL 用例，按其规范来源章节组织，配有独立的下位测试器。 | RF 用例需要；纯 HCI 检查无需它即可运行。 |
+| `qualification/hci/`、`qualification/ll/` | 全部 679 个选定的 HCI/LL 用例，按其规范来源章节组织，配有独立的下位测试器。 | RF 用例需要；纯 HCI 检查无需它即可运行。 |
 
-[协议章节映射](qualification/PROTOCOL.zh-CN.md) 列出 17 个主测试文件、选取用例数、结果含义与限制。每个单元测试文件在模块 docstring 中说明测试范围，每个测试函数都写明测试目的、步骤和预期结果。
+[协议章节映射](qualification/PROTOCOL.zh-CN.md) 列出 18 个主测试文件、选取用例数、结果含义与限制。每个单元测试文件在模块 docstring 中说明测试范围，每个测试函数都写明测试目的、步骤和预期结果。
 
 这些独立实现的测试并不构成 Bluetooth 资格认证，也不意味着对 LL.TS/HCI.TS 的完整覆盖。
 

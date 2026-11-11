@@ -101,6 +101,7 @@ class SynchronizationListener(Protocol):
     """Periodic advertising synchronization (Core 6.3, Vol 6, Part B, 4.4.5)."""
 
     def on_sync_established(self, sync: PeriodicSync, status: int) -> None: ...
+    def on_sync_transfer_received(self, sync: PeriodicSync, status: int) -> None: ...
     def on_periodic_report(
         self,
         sync: PeriodicSync,

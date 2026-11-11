@@ -42,6 +42,7 @@ from bscontroller.linklayer.api import (
     ScanBackoffSnapshot,
     ScanningSnapshot,
     ScanWindowConfig,
+    SyncTransferConfig,
     advertising_snapshot,
     connection_snapshot,
     synchronization_snapshot,
@@ -61,6 +62,10 @@ from bscontroller.linklayer.extended import (
 )
 from bscontroller.linklayer.llcp import PreparedProcedure
 from bscontroller.linklayer.state import Role
+from bscontroller.linklayer.transfer import (
+    AdvertisingSource,
+    SynchronizationSource,
+)
 
 if TYPE_CHECKING:
     from bscontroller.address import Address
@@ -594,12 +599,13 @@ class LinkLayerService:
     def synchronization_status(self, address: Address, sid: int, use_list: bool) -> int:
         if self.link.sync is not None:
             return DISALLOWED
+        synchronization = self.link.roles.synchronization
+        trains = (*self.link.syncs.values(), *synchronization.transfers.values())
         if not use_list and any(
-            active.address == address and active.sid == sid
-            for active in self.link.syncs.values()
+            train.address == address and train.sid == sid for train in trains
         ):
             return ErrorCode.CONNECTION_ALREADY_EXISTS_ERROR
-        if len(self.link.syncs) >= self.link.config.max_periodic_syncs:
+        if len(trains) >= self.link.config.max_periodic_syncs:
             return ErrorCode.MEMORY_CAPACITY_EXCEEDED_ERROR
         return SUCCESS
 
@@ -644,6 +650,50 @@ class LinkLayerService:
             handle, enabled=enabled, filter_duplicates=filter_duplicates
         )
         return SUCCESS
+
+    def transfer_synchronization(
+        self, handle: int, service_data: int, sync_handle: int
+    ) -> int:
+        """Send a synchronized train's SyncInfo (Vol 4, Part E, 7.8.89)."""
+        sync = self.link.syncs.get(sync_handle)
+        if sync is None:
+            return UNKNOWN_ADV
+        connection = self._connection(handle)
+        if connection is None:
+            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+        return connection.llcp.transfer(
+            SynchronizationSource(self.link.syncs, sync), service_data
+        )
+
+    def transfer_advertising(
+        self, handle: int, service_data: int, advertising_handle: int
+    ) -> int:
+        """Send a local set's current periodic SyncInfo (Vol 4, Part E, 7.8.90)."""
+        item = self.link.advertisers.get(advertising_handle)
+        if item is None or not item.extended:
+            return UNKNOWN_ADV
+        if not item.periodic_enabled:
+            return DISALLOWED
+        connection = self._connection(handle)
+        if connection is None:
+            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+        return connection.llcp.transfer(
+            AdvertisingSource(item, item.periodic_aa), service_data
+        )
+
+    def configure_sync_transfer(self, handle: int, config: SyncTransferConfig) -> int:
+        """Set a connection's transfer mode; already received information keeps
+        the mode it was received with (Vol 4, Part E, 7.8.91).
+        """
+        connection = self._connection(handle)
+        if connection is None:
+            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+        connection.sync_transfer = config
+        return SUCCESS
+
+    def configure_default_sync_transfer(self, config: SyncTransferConfig) -> None:
+        """Set the transfer mode of later connections only (Vol 4, Part E, 7.8.92)."""
+        self.link.sync_transfer = config
 
     @property
     def scanning_enabled(self) -> bool:

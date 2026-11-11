@@ -195,9 +195,9 @@ These are the Link Layer features of the Bluetooth Core specification, listed by
 | 5.1 | Connection CTE Response |  |
 | 5.1 | Connectionless CTE Transmitter |  |
 | 5.1 | Connectionless CTE Receiver |  |
-| 5.1 | Periodic Advertising Sync Transfer |  |
-| 5.1 | Initiating Periodic Advertising Sync Transfer for Local Periodic Advertising |  |
-| 5.1 | Initiating Periodic Advertising Sync Transfer for Remote Periodic Advertising |  |
+| 5.1 | Periodic Advertising Sync Transfer | * |
+| 5.1 | Initiating Periodic Advertising Sync Transfer for Local Periodic Advertising | * |
+| 5.1 | Initiating Periodic Advertising Sync Transfer for Remote Periodic Advertising | * |
 | 5.2 | Isochronous Broadcaster |  |
 | 5.2 | Synchronized Receiver |  |
 | 5.2 | Connected Isochronous Stream (CIS) |  |
@@ -249,6 +249,6 @@ python -m pytest tests/qualification -n auto -v -rs     # a few minutes, needs B
 python -m build                                         # sdist and wheel in dist/
 ```
 
-The qualification suite runs 614 selected HCI and Link Layer test cases from the Bluetooth test specifications against independent lower testers. Passing them does not make BSController Bluetooth-qualified. See [tests/README.md](tests/README.md) for the test scope.
+The qualification suite runs 679 selected HCI and Link Layer test cases from the Bluetooth test specifications against independent lower testers. Passing them does not make BSController Bluetooth-qualified. See [tests/README.md](tests/README.md) for the test scope.
 
 Licensing and third-party notices are in [LICENSE](LICENSE) and [NOTICE](NOTICE).

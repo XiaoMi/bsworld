@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-These tests run two Zephyr Bluetooth shells against each other. The `shell_pair` fixture in [conftest.py](conftest.py) starts every scenario in five topology and role assignments and initializes both shells. [common.py](common.py) holds the connection, disconnection and GATT notification commands.
+These tests run two Zephyr Bluetooth shells against each other. The `shell_pair` fixture in [conftest.py](conftest.py) starts every scenario in five topology and role assignments and initializes both shells; `shell_trio` adds a third complete-firmware shell to the same assignments. [common.py](common.py) holds the connection, disconnection and GATT notification commands.
 
 | Parameter ID | Peripheral | Central |
 |---|---|---|
@@ -41,6 +41,7 @@ pytest tests/integration/zephyr/shell/shell_peer -k full-host-bscontroller -q
 | [test_link_updates.py](test_link_updates.py) | PHY, data length (both roles), Connection Update, Connection Parameters Request and Channel Map updates, then a 200-octet notification | All five |
 | [test_coded.py](test_coded.py) | Central initiates on LE Coded only (`coded no-1m`); Peripheral-initiated PHY update | All five |
 | [test_privacy.py](test_privacy.py) | Bonding, LTK reuse, Controller RPA resolution and directed advertising with `dir-rpa` | All five |
+| [test_sync_transfer.py](test_sync_transfer.py) | Periodic Advertising Sync Transfer from either role: Set Info Transfer of the sender's own train, and Sync Transfer of a third device's train | All five; Sync Transfer adds a third complete firmware device |
 | [test_radio.py](test_radio.py) | Directional interference and recovery | Three complete firmware devices, not parameterized |
 
 ## Adding Scenarios

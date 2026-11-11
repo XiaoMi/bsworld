@@ -22,6 +22,7 @@ from bscontroller.linklayer import (
     PDU_DATA_PAYLOAD_TIME_MIN_US,
     PDU_HEADER_SIZE,
 )
+from bscontroller.linklayer.api import SyncTransferConfig
 from bscontroller.linklayer.bitstream import generate_access_address
 from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.decision import DecisionProgram
@@ -77,6 +78,8 @@ class RadioLink:
         )
         self.accept_list: set[Address] = set()
         self.periodic_advertiser_list: set[tuple[Address, int]] = set()
+        # Host default transfer mode for subsequent connections (7.8.92).
+        self.sync_transfer = SyncTransferConfig()
         self.default_tx_octets = PDU_DATA_PAYLOAD_SIZE_MIN
         self.default_tx_time = PDU_DATA_PAYLOAD_TIME_MIN_US
 
@@ -116,6 +119,7 @@ class RadioLink:
         self.decision.tests = ()
         self.accept_list.clear()
         self.periodic_advertiser_list.clear()
+        self.sync_transfer = SyncTransferConfig()
         self.default_tx_octets = PDU_DATA_PAYLOAD_SIZE_MIN
         self.default_tx_time = PDU_DATA_PAYLOAD_TIME_MIN_US
 

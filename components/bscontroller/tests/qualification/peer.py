@@ -454,10 +454,16 @@ async def establish(
     high_duty=False,
     connection_parameters=None,
     connection_complete_event=None,
+    air_address=None,
 ):
     """Establish through HCI and raw connection PDUs, then check the completion
-    event."""
+    event.
+
+    ``air_address`` is the Lower Tester's over-air address, such as an RPA the
+    IUT resolves to the identity ``peer_address``; it defaults to that address.
+    """
     address = DUT_ADDRESS
+    air_address = peer_address if air_address is None else air_address
     if random:
         address = random_address or hci.Address(
             'C0:12:34:56:78:9A', hci.AddressType.RANDOM_DEVICE
@@ -489,12 +495,12 @@ async def establish(
                 ),
             )
         )
-        pdu = adv_pdu(csa2=csa2, address=peer_address)
+        pdu = adv_pdu(csa2=csa2, address=air_address)
         if directed:
             pdu = request_pdu(
                 AdvertisingPduType.ADV_DIRECT_IND,
                 advertiser=address,
-                scanner=peer_address,
+                scanner=air_address,
             )
             if csa2:
                 pdu = bytes([pdu[0] | PDU_ADV_CHSEL_MASK]) + pdu[1:]
@@ -518,7 +524,7 @@ async def establish(
         assert bool(request.pdu[0] & PDU_ADV_CHSEL_MASK) == csa2
         assert request.pdu[PDU_HEADER_SIZE:PDU_ADV_ADDRESSES_END] == bytes(
             address
-        ) + bytes(peer_address)
+        ) + bytes(air_address)
         parameters = LinkParameters.decode(request.pdu[PDU_ADV_ADDRESSES_END:])
         link = PeerLink(tester, parameters, request.end_us, central=True, csa2=csa2)
     else:
@@ -599,7 +605,7 @@ async def establish(
         request = request_pdu(
             AdvertisingPduType.CONNECT_IND,
             advertiser=address,
-            scanner=peer_address,
+            scanner=air_address,
             data=parameters.encode(),
         )
         if csa2:
@@ -616,7 +622,7 @@ async def establish(
                 response.pdu[0] & PDU_ADV_TYPE_MASK
                 == AdvertisingPduType.AUX_CONNECT_RSP
             )
-            assert response.pdu[-PDU_ADV_ADDRESS_SIZE:] == bytes(peer_address)
+            assert response.pdu[-PDU_ADV_ADDRESS_SIZE:] == bytes(air_address)
             link.csa2 = True
             link.anchor = end + (
                 LL_CONN_AUX_WINDOW_DELAY_CODED_US

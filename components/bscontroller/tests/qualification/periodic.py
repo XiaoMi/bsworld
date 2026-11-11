@@ -245,6 +245,7 @@ class PeriodicTrain:
         address=PEER_ADDRESS,
         auxiliary_offset=600,
         acad=b'',
+        data=b'announcement',
     ):
         start = tester.radio.now_us + 100 if start is None else start
         auxiliary = start + auxiliary_offset
@@ -262,7 +263,7 @@ class PeriodicTrain:
                 address=address,
                 adi=sid << 12,
                 sync=sync,
-                data=b'announcement',
+                data=data,
                 acad=acad,
             ),
             start_us=auxiliary,

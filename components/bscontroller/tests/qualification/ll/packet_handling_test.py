@@ -26,6 +26,7 @@ from bscontroller.linklayer import (
     PDU_CONTROL_INSTANT_SIZE,
     PDU_CONTROL_OPCODE_SIZE,
     PDU_CONTROL_PAYLOAD_SIZE_INITIAL_MAX,
+    PDU_CONTROL_PERIODIC_SYNC_SIZE,
     PDU_CONTROL_REJECT_EXT_SIZE,
     PDU_CONTROL_REJECT_SIZE,
     PDU_CONTROL_UNKNOWN_RSP_SIZE,
@@ -72,7 +73,8 @@ PEER_FEATURES = (
 # Source Correction: use a legal two-channel map instead of the common single bit.
 COMMON_CHANNEL_MAP = 0x03
 
-# Independent DUT declaration: the LE procedures implemented through Core 5.0.
+# Independent DUT declaration: the LE procedures implemented through Core 5.0,
+# plus Periodic Advertising Sync Transfer.
 SUPPORTED_CONTROLS = frozenset(
     {
         Opcode.LL_CONNECTION_UPDATE_IND,
@@ -101,6 +103,7 @@ SUPPORTED_CONTROLS = frozenset(
         Opcode.LL_PHY_RSP,
         Opcode.LL_PHY_UPDATE_IND,
         Opcode.LL_MIN_USED_CHANNELS_IND,
+        Opcode.LL_PERIODIC_SYNC_IND,
     }
 )
 # Core 6.3, Vol 6 Part B, 2.4.2.25-58: defined CtrData, capped at 26 octets
@@ -108,7 +111,6 @@ SUPPORTED_CONTROLS = frozenset(
 UNSUPPORTED_CONTROL_DATA_LENGTHS = {
     Opcode.LL_CTE_REQ: 1,
     Opcode.LL_CTE_RSP: 0,
-    Opcode.LL_PERIODIC_SYNC_IND: 26,
     Opcode.LL_CLOCK_ACCURACY_REQ: 1,
     Opcode.LL_CLOCK_ACCURACY_RSP: 1,
     Opcode.LL_CIS_REQ: 26,
@@ -175,6 +177,7 @@ INVALID_LENGTH_CASES = {
     Opcode.LL_PHY_RSP: (2, 'ad'),
     Opcode.LL_PHY_UPDATE_IND: (2 + PDU_CONTROL_INSTANT_SIZE, 'ad'),
     Opcode.LL_MIN_USED_CHANNELS_IND: (2, 'ad'),
+    Opcode.LL_PERIODIC_SYNC_IND: (PDU_CONTROL_PERIODIC_SYNC_SIZE - 1, 'ad'),
 }
 # Section 4.7.3.3 requires six distinct invalid lengths per supported opcode.
 INVALID_LENGTH_ROUNDS = 6
@@ -183,14 +186,17 @@ CONTROL_SILENCE_US = LL_RESPONSE_TIMEOUT_US // 2
 
 
 def _invalid_lengths(valid, generator):
+    """Steps 2-4; random lengths stay within 26 octets or below the valid size."""
     maximum = PDU_CONTROL_PAYLOAD_SIZE_INITIAL_MAX - PDU_CONTROL_OPCODE_SIZE
-    assert 0 <= valid <= maximum
+    assert 0 <= valid
     required = ([0, valid - 1] if valid else []) + (
         [valid + 1, maximum] if valid < maximum else []
     )
     lengths = list(dict.fromkeys(required))
     remaining = [
-        size for size in range(maximum + 1) if size != valid and size not in lengths
+        size
+        for size in range(max(maximum, valid - 1) + 1)
+        if size != valid and size not in lengths
     ]
     return lengths + generator.sample(remaining, INVALID_LENGTH_ROUNDS - len(lengths))
 
@@ -515,7 +521,8 @@ async def control_pdus_with_invalid_length(tester, *, central):
         3. If its valid CtrData length is below 26, test valid-plus-one and 26.
         4. Add reproducibly randomized, unique invalid CtrData lengths until
            exactly six different lengths have been tested for that opcode.
-           Overlapping boundary selections count only once.
+           Overlapping boundary selections count only once. For the 34-octet
+           LL_PERIODIC_SYNC_IND, draw them up to valid-minus-one.
         5. Send the control PDU with that opcode and random CtrData octets of
            the selected invalid length. Preserve correct outer DATA framing.
         6. Enforce that opcode's alternatives from Table 4.7-4:
@@ -556,7 +563,7 @@ async def control_pdus_with_invalid_length(tester, *, central):
         report this source ambiguity explicitly rather than assuming padding.
         Observe silence through actual connection events, not a fixed RF poll.
         A Central packet received before the Lower Tester transmits Ping is not
-        evidence of a response to that Ping. All 26 supported opcodes receive
+        evidence of a response to that Ping. All 27 supported opcodes receive
         six distinct stimuli per role; unit vectors are not additional cases.
 
     Observation Limits:

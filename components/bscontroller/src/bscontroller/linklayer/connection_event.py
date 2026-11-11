@@ -21,7 +21,7 @@ from bscontroller.linklayer import (
     LL_DATA_CHANNEL_COUNT,
     LL_EVENT_COUNTER_MASK,
     LL_IFS_US,
-    PDU_CONTROL_PAYLOAD_SIZE_INITIAL_MAX,
+    PDU_CONTROL_PAYLOAD_SIZE_MAX,
     PDU_DATA_LLID_MASK,
     PDU_DATA_MD_MASK,
     PDU_DATA_MIC_SIZE,
@@ -122,7 +122,7 @@ class ConnectionEvent:
             )
         )
         if payload is None or len(payload) > (
-            PDU_CONTROL_PAYLOAD_SIZE_INITIAL_MAX
+            PDU_CONTROL_PAYLOAD_SIZE_MAX
             if header & PDU_DATA_LLID_MASK == LlId.CONTROL
             else self.control.packet_limits().rx_octets
         ):
@@ -271,6 +271,7 @@ class ConnectionEvent:
             )
             # Connection establishment is a physical reception, independent of CRC.
             self.connection.establish()
+            self.connection.received_in_event()
             if packet.valid_crc:
                 self.connection.rssi = max(
                     RADIO_TX_POWER_MIN_DBM,

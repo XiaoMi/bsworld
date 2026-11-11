@@ -519,6 +519,28 @@ class LeControllerEvents:
             )
         )
 
+    def on_sync_transfer_received(self, sync: PeriodicSyncSnapshot, status):
+        """LE Periodic Advertising Sync Transfer Received [v1] (Vol 4, Part E,
+        7.7.65.24).
+
+        Only v1 is generated: v2 describes PAwR, which this Controller does not
+        support. As for Sync Established, a failure reports Sync_Handle zero.
+        """
+        self._emit_hci_packet(
+            hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_Event(
+                status=status,
+                connection_handle=sync.connection_handle,
+                service_data=sync.service_data,
+                sync_handle=sync.handle if status == SUCCESS else 0,
+                advertising_sid=sync.sid,
+                advertiser_address_type=sync.address.address_type,
+                advertiser_address=sync.address,
+                advertiser_phy=sync.phy,
+                periodic_advertising_interval=sync.interval,
+                advertiser_clock_accuracy=sync.sca,
+            )
+        )
+
     def on_periodic_report(
         self,
         sync: PeriodicSyncSnapshot,

@@ -170,6 +170,24 @@ class PeriodicSyncSnapshot:
     phy: Phy
     interval: int
     sca: int
+    # The delivering connection and Service_Data of a transferred sync.
+    connection_handle: int = 0
+    service_data: int = 0
+
+
+@dataclass(frozen=True)
+class SyncTransferConfig:
+    """How a connection handles received sync transfers (Core Vol 4, Part E,
+    7.8.91 and 7.8.92); disabled ignores them. ``cte_type`` holds the CTE_Type
+    bits that synchronization must not accept.
+    """
+
+    enabled: bool = False
+    reports_enabled: bool = False
+    filter_duplicates: bool = False
+    skip: int = 0
+    timeout_us: int = 0
+    cte_type: int = 0
 
 
 @dataclass(frozen=True)
@@ -241,4 +259,6 @@ def synchronization_snapshot(sync: PeriodicSync) -> PeriodicSyncSnapshot:
         sync.phy,
         sync.info.interval if sync.info else 0,
         sync.info.sca if sync.info else 0,
+        sync.transfer.connection_handle if sync.transfer else 0,
+        sync.transfer.service_data if sync.transfer else 0,
     )

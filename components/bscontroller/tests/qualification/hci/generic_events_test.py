@@ -146,7 +146,8 @@ async def disallow_mixed_advertising_commands(tester):
     Initial Condition:
         No separate Initial Condition block is specified. The procedure begins
         with Reset; the reported Supported Commands mask selects table rows.
-        Periodic Advertising Sync Transfer is not supported by this DUT.
+        No connection exists, so the per-connection Sync Transfer Parameters
+        row has no valid Connection_Handle.
 
     Test Steps:
         1. The Upper Tester powers the IUT off and on, or sends Reset. This
@@ -173,7 +174,7 @@ async def disallow_mixed_advertising_commands(tester):
         Pass verdict: every supported command from the opposite family returns
         Command Complete with matching opcode, a command credit and status 0x0C.
         Table 4.2 permits 0x02 for its per-connection Sync Transfer Parameters
-        row; this DUT does not support that row or the default-transfer row.
+        row, whose Connection_Handle names no connection.
 
     Reference:
         HCI.TS.p39.pdf, Section 4.3, independently titled procedure

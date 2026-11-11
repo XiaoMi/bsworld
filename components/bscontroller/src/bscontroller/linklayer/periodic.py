@@ -60,6 +60,7 @@ async def periodic_transmit(link: RadioLink, item: Advertising) -> None:
         crc_init=item.periodic_crc,
         power_dbm=item.tx_power_dbm,
     )
+    item.periodic_last_counter = item.periodic_counter
     link.roles.advertising.periodic_completed(item)
 
 
@@ -70,7 +71,10 @@ async def periodic_receive(link: RadioLink, sync: PeriodicSync) -> None:
     sync.apply_channel_map()
     info = sync.info
     assert info is not None
-    widening = window_widening(sync.next_us - sync.last_rx_us, info.sca)
+    widening = (
+        window_widening(sync.next_us - sync.last_rx_us, info.sca)
+        + sync.transfer_widening_us
+    )
     # Search on both sides of the predicted anchor, allowing for clock drift,
     # SyncInfo offset quantization and time needed to recognize the Access Address.
     window_end = sync.next_us + widening + info.unit_us + sync.phy.address_us
