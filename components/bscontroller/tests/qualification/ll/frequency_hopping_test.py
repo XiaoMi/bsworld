@@ -188,6 +188,10 @@ async def accepting_channel_map_update(tester, *, csa2):
         Complete Feature Exchange for the optional CSA #2 feature before Step 1,
         as required by Section 4.1.6.
 
+    Test Case Configuration:
+        LL/FRH/PER/BV-01-C: CSA #1.
+        LL/FRH/PER/BV-02-C: CSA #2.
+
     Test Steps:
         1. Send LL_CHANNEL_MAP_IND selecting every second channel and Instant
            100 events ahead. Receive the IUT's acknowledgement.
@@ -276,6 +280,10 @@ async def requesting_channel_map_update(tester, *, csa2):
         latency and 300-ms timeout. Select public own address and 10-ms interval.
         Table 4.6-3 selects CSA #1 for BV-01 and CSA #2 for BV-02.
         Complete Feature Exchange for CSA #2 before Step 1 (Section 4.1.6).
+
+    Test Case Configuration:
+        LL/FRH/CEN/BV-01-C: CSA #1.
+        LL/FRH/CEN/BV-02-C: CSA #2.
 
     Test Steps:
         1. Select alternative 1A for BV-01 or 1B for BV-02:

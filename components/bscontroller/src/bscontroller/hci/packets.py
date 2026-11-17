@@ -30,6 +30,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import field
 from typing import (
     Any,
+    ClassVar,
     Generic,
     Self,
     SupportsBytes,
@@ -181,6 +182,19 @@ HCI_LE_SCAN_WINDOW_DEFAULT = 0x0010
 HCI_LE_PERIODIC_SYNC_TIMEOUT_MIN = 0x000A
 HCI_LE_PERIODIC_SYNC_TIMEOUT_MAX = 0x4000
 HCI_LE_PERIODIC_SYNC_SKIP_MAX = 0x01F3
+# Sync_Handle range (Vol 4, Part E, 7.8.126, 7.8.127).
+HCI_LE_SYNC_HANDLE_MAX = 0x0EFF
+# PAwR: response slots per subevent, data elements per Subevent Data command,
+# and Subevent_Data/Response_Data length (Vol 4, Part E, 7.8.61, 7.8.125-127).
+HCI_LE_PAWR_RESPONSE_SLOTS_MAX = 0xFF
+HCI_LE_PAWR_SUBEVENT_DATA_ENTRIES_MAX = 0x0F
+HCI_LE_PAWR_DATA_SIZE_MAX = 254
+HCI_LE_PAWR_SYNC_SUBEVENTS_MAX = 0x80
+# Advertising_Handle and Subevent of Extended Create Connection [v2] without
+# PAwR, and the Enhanced Connection Complete [v2] values for no train.
+HCI_LE_NO_ADVERTISING_HANDLE = 0xFF
+HCI_LE_NO_SUBEVENT = 0xFF
+HCI_LE_NO_SYNC_HANDLE = 0xFFFF
 # All_PHYs bits mean no preference, not the individual PHY selection mask.
 HCI_LE_ALL_PHYS_TX_MASK = 1 << 0
 HCI_LE_ALL_PHYS_RX_MASK = 1 << 1
@@ -204,6 +218,16 @@ HCI_LE_PERIODIC_REPORT_OVERHEAD_SIZE = 8
 HCI_LE_PERIODIC_REPORT_DATA_SIZE_MAX = (
     HCI_EVENT_PARAMETER_SIZE_MAX - HCI_LE_PERIODIC_REPORT_OVERHEAD_SIZE
 )
+# [v2] adds Periodic_Event_Counter and Subevent (Vol 4, Part E, 7.7.65.15).
+HCI_LE_PERIODIC_REPORT_V2_OVERHEAD_SIZE = HCI_LE_PERIODIC_REPORT_OVERHEAD_SIZE + 3
+HCI_LE_PERIODIC_REPORT_V2_DATA_SIZE_MAX = (
+    HCI_EVENT_PARAMETER_SIZE_MAX - HCI_LE_PERIODIC_REPORT_V2_OVERHEAD_SIZE
+)
+# Response Report: subevent code, handle, subevent, TX_Status and the response
+# count, then six octets before each response's data (Vol 4, Part E, 7.7.65.37).
+HCI_LE_RESPONSE_REPORT_OVERHEAD_SIZE = 5
+HCI_LE_RESPONSE_REPORT_RESPONSE_SIZE = 6
+HCI_LE_RESPONSE_REPORT_RESPONSES_MAX = 0x19
 # Extended advertising event_type bits 5..6 encode Data_Status.
 HCI_LE_EXT_ADV_REPORT_DATA_STATUS_SHIFT = 5
 HCI_LE_EXT_ADV_REPORT_DATA_STATUS_VALUE_MASK = 0x03
@@ -3052,6 +3076,36 @@ class HCI_LE_Set_Periodic_Advertising_Parameters_Command(
 
 
 # -----------------------------------------------------------------------------
+@dataclasses.dataclass
+class HCI_LE_Set_Periodic_Advertising_Parameters_V2_ReturnParameters(
+    HCI_StatusReturnParameters
+):
+    advertising_handle: int = field(metadata=metadata(1))
+
+
+@HCI_SyncCommand.sync_command(
+    HCI_LE_Set_Periodic_Advertising_Parameters_V2_ReturnParameters
+)
+@dataclasses.dataclass
+class HCI_LE_Set_Periodic_Advertising_Parameters_V2_Command(
+    HCI_SyncCommand[HCI_LE_Set_Periodic_Advertising_Parameters_V2_ReturnParameters]
+):
+    '''
+    See Bluetooth spec @ 7.8.61 LE Set Periodic Advertising Parameters [v2] command
+    '''
+
+    advertising_handle: int = field(metadata=metadata(1))
+    periodic_advertising_interval_min: int = field(metadata=metadata(2))
+    periodic_advertising_interval_max: int = field(metadata=metadata(2))
+    periodic_advertising_properties: int = field(metadata=metadata(2))
+    num_subevents: int = field(metadata=metadata(1))
+    subevent_interval: int = field(metadata=metadata(1))
+    response_slot_delay: int = field(metadata=metadata(1))
+    response_slot_spacing: int = field(metadata=metadata(1))
+    num_response_slots: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
 @HCI_SyncCommand.sync_command(HCI_StatusReturnParameters)
 @dataclasses.dataclass
 class HCI_LE_Set_Periodic_Advertising_Data_Command(
@@ -3388,6 +3442,59 @@ class HCI_LE_Extended_Create_Connection_Command(HCI_AsyncCommand):
 
 # -----------------------------------------------------------------------------
 @HCI_Command.command
+class HCI_LE_Extended_Create_Connection_V2_Command(
+    HCI_LE_Extended_Create_Connection_Command
+):
+    '''
+    See Bluetooth spec @ 7.8.66 LE Extended Create Connection [v2] Command
+
+    Advertising_Handle and Subevent precede the [v1] parameters; both 0xFF
+    select ordinary initiating.
+    '''
+
+    name = 'HCI_LE_EXTENDED_CREATE_CONNECTION_V2_COMMAND'
+    op_code = HCI_LE_EXTENDED_CREATE_CONNECTION_V2_COMMAND
+
+    @classmethod
+    def from_parameters(cls, parameters: bytes) -> Self:
+        base = HCI_LE_Extended_Create_Connection_Command.from_parameters(parameters[2:])
+        return cls(
+            parameters[0],
+            parameters[1],
+            base.initiator_filter_policy,
+            base.own_address_type,
+            base.peer_address_type,
+            base.peer_address,
+            base.initiating_phys,
+            base.scan_intervals,
+            base.scan_windows,
+            base.connection_interval_mins,
+            base.connection_interval_maxs,
+            base.max_latencies,
+            base.supervision_timeouts,
+            base.min_ce_lengths,
+            base.max_ce_lengths,
+        )
+
+    def __init__(self, advertising_handle: int, subevent: int, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.advertising_handle = advertising_handle
+        self.subevent = subevent
+        self.parameters = bytes([advertising_handle, subevent]) + self.parameters
+
+    def __str__(self):
+        return (
+            super().__str__()
+            + '\n'
+            + color('  advertising_handle:     ', 'cyan')
+            + f' {self.advertising_handle}\n'
+            + color('  subevent:               ', 'cyan')
+            + f' {self.subevent}'
+        )
+
+
+# -----------------------------------------------------------------------------
+@HCI_Command.command
 @dataclasses.dataclass
 class HCI_LE_Periodic_Advertising_Create_Sync_Command(HCI_AsyncCommand):
     '''
@@ -3615,6 +3722,163 @@ class HCI_LE_Set_Default_Periodic_Advertising_Sync_Transfer_Parameters_Command(
     skip: int = field(metadata=metadata(2))
     sync_timeout: int = field(metadata=metadata(2))
     cte_type: int = field(metadata=CteType.type_metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@dataclasses.dataclass
+class HCI_LE_Set_Periodic_Advertising_Subevent_Data_ReturnParameters(
+    HCI_StatusReturnParameters
+):
+    advertising_handle: int = field(metadata=metadata(1))
+
+
+@HCI_SyncCommand.sync_command(
+    HCI_LE_Set_Periodic_Advertising_Subevent_Data_ReturnParameters
+)
+@dataclasses.dataclass
+class HCI_LE_Set_Periodic_Advertising_Subevent_Data_Command(
+    HCI_SyncCommand[HCI_LE_Set_Periodic_Advertising_Subevent_Data_ReturnParameters]
+):
+    '''
+    See Bluetooth spec @ 7.8.125 LE Set Periodic Advertising Subevent Data command
+
+    Parameters cut short, for example by a Subevent_Data_Length larger than the
+    data that follows, decode with ``complete`` false so the Controller can
+    still return a status.
+    '''
+
+    advertising_handle: int = field(metadata=metadata(1))
+    subevent: Sequence[int] = field(metadata=metadata(1, list_begin=True))
+    response_slot_start: Sequence[int] = field(metadata=metadata(1))
+    response_slot_count: Sequence[int] = field(metadata=metadata(1))
+    subevent_data: Sequence[bytes] = field(metadata=metadata('v', list_end=True))
+    complete: bool = field(default=True, compare=False)
+
+    @classmethod
+    def from_parameters(cls, parameters: bytes) -> Self:
+        subevents: list[int] = []
+        starts: list[int] = []
+        counts: list[int] = []
+        data: list[bytes] = []
+        complete = len(parameters) >= 2
+        offset = 2
+        for _ in range(parameters[1] if complete else 0):
+            if offset + 4 > len(parameters):
+                complete = False
+                break
+            subevent, start, slots, length = parameters[offset : offset + 4]
+            value = parameters[offset + 4 : offset + 4 + length]
+            offset += 4 + length
+            subevents.append(subevent)
+            starts.append(start)
+            counts.append(slots)
+            data.append(value)
+            if len(value) < length:
+                complete = False
+                break
+        command = cls(
+            parameters[0] if parameters else 0,
+            subevents,
+            starts,
+            counts,
+            data,
+            complete=complete and offset == len(parameters),
+        )
+        command.parameters = parameters
+        return command
+
+
+# -----------------------------------------------------------------------------
+@dataclasses.dataclass
+class HCI_LE_Set_Periodic_Advertising_Response_Data_ReturnParameters(
+    HCI_StatusReturnParameters
+):
+    sync_handle: int = field(metadata=metadata(2))
+
+
+@HCI_SyncCommand.sync_command(
+    HCI_LE_Set_Periodic_Advertising_Response_Data_ReturnParameters
+)
+@dataclasses.dataclass
+class HCI_LE_Set_Periodic_Advertising_Response_Data_Command(
+    HCI_SyncCommand[HCI_LE_Set_Periodic_Advertising_Response_Data_ReturnParameters]
+):
+    '''
+    See Bluetooth spec @ 7.8.126 LE Set Periodic Advertising Response Data command
+
+    As for subevent data, parameters cut short decode with ``complete`` false.
+    '''
+
+    sync_handle: int = field(metadata=metadata(2))
+    request_event: int = field(metadata=metadata(2))
+    request_subevent: int = field(metadata=metadata(1))
+    response_subevent: int = field(metadata=metadata(1))
+    response_slot: int = field(metadata=metadata(1))
+    response_data: bytes = field(metadata=metadata('v'))
+    complete: bool = field(default=True, compare=False)
+
+    # Sync_Handle through Response_Data_Length.
+    FIXED_SIZE: ClassVar[int] = 8
+
+    @classmethod
+    def from_parameters(cls, parameters: bytes) -> Self:
+        fixed = parameters[: cls.FIXED_SIZE].ljust(cls.FIXED_SIZE, b'\0')
+        handle, event, request, response, slot, length = struct.unpack('<HHBBBB', fixed)
+        data = parameters[cls.FIXED_SIZE : cls.FIXED_SIZE + length]
+        command = cls(
+            handle,
+            event,
+            request,
+            response,
+            slot,
+            data,
+            complete=len(parameters) == cls.FIXED_SIZE + length,
+        )
+        command.parameters = parameters
+        return command
+
+
+# -----------------------------------------------------------------------------
+@dataclasses.dataclass
+class HCI_LE_Set_Periodic_Sync_Subevent_ReturnParameters(HCI_StatusReturnParameters):
+    sync_handle: int = field(metadata=metadata(2))
+
+
+@HCI_SyncCommand.sync_command(HCI_LE_Set_Periodic_Sync_Subevent_ReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_Set_Periodic_Sync_Subevent_Command(
+    HCI_SyncCommand[HCI_LE_Set_Periodic_Sync_Subevent_ReturnParameters]
+):
+    '''
+    See Bluetooth spec @ 7.8.127 LE Set Periodic Sync Subevent command
+
+    Num_Subevents_To_Sync above the subevents present decodes with ``complete``
+    false.
+    '''
+
+    sync_handle: int = field(metadata=metadata(2))
+    periodic_advertising_properties: int = field(metadata=metadata(2))
+    subevent: Sequence[int] = field(
+        metadata=metadata(1, list_begin=True, list_end=True)
+    )
+    complete: bool = field(default=True, compare=False)
+
+    # Sync_Handle, Periodic_Advertising_Properties and Num_Subevents_To_Sync.
+    FIXED_SIZE: ClassVar[int] = 5
+
+    @classmethod
+    def from_parameters(cls, parameters: bytes) -> Self:
+        fixed = parameters[: cls.FIXED_SIZE].ljust(cls.FIXED_SIZE, b'\0')
+        handle, properties, count = struct.unpack('<HHB', fixed)
+        subevents = parameters[cls.FIXED_SIZE : cls.FIXED_SIZE + count]
+        command = cls(
+            handle,
+            properties,
+            list(subevents),
+            complete=len(parameters) == cls.FIXED_SIZE + count,
+        )
+        command.parameters = parameters
+        return command
 
 
 # -----------------------------------------------------------------------------
@@ -4994,8 +5258,13 @@ class HCI_LE_Periodic_Advertising_Report_V2_Event(HCI_LE_Meta_Event):
     cte_type: int = field(metadata=CteType.type_metadata(1))
     periodic_event_counter: int = field(metadata=metadata(2))
     subevent: int = field(metadata=metadata(1))
-    data_status: int = field(metadata=CteType.type_metadata(1))
+    data_status: int = field(metadata=metadata(1))
     data: bytes = field(metadata=metadata("v"))
+
+    # Subevent for a periodic advertising train without responses.
+    NO_SUBEVENT = 0xFF
+    # Data_Status: the AUX_SYNC_SUBEVENT_IND was not received.
+    DATA_RECEIVE_FAILED = 0xFF
 
 
 # -----------------------------------------------------------------------------
@@ -5099,6 +5368,50 @@ class HCI_LE_Periodic_Advertising_Sync_Transfer_Received_V2_Event(HCI_LE_Meta_Ev
     subevent_interval: int = field(metadata=metadata(1))
     response_slot_delay: int = field(metadata=metadata(1))
     response_slot_spacing: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@HCI_LE_Meta_Event.event
+@dataclasses.dataclass
+class HCI_LE_Periodic_Advertising_Subevent_Data_Request_Event(HCI_LE_Meta_Event):
+    '''
+    See Bluetooth spec @ 7.7.65.36 LE Periodic Advertising Subevent Data Request
+    event
+    '''
+
+    advertising_handle: int = field(metadata=metadata(1))
+    subevent_start: int = field(metadata=metadata(1))
+    subevent_data_count: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@HCI_LE_Meta_Event.event
+@dataclasses.dataclass
+class HCI_LE_Periodic_Advertising_Response_Report_Event(HCI_LE_Meta_Event):
+    '''
+    See Bluetooth spec @ 7.7.65.37 LE Periodic Advertising Response Report event
+    '''
+
+    # TX_Status: the AUX_SYNC_SUBEVENT_IND was not transmitted.
+    TX_FAILED = 0x01
+    # Data_Status: no AUX_SYNC_SUBEVENT_RSP was received in the slot.
+    DATA_RECEIVE_FAILED = 0xFF
+
+    @dataclasses.dataclass
+    class Response(HCI_Dataclass_Object):
+        tx_power: int = field(metadata=metadata(-1))
+        rssi: int = field(metadata=metadata(-1))
+        cte_type: int = field(metadata=metadata(1))
+        response_slot: int = field(metadata=metadata(1))
+        data_status: int = field(metadata=metadata(1))
+        data: bytes = field(metadata=metadata('v'))
+
+    advertising_handle: int = field(metadata=metadata(1))
+    subevent: int = field(metadata=metadata(1))
+    tx_status: int = field(metadata=metadata(1))
+    responses: Sequence[Response] = field(
+        metadata=metadata(Response.parse_from_bytes, list_begin=True, list_end=True)
+    )
 
 
 # -----------------------------------------------------------------------------

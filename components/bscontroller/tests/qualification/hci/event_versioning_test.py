@@ -73,15 +73,17 @@ def _version_result(tester, family, expected):
     return events[0]
 
 
-def _periodic_reports(tester, handle, sent, *, enabled):
+def _periodic_reports(tester, handle, sent, *, expected):
     """Validate all pending reports; the source permits more than one report."""
     events = _version_events(tester, REPORT_EVENTS)
-    assert enabled or not events, 'masked periodic report was delivered'
+    assert expected is not None or not events, 'masked report delivered'
     for report in events:
-        assert type(report) is REPORT_EVENTS[0], 'incorrect periodic report version'
+        assert type(report) is expected
         assert report.sync_handle == handle
         assert report.data_status == ReportDataStatus.DATA_COMPLETE
         assert report.data in sent
+        if expected is REPORT_EVENTS[1]:
+            assert report.subevent == 0xFF
     return bool(events)
 
 
@@ -103,6 +105,10 @@ async def encryption_change_versions(tester, *, central):
         LL/SEC/PER/BV-01-C; HCI/EVV/BV-05-C selects Central and
         LL/SEC/CEN/BV-01-C. Establish the selected role using the common public
         addresses, key preamble and encryption feature exchange.
+
+    Test Case Configuration:
+        HCI/EVV/BV-03-C: Peripheral IUT.
+        HCI/EVV/BV-05-C: Central IUT.
 
     Test Steps:
         1. Enable both Encryption Change v1 and v2 event masks.
@@ -179,7 +185,7 @@ async def periodic_sync_established_versions(tester):
     event with two versions.
 
     Initial Condition:
-        The IUT scans. Table 4.122 alternative A: only v1 is supported.
+        The IUT scans. Table 4.122 alternative B: both v1 and v2 are supported.
 
     Test Steps:
         1. Begin ongoing ADV_EXT_IND/AUX_ADV_IND announcements. AuxPtr points
@@ -190,11 +196,11 @@ async def periodic_sync_established_versions(tester):
         3. Enable both Sync Established v1 and v2 in LE Event Mask.
         4. Send Create Sync; require successful Command Status.
         5. Send Create Sync Cancel; require successful Command Complete.
-        6. Select alternative 6A.1: receive Sync Established v1.
+        6. Select alternative 6B.1: receive Sync Established v2.
         7. Enable Sync Established v2 and mask v1.
         8. Send Create Sync; require successful Command Status.
         9. Send Create Sync Cancel; require successful Command Complete.
-        10. Select alternative 10A.1: receive no Sync Established event.
+        10. Select alternative 10B.1: receive Sync Established v2.
         11. Enable Sync Established v1 and mask v2.
         12. Send Create Sync; require successful Command Status.
         13. Send Create Sync Cancel; require successful Command Complete.
@@ -202,8 +208,8 @@ async def periodic_sync_established_versions(tester):
 
     Expected Outcome:
         Pass verdict:
-            Steps 6A.1 and 14 deliver v1 with Operation Cancelled by Host;
-            Step 10A.1 emits neither version. Every command returns its
+            Steps 6B.1 and 10B.1 deliver v2; Step 14 delivers v1. All
+            three report Operation Cancelled by Host. Every command returns its
             expected event type, opcode, command credit and success status.
 
     Source Correction:
@@ -215,12 +221,12 @@ async def periodic_sync_established_versions(tester):
 
     Coverage Note:
         Continue the associated announcements without transmitting any periodic
-        PDU. A selected 10-ms post-cancel observation interval gives the masked
+        PDU. A selected 10-ms post-cancel observation interval gives the event
         family additional execution opportunities before inspecting its queue.
 
     Reference:
-        HCI.TS.p39.pdf, 4.17.3, HCI/EVV/BV-07-C, Table 4.122, Steps 1-14
-        and alternative A; PDF/printed 375-376; source [17] 7.7.65.14.
+        HCI.TS.p39.pdf, 4.17.3, HCI/EVV/BV-08-C, Table 4.122, Steps 1-14
+        and alternative B; PDF/printed 375-376; source [17] 7.7.65.14.
     """
     train = await _start_scanning(tester)
     for v1, v2 in ((True, True), (False, True), (True, False)):
@@ -231,9 +237,9 @@ async def periodic_sync_established_versions(tester):
         )
         await train.announce(tester)
         await tester.wait(10_000)
-        event = _version_result(tester, SYNC_EVENTS, SYNC_EVENTS[0] if v1 else None)
-        if event is not None:
-            assert event.status == ErrorCode.OPERATION_CANCELLED_BY_HOST_ERROR
+        event = _version_result(tester, SYNC_EVENTS, SYNC_EVENTS[1 if v2 else 0])
+        assert event.status == ErrorCode.OPERATION_CANCELLED_BY_HOST_ERROR
+        assert event.sync_handle == 0
     await tester.command(hci.HCI_LE_Set_Extended_Scan_Enable_Command(0, 0, 0, 0))
 
 
@@ -243,61 +249,56 @@ async def periodic_report_versions(tester):
 
     Initial Condition:
         The IUT scans and is synchronized to the Lower Tester's ongoing
-        periodic advertising. Table 4.123 alternative A: only v1 is supported.
+        periodic advertising. Table 4.123 alternative B: both v1 and v2 are supported.
 
     Test Steps:
         1. Enable both Periodic Advertising Report v1 and v2 in LE Event Mask.
-        2. Select alternative 2A.1: receive at least one v1 periodic report.
+        2. Select alternative 2B.1: receive at least one v2 periodic report.
         3. Enable Periodic Advertising Report v2 and mask v1.
-        4. Select alternative 4A.1: observe at least 50 periodic events and
-           require no Periodic Advertising Report event of either version.
+        4. Select alternative 4B.1: receive at least one v2 periodic report
+           within 50 periodic events.
         5. Enable Periodic Advertising Report v1 and mask v2.
         6. Continue periodic events for at least 50 events or until a v1
            report is received. Require the v1 report.
 
     Expected Outcome:
         Pass verdict:
-            Steps 2A.1 and 6 return v1 reports with the selected sync handle
-            and exact transmitted data. Step 4A.1 emits neither version.
+            Steps 2B.1 and 4B.1 return v2 reports; Step 6 returns v1. All
+            reports carry the selected sync handle and exact transmitted data.
 
     Coverage Note:
         Establish synchronization before Step 1. The setup report is consumed
         separately; it cannot satisfy Step 2. Inject one complete periodic PDU
         per event. The source note's 'periodic connection events' refers to
         periodic advertising events in this unconnected synchronization test.
-        Allow 50 events for the v1 mask to settle before the separate 50-event
-        no-report observation. Transient v1 reports in that selected grace
-        window cannot fail the mask transition; v2 reports are never accepted.
+        Allow up to 50 periodic events after each mask change. Each delivered
+        report must use the newest enabled version; v2 reports for this train
+        without responses carry Subevent 0xFF.
 
     Reference:
-        HCI.TS.p39.pdf, 4.17.4, HCI/EVV/BV-09-C, Table 4.123, Steps 1-6
+        HCI.TS.p39.pdf, 4.17.4, HCI/EVV/BV-10-C, Table 4.123, Steps 1-6
         and settling note; PDF/printed 376-377; source [17] 7.7.65.15.
     """
     train = await _start_scanning(tester)
     await tester.command(create_sync(sync_timeout=200))
     await train.announce(tester)
     await train.transmit(tester, b'setup')
-    sync = await tester.event(hci.HCI_LE_Periodic_Advertising_Sync_Established_Event)
+    sync = await tester.event(SYNC_EVENTS[0])
     assert sync.status == ErrorCode.SUCCESS
-    report = _version_result(tester, REPORT_EVENTS, REPORT_EVENTS[0])
-    assert report.sync_handle == sync.sync_handle and report.data == b'setup'
+    _version_result(tester, REPORT_EVENTS, REPORT_EVENTS[0])
     sent = {b'setup'}
     for v1, v2 in ((True, True), (False, True), (True, False)):
         await _le_versions(tester, REPORT_EVENTS, v1=v1, v2=v2)
-        if not v1:
-            for _ in range(MASK_SETTLING_EVENTS):
-                sent.add(b'settling')
-                await train.transmit(tester, b'settling')
-                _periodic_reports(tester, sync.sync_handle, sent, enabled=True)
+        expected = REPORT_EVENTS[1 if v2 else 0]
         seen = False
         for index in range(MASK_SETTLING_EVENTS):
             data = bytes([v1, v2, index])
             sent.add(data)
             await train.transmit(tester, data)
-            seen = _periodic_reports(tester, sync.sync_handle, sent, enabled=v1)
+            seen = _periodic_reports(tester, sync.sync_handle, sent, expected=expected)
             if seen:
                 break
-        assert seen == v1, 'no v1 report within the periodic observation window'
+        assert seen, 'no report within 50 periodic advertising events'
     await tester.command(
         hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(sync.sync_handle)
     )
@@ -310,7 +311,7 @@ async def sync_transfer_received_versions(tester):
 
     Initial Condition:
         An ACL connection exists between the Central IUT and the Peripheral
-        Lower Tester. Table 4.124 alternative A: only v1 is supported.
+        Lower Tester. Table 4.124 alternative B: both v1 and v2 are supported.
 
     Test Steps:
         1. Enable both Sync Transfer Received v1 and v2 in LE Event Mask.
@@ -318,11 +319,12 @@ async def sync_transfer_received_versions(tester):
            Sync_Timeout of three periodic intervals.
         3. Send LL_PERIODIC_SYNC_IND with nonzero ID and a SyncInfo whose train
            is never transmitted, so synchronization is not possible.
-        4. Select alternative 4A.1: receive Sync Transfer Received v1 with
+        4. Select alternative 4B.1: receive Sync Transfer Received v2 with
            status 0x3E.
         5. Enable Sync Transfer Received v2 and mask v1.
         6. Send LL_PERIODIC_SYNC_IND as in Step 3.
-        7. Select alternative 7A.1: receive no Sync Transfer Received event.
+        7. Select alternative 7B.1: receive Sync Transfer Received v2
+           with status 0x3E.
         8. Step 8's Terminate Sync is not sent; see Source Correction.
         9. Enable Sync Transfer Received v1 and mask v2.
         10. Send LL_PERIODIC_SYNC_IND as in Step 3.
@@ -330,15 +332,15 @@ async def sync_transfer_received_versions(tester):
 
     Expected Outcome:
         Pass verdict:
-            Steps 4A.1 and 11 deliver v1 with Connection Failed To Be
-            Established, the connection handle and Service_Data; Step 7A.1
-            emits neither version.
+            Steps 4B.1 and 7B.1 deliver v2; Step 11 delivers v1. Each
+            reports Connection Failed To Be Established, the connection
+            handle and Service_Data.
 
     Source Correction:
         Step 1 names the event without "Received". Step 8 terminates a sync
         that never existed; Terminate Sync would return Unknown Advertising
         Identifier (Core Vol 4, Part E, 7.8.69), not success, so it is not
-        sent. The verdict's "4A.1 and 12" refers to Steps 4A.1 and 11.
+        sent. The verdict's "4B.1 and 12" refers to Steps 4B.1 and 11.
 
     Coverage Note:
         Each failure is observed for eight periodic intervals: the six
@@ -346,8 +348,8 @@ async def sync_transfer_received_versions(tester):
         margin.
 
     Reference:
-        HCI.TS.p39.pdf, 4.17.5, HCI/EVV/BV-11-C, Table 4.124, Steps 1-11 and
-        alternative A; PDF/printed 377-378; source [17] 7.7.65.24.
+        HCI.TS.p39.pdf, 4.17.5, HCI/EVV/BV-12-C, Table 4.124, Steps 1-11 and
+        alternative B; PDF/printed 377-378; source [17] 7.7.65.24.
     """
     link = await establish(
         tester,
@@ -368,7 +370,7 @@ async def sync_transfer_received_versions(tester):
         await session.send_control(session.indication(address=TRANSFER_ADVERTISER))
         await session.run_for(8 * period_us)
         event = _version_result(
-            tester, TRANSFER_EVENTS, TRANSFER_EVENTS[0] if v1 else None
+            tester, TRANSFER_EVENTS, TRANSFER_EVENTS[1 if v2 else 0]
         )
         if event is not None:
             assert event.status == ErrorCode.CONNECTION_FAILED_TO_BE_ESTABLISHED_ERROR
@@ -382,7 +384,7 @@ async def central_connection_complete_versions(tester):
     with two versions and legacy LE Connection Complete Event, Central.
 
     Initial Condition:
-        Standby. Table 4.125 alternative B; no advertiser can complete the
+        Standby. Table 4.125 alternative C; no advertiser can complete the
         pending connection before its explicit Host cancellation.
 
     Test Steps:
@@ -390,16 +392,17 @@ async def central_connection_complete_versions(tester):
            v1 and v2 with LE Set Event Mask.
         2. Send legacy Create Connection; require successful Command Status.
         3. Send Create Connection Cancel; require successful Command Complete.
-        4. Select alternative 4B.1: receive Enhanced Connection Complete v1
+        4. Select alternative 4C.1: receive Enhanced Connection Complete v2
            with a valid failure status.
         5. Disable legacy completion, enable enhanced v2 and mask enhanced v1.
         6. Send Create Connection; require successful Command Status.
         7. Send Create Connection Cancel; require successful Command Complete.
-        8. Select alternative 8B.1: receive no legacy or enhanced completion.
+        8. Select alternative 8C.1: receive Enhanced Connection Complete v2
+           with a valid failure status.
         9. Disable legacy completion, enable enhanced v1 and mask enhanced v2.
         10. Send Create Connection; require successful Command Status.
         11. Send Create Connection Cancel; require successful Command Complete.
-        12. Select alternative 12B.1: receive Enhanced Connection Complete v1
+        12. Select alternative 12C.1: receive Enhanced Connection Complete v1
             with a valid failure status.
         13. Enable legacy completion and mask both enhanced versions.
         14. Send Create Connection; require successful Command Status.
@@ -408,19 +411,19 @@ async def central_connection_complete_versions(tester):
 
     Expected Outcome:
         Pass verdict:
-            Steps 4B.1 and 12B.1 select enhanced v1, Step 8B.1 emits no version,
-            and Step 16 selects legacy. All emitted events carry the failed
+            Steps 4C.1 and 8C.1 select enhanced v2; Step 12C.1 selects v1;
+            Step 16 selects legacy. All emitted events carry the failed
             establishment status specified for Create Connection cancellation.
 
     Reference:
-        HCI.TS.p39.pdf, 4.17.6, HCI/EVV/BV-14-C, Table 4.125,
-        Steps 1-16 and alternative B; PDF/printed 379-381; source [17] 7.7.65.1.
+        HCI.TS.p39.pdf, 4.17.6, HCI/EVV/BV-15-C, Table 4.125,
+        Steps 1-16 and alternative C; PDF/printed 379-381; source [17] 7.7.65.1.
         Core Vol 4 Part E 7.8.13 defines the cancellation result status.
     """
     legacy, v1, v2 = CONNECTION_EVENTS
     for enabled, expected in (
-        ((legacy, v1, v2), v1),
-        ((v2,), None),
+        ((legacy, v1, v2), v2),
+        ((v2,), v2),
         ((v1,), v1),
         ((legacy,), legacy),
     ):
@@ -438,7 +441,7 @@ async def central_connection_complete_versions(tester):
 PROCEDURES: ProcedureMap = {}
 
 # Verify Encryption Change event-version selection under both-enabled, v2-only and
-# v1-only masks for an LE Controller supporting only v1.
+# v1-only masks for an LE Controller supporting both versions.
 PROCEDURES |= procedure_cases(
     encryption_change_versions,
     {
@@ -464,7 +467,7 @@ PROCEDURES |= procedure_cases(
 PROCEDURES |= procedure_cases(
     periodic_report_versions,
     {
-        'HCI/EVV/BV-09-C': (
+        'HCI/EVV/BV-10-C': (
             (
                 'Check correct handling of LE Periodic Advertising Report '
                 'event with two versions'
@@ -479,7 +482,7 @@ PROCEDURES |= procedure_cases(
 PROCEDURES |= procedure_cases(
     periodic_sync_established_versions,
     {
-        'HCI/EVV/BV-07-C': (
+        'HCI/EVV/BV-08-C': (
             (
                 'Check correct handling of LE Periodic Advertising Sync '
                 'Established event with two versions'
@@ -490,11 +493,11 @@ PROCEDURES |= procedure_cases(
 )
 
 # Verify Sync Transfer Received version selection under both-enabled, v2-only and
-# v1-only LE event masks for a Controller supporting only v1.
+# v1-only LE event masks for a Controller supporting both versions.
 PROCEDURES |= procedure_cases(
     sync_transfer_received_versions,
     {
-        'HCI/EVV/BV-11-C': (
+        'HCI/EVV/BV-12-C': (
             (
                 'Check correct handling of HCI LE Periodic Advertising Sync '
                 'Transfer Received event with two versions'
@@ -505,11 +508,11 @@ PROCEDURES |= procedure_cases(
 )
 
 # Verify selection between legacy and enhanced v1/v2 connection-complete events for a
-# Central supporting enhanced v1 but not v2.
+# Central supporting both enhanced versions.
 PROCEDURES |= procedure_cases(
     central_connection_complete_versions,
     {
-        'HCI/EVV/BV-14-C': (
+        'HCI/EVV/BV-15-C': (
             (
                 'Check correct handling of LE Enhanced Connection Complete '
                 'Event with two versions and legacy LE Connection Complete '

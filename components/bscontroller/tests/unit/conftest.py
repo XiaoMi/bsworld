@@ -13,6 +13,7 @@ from bscontroller.hci.backend import RadioBackend
 from bscontroller.hci.controller import Controller
 from bscontroller.linklayer.connection import Connection
 from bscontroller.radio.babblesim import PhyConnection
+from tests.support import LE_EVENT_MASK_V1
 from tests.unit.helpers import PARAMETERS, FakeRadio
 
 
@@ -28,7 +29,8 @@ def controller():
     result = asyncio.run(create())
     result.events = []
     result.send_hci_packet = result.events.append
-    result.event_mask = result.le_event_mask = (1 << 64) - 1
+    result.event_mask = (1 << 64) - 1
+    result.le_event_mask = LE_EVENT_MASK_V1
     return result
 
 

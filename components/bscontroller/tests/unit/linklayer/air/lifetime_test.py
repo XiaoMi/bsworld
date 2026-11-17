@@ -736,7 +736,7 @@ def test_removed_sync_cannot_publish_later_fragments(link):
     manager.active[1] = sync
     seen = []
 
-    def report(item, data, rssi, tx_power, status):
+    def report(item, data, rssi, tx_power, status, *, counter, subevent):
         seen.append(data)
         manager.terminate(item.handle)
 

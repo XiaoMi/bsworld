@@ -17,35 +17,39 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 
 from tests.integration.bumble.common import (
     ADVERTISER_NAME,
     TIMEOUT,
-    AdvertisingType,
-    OwnAddressType,
+    advertising,
     advertising_data,
 )
 
 
 async def test_bumble_central_connects_bumble_peripheral(bumble_pair):
-    peripheral_connected = asyncio.Event()
+    async with AsyncExitStack() as stack:
+        peripheral_connected = asyncio.Event()
 
-    peripheral, central = bumble_pair
-    peripheral.on("connection", lambda _: peripheral_connected.set())
+        peripheral, central = bumble_pair
+        peripheral.on("connection", lambda _: peripheral_connected.set())
 
-    await peripheral.start_advertising(
-        advertising_type=AdvertisingType.UNDIRECTED_CONNECTABLE_SCANNABLE,
-        own_address_type=OwnAddressType.PUBLIC,
-        advertising_data=advertising_data(ADVERTISER_NAME),
-        advertising_interval_min=20.0,
-        advertising_interval_max=20.0,
-    )
-    connection = None
-    try:
-        connection = await central.connect(peripheral.public_address, timeout=TIMEOUT)
-        await asyncio.wait_for(peripheral_connected.wait(), timeout=TIMEOUT)
-        assert connection.handle is not None
-    finally:
-        if connection is not None:
-            await connection.disconnect()
-        await peripheral.stop_advertising()
+        await stack.enter_async_context(
+            advertising(
+                peripheral,
+                connectable=True,
+                data=advertising_data(ADVERTISER_NAME),
+                interval_min=20.0,
+                interval_max=20.0,
+            )
+        )
+        connection = None
+        try:
+            connection = await central.connect(
+                peripheral.public_address, timeout=TIMEOUT
+            )
+            await asyncio.wait_for(peripheral_connected.wait(), timeout=TIMEOUT)
+            assert connection.handle is not None
+        finally:
+            if connection is not None:
+                await connection.disconnect()

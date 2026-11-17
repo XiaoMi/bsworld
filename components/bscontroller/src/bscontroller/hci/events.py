@@ -10,14 +10,21 @@ from typing import TYPE_CHECKING
 
 from bscontroller import hci
 from bscontroller.hci import (
+    HCI_EVENT_PARAMETER_SIZE_MAX,
     HCI_LE_ADV_COMPLETED_EVENTS_MAX,
     HCI_LE_EXT_ADV_REPORT_DATA_SIZE_MAX,
     HCI_LE_EXT_ADV_REPORT_DATA_STATUS_MASK,
     HCI_LE_EXT_ADV_REPORT_DATA_STATUS_SHIFT,
     HCI_LE_EXT_ADV_REPORT_DATA_STATUS_VALUE_MASK,
     HCI_LE_EXT_ADV_REPORT_LEGACY_PROPERTIES_MASK,
+    HCI_LE_NO_ADVERTISING_HANDLE,
+    HCI_LE_NO_SYNC_HANDLE,
     HCI_LE_PERIODIC_REPORT_CTE_NONE,
     HCI_LE_PERIODIC_REPORT_DATA_SIZE_MAX,
+    HCI_LE_PERIODIC_REPORT_V2_DATA_SIZE_MAX,
+    HCI_LE_RESPONSE_REPORT_OVERHEAD_SIZE,
+    HCI_LE_RESPONSE_REPORT_RESPONSE_SIZE,
+    HCI_LE_RESPONSE_REPORT_RESPONSES_MAX,
 )
 from bscontroller.hci.records import ConnectionRecord
 from bscontroller.linklayer import PDU_CONTROL_FEATURE_SET_SIZE
@@ -26,7 +33,7 @@ from bscontroller.linklayer.api import (
     ConnectionSnapshot,
     PeriodicSyncSnapshot,
 )
-from bscontroller.linklayer.state import AdvertisingProperties
+from bscontroller.linklayer.state import AdvertisingProperties, DataStatus
 from bscontroller.radio.base import RADIO_TX_POWER_MAX_DBM, RADIO_TX_POWER_MIN_DBM, Phy
 
 if TYPE_CHECKING:
@@ -36,6 +43,8 @@ if TYPE_CHECKING:
 SUCCESS = hci.HCI_ErrorCode.SUCCESS
 ReportFlags = hci.HCI_LE_Extended_Advertising_Report_Event.EventType
 AdvertisingReport = hci.HCI_LE_Extended_Advertising_Report_Event
+PeriodicReportV2 = hci.HCI_LE_Periodic_Advertising_Report_V2_Event
+ResponseReport = hci.HCI_LE_Periodic_Advertising_Response_Report_Event
 
 
 class LeControllerEvents:
@@ -216,11 +225,14 @@ class LeControllerEvents:
                 peripheral_latency=parameters.latency,
                 supervision_timeout=parameters.timeout,
                 central_clock_accuracy=parameters.sca,
+                advertising_handle=connection.pawr_advertising_handle,
+                sync_handle=connection.pawr_sync_handle,
             )
         )
         if (
             connection.role == hci.Role.CENTRAL
             or connection.advertising_handle is not None
+            or connection.pawr_sync_handle is not None
         ):
             self._emit_hci_packet(
                 hci.HCI_LE_Channel_Selection_Algorithm_Event(
@@ -282,11 +294,29 @@ class LeControllerEvents:
         )
 
     def _connection_complete_event(self, **parameters):
+        """The newest connection complete event the Host unmasked: Enhanced [v2],
+        Enhanced [v1], then LE Connection Complete (Vol 4, Part E, 7.7.65.1,
+        7.7.65.10).
+        """
         local_rpa = parameters.pop('local_resolvable_private_address', hci.Address.ANY)
         peer_rpa = parameters.pop('peer_resolvable_private_address', hci.Address.ANY)
-        if self.controller.le_event_mask & (
-            1 << (hci.HCI_LE_ENHANCED_CONNECTION_COMPLETE_EVENT - 1)
-        ):
+        advertising_handle = parameters.pop('advertising_handle', None)
+        sync_handle = parameters.pop('sync_handle', None)
+        if self._le_event_unmasked(hci.HCI_LE_ENHANCED_CONNECTION_COMPLETE_V2_EVENT):
+            return hci.HCI_LE_Enhanced_Connection_Complete_V2_Event(
+                **parameters,
+                local_resolvable_private_address=local_rpa,
+                peer_resolvable_private_address=peer_rpa,
+                advertising_handle=(
+                    HCI_LE_NO_ADVERTISING_HANDLE
+                    if advertising_handle is None
+                    else advertising_handle
+                ),
+                sync_handle=HCI_LE_NO_SYNC_HANDLE
+                if sync_handle is None
+                else sync_handle,
+            )
+        if self._le_event_unmasked(hci.HCI_LE_ENHANCED_CONNECTION_COMPLETE_EVENT):
             return hci.HCI_LE_Enhanced_Connection_Complete_Event(
                 **parameters,
                 local_resolvable_private_address=local_rpa,
@@ -299,6 +329,27 @@ class LeControllerEvents:
             else hci.AddressType.RANDOM_DEVICE
         )
         return hci.HCI_LE_Connection_Complete_Event(**parameters)
+
+    def _le_event_unmasked(self, subevent_code: int) -> bool:
+        return bool(self.controller.le_event_mask & (1 << (subevent_code - 1)))
+
+    def on_connect_failed(self, peer, status):
+        """An initiation the Link Layer gave up on, such as an unanswered PAwR
+        AUX_CONNECT_REQ (Vol 4, Part E, 7.7.65.10).
+        """
+        self._emit_hci_packet(
+            self._connection_complete_event(
+                status=status,
+                connection_handle=0,
+                role=hci.Role.CENTRAL,
+                peer_address_type=peer.address_type,
+                peer_address=peer,
+                connection_interval=0,
+                peripheral_latency=0,
+                supervision_timeout=0,
+                central_clock_accuracy=0,
+            )
+        )
 
     def on_acl_completed(self, connection: ConnectionSnapshot):
         """Number Of Completed Packets (Vol 4, Part E, 7.7.19)."""
@@ -505,39 +556,66 @@ class LeControllerEvents:
         )
 
     def on_sync_established(self, sync: PeriodicSyncSnapshot, status):
-        """LE Periodic Advertising Sync Established (Vol 4, Part E, 7.7.65.14)."""
+        """LE Periodic Advertising Sync Established [v2] or [v1], the newest one
+        unmasked (Vol 4, Part E, 7.7.65.14). A failure reports Sync_Handle zero.
+        """
+        parameters = dict(
+            status=status,
+            sync_handle=sync.handle if status == SUCCESS else 0,
+            advertising_sid=sync.sid,
+            advertiser_address_type=sync.address.address_type,
+            advertiser_address=sync.address,
+            advertiser_phy=sync.phy,
+            periodic_advertising_interval=sync.interval,
+            advertiser_clock_accuracy=sync.sca,
+        )
         self._emit_hci_packet(
-            hci.HCI_LE_Periodic_Advertising_Sync_Established_Event(
-                status=status,
-                sync_handle=sync.handle if status == SUCCESS else 0,
-                advertising_sid=sync.sid,
-                advertiser_address_type=sync.address.address_type,
-                advertiser_address=sync.address,
-                advertiser_phy=sync.phy,
-                periodic_advertising_interval=sync.interval,
-                advertiser_clock_accuracy=sync.sca,
+            hci.HCI_LE_Periodic_Advertising_Sync_Established_V2_Event(
+                **parameters, **self._pawr_timing(sync)
             )
+            if self._le_event_unmasked(
+                hci.HCI_LE_PERIODIC_ADVERTISING_SYNC_ESTABLISHED_V2_EVENT
+            )
+            else hci.HCI_LE_Periodic_Advertising_Sync_Established_Event(**parameters)
+        )
+
+    @staticmethod
+    def _pawr_timing(sync: PeriodicSyncSnapshot) -> dict[str, int]:
+        """[v2] PAwR fields; zero for a train without responses."""
+        timing = sync.pawr
+        return dict(
+            num_subevents=timing.num_subevents if timing else 0,
+            subevent_interval=timing.subevent_interval if timing else 0,
+            response_slot_delay=timing.response_slot_delay if timing else 0,
+            response_slot_spacing=timing.response_slot_spacing if timing else 0,
         )
 
     def on_sync_transfer_received(self, sync: PeriodicSyncSnapshot, status):
-        """LE Periodic Advertising Sync Transfer Received [v1] (Vol 4, Part E,
-        7.7.65.24).
-
-        Only v1 is generated: v2 describes PAwR, which this Controller does not
-        support. As for Sync Established, a failure reports Sync_Handle zero.
+        """LE Periodic Advertising Sync Transfer Received [v2] or [v1], the newest
+        one unmasked (Vol 4, Part E, 7.7.65.24). As for Sync Established, a
+        failure reports Sync_Handle zero.
         """
+        parameters = dict(
+            status=status,
+            connection_handle=sync.connection_handle,
+            service_data=sync.service_data,
+            sync_handle=sync.handle if status == SUCCESS else 0,
+            advertising_sid=sync.sid,
+            advertiser_address_type=sync.address.address_type,
+            advertiser_address=sync.address,
+            advertiser_phy=sync.phy,
+            periodic_advertising_interval=sync.interval,
+            advertiser_clock_accuracy=sync.sca,
+        )
         self._emit_hci_packet(
-            hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_Event(
-                status=status,
-                connection_handle=sync.connection_handle,
-                service_data=sync.service_data,
-                sync_handle=sync.handle if status == SUCCESS else 0,
-                advertising_sid=sync.sid,
-                advertiser_address_type=sync.address.address_type,
-                advertiser_address=sync.address,
-                advertiser_phy=sync.phy,
-                periodic_advertising_interval=sync.interval,
-                advertiser_clock_accuracy=sync.sca,
+            hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_V2_Event(
+                **parameters, **self._pawr_timing(sync)
+            )
+            if self._le_event_unmasked(
+                hci.HCI_LE_PERIODIC_ADVERTISING_SYNC_TRANSFER_RECEIVED_V2_EVENT
+            )
+            else hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_Event(
+                **parameters
             )
         )
 
@@ -548,32 +626,143 @@ class LeControllerEvents:
         rssi,
         tx_power,
         data_status=AdvertisingReport.DATA_COMPLETE,
+        *,
+        counter=0,
+        subevent=None,
     ):
-        """LE Periodic Advertising Report, fragmented by Data_Status (Vol 4, Part E,
-        7.7.65.15).
+        """LE Periodic Advertising Report [v2] or [v1], fragmented by Data_Status
+        (Vol 4, Part E, 7.7.65.15).
+
+        [v2] adds the event counter and subevent, and reports a PAwR subevent
+        listened to in vain; [v1] can represent neither.
         """
+        v2 = self._le_event_unmasked(hci.HCI_LE_PERIODIC_ADVERTISING_REPORT_V2_EVENT)
+        if not v2 and data_status == DataStatus.RECEIVE_FAILED:
+            return
         tx_power = (
             tx_power
             if tx_power is not None
             else AdvertisingReport.TX_POWER_INFORMATION_NOT_AVAILABLE
         )
-        for offset in range(0, max(1, len(data)), HCI_LE_PERIODIC_REPORT_DATA_SIZE_MAX):
+        rssi = (
+            max(RADIO_TX_POWER_MIN_DBM, min(RADIO_TX_POWER_MAX_DBM, round(rssi)))
+            if rssi is not None
+            else AdvertisingReport.RSSI_NOT_AVAILABLE
+        )
+        size = (
+            HCI_LE_PERIODIC_REPORT_V2_DATA_SIZE_MAX
+            if v2
+            else HCI_LE_PERIODIC_REPORT_DATA_SIZE_MAX
+        )
+        for offset in range(0, max(1, len(data)), size):
+            parameters = dict(
+                sync_handle=sync.handle,
+                tx_power=tx_power,
+                rssi=rssi,
+                cte_type=HCI_LE_PERIODIC_REPORT_CTE_NONE,
+                data_status=(
+                    AdvertisingReport.DATA_INCOMPLETE_MORE_TO_COME
+                    if offset + size < len(data)
+                    else data_status
+                ),
+                data=data[offset : offset + size],
+            )
             self._emit_hci_packet(
-                hci.HCI_LE_Periodic_Advertising_Report_Event(
-                    sync_handle=sync.handle,
-                    tx_power=tx_power,
-                    rssi=max(
-                        RADIO_TX_POWER_MIN_DBM, min(RADIO_TX_POWER_MAX_DBM, round(rssi))
+                hci.HCI_LE_Periodic_Advertising_Report_V2_Event(
+                    **parameters,
+                    periodic_event_counter=counter,
+                    subevent=PeriodicReportV2.NO_SUBEVENT
+                    if subevent is None
+                    else subevent,
+                )
+                if v2
+                else hci.HCI_LE_Periodic_Advertising_Report_Event(**parameters)
+            )
+
+    def on_subevent_data_request(self, item: AdvertisingSnapshot, start, count):
+        """LE Periodic Advertising Subevent Data Request (Vol 4, Part E, 7.7.65.36)."""
+        self._emit_hci_packet(
+            hci.HCI_LE_Periodic_Advertising_Subevent_Data_Request_Event(
+                advertising_handle=item.handle,
+                subevent_start=start,
+                subevent_data_count=count,
+            )
+        )
+
+    def on_response_report(
+        self, item: AdvertisingSnapshot, subevent, transmitted, responses
+    ):
+        """LE Periodic Advertising Response Report, one per requested slot (Vol 4,
+        Part E, 7.7.65.37).
+
+        Responses share an event while its parameters fit; a longer response is
+        split, with "more data to come" before its last part.
+        """
+        reports = []
+        for response in responses:
+            if response.data is None:
+                reports.append((response, b'', ResponseReport.DATA_RECEIVE_FAILED))
+                continue
+            data = response.data
+            size = (
+                HCI_EVENT_PARAMETER_SIZE_MAX
+                - HCI_LE_RESPONSE_REPORT_OVERHEAD_SIZE
+                - HCI_LE_RESPONSE_REPORT_RESPONSE_SIZE
+            )
+            for offset in range(0, max(1, len(data)), size):
+                reports.append(
+                    (
+                        response,
+                        data[offset : offset + size],
+                        AdvertisingReport.DATA_INCOMPLETE_MORE_TO_COME
+                        if offset + size < len(data)
+                        else AdvertisingReport.DATA_COMPLETE,
+                    )
+                )
+        batch: list = []
+        used = HCI_LE_RESPONSE_REPORT_OVERHEAD_SIZE
+        for response, data, status in reports:
+            needed = HCI_LE_RESPONSE_REPORT_RESPONSE_SIZE + len(data)
+            if batch and (
+                used + needed > HCI_EVENT_PARAMETER_SIZE_MAX
+                or len(batch) == HCI_LE_RESPONSE_REPORT_RESPONSES_MAX
+            ):
+                self._response_report(item, subevent, transmitted, batch)
+                batch, used = [], HCI_LE_RESPONSE_REPORT_OVERHEAD_SIZE
+            batch.append(
+                ResponseReport.Response(
+                    tx_power=(
+                        response.tx_power
+                        if response.tx_power is not None
+                        else AdvertisingReport.TX_POWER_INFORMATION_NOT_AVAILABLE
+                    ),
+                    rssi=(
+                        max(
+                            RADIO_TX_POWER_MIN_DBM,
+                            min(RADIO_TX_POWER_MAX_DBM, round(response.rssi)),
+                        )
+                        if response.data is not None
+                        else AdvertisingReport.RSSI_NOT_AVAILABLE
                     ),
                     cte_type=HCI_LE_PERIODIC_REPORT_CTE_NONE,
-                    data_status=(
-                        AdvertisingReport.DATA_INCOMPLETE_MORE_TO_COME
-                        if offset + HCI_LE_PERIODIC_REPORT_DATA_SIZE_MAX < len(data)
-                        else data_status
-                    ),
-                    data=data[offset : offset + HCI_LE_PERIODIC_REPORT_DATA_SIZE_MAX],
+                    response_slot=response.slot,
+                    data_status=status,
+                    data=data,
                 )
             )
+            used += needed
+        if batch:
+            self._response_report(item, subevent, transmitted, batch)
+
+    def _response_report(self, item, subevent, transmitted, responses):
+        self._emit_hci_packet(
+            ResponseReport(
+                advertising_handle=item.handle,
+                subevent=subevent,
+                tx_status=0 if transmitted else ResponseReport.TX_FAILED,
+                responses=responses,
+            )
+        )
 
     def on_sync_lost(self, sync: PeriodicSyncSnapshot):
         self._emit_hci_packet(

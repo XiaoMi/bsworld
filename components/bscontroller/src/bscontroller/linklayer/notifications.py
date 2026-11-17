@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from bscontroller.linklayer.connection import Connection
     from bscontroller.linklayer.discovery import Advertising, PeriodicSync
     from bscontroller.linklayer.link import RadioLink
+    from bscontroller.linklayer.pawr import SlotResponse
 
 
 class NotificationSink(Protocol):
@@ -75,6 +76,17 @@ class NotificationSink(Protocol):
     def on_scan_request(
         self, item: AdvertisingSnapshot, peer: AddressSnapshot
     ) -> None: ...
+    def on_subevent_data_request(
+        self, item: AdvertisingSnapshot, start: int, count: int
+    ) -> None: ...
+    def on_response_report(
+        self,
+        item: AdvertisingSnapshot,
+        subevent: int,
+        transmitted: bool,
+        responses: tuple[SlotResponse, ...],
+    ) -> None: ...
+    def on_connect_failed(self, peer: AddressSnapshot, status: int) -> None: ...
     def on_advertisement(
         self,
         address: AddressSnapshot,
@@ -99,9 +111,12 @@ class NotificationSink(Protocol):
         self,
         sync: PeriodicSyncSnapshot,
         data: bytes,
-        rssi: float,
+        rssi: float | None,
         tx_power: int | None,
         data_status: int = DataStatus.COMPLETE,
+        *,
+        counter: int = 0,
+        subevent: int | None = None,
     ) -> None: ...
     def on_sync_lost(self, sync: PeriodicSyncSnapshot) -> None: ...
 
@@ -190,6 +205,23 @@ class NotificationAdapter:
     def on_scan_request(self, item: Advertising, peer: Address) -> None:
         self.sink.on_scan_request(self._advertiser(item), AddressSnapshot(peer))
 
+    def on_subevent_data_request(self, item: Advertising, start: int, count: int):
+        self.sink.on_subevent_data_request(self._advertiser(item), start, count)
+
+    def on_response_report(
+        self,
+        item: Advertising,
+        subevent: int,
+        transmitted: bool,
+        responses: list[SlotResponse],
+    ) -> None:
+        self.sink.on_response_report(
+            self._advertiser(item), subevent, transmitted, tuple(responses)
+        )
+
+    def on_connect_failed(self, peer: Address, status: int) -> None:
+        self.sink.on_connect_failed(AddressSnapshot(peer), status)
+
     def on_advertisement(
         self,
         address: Address,
@@ -233,12 +265,21 @@ class NotificationAdapter:
         self,
         sync: PeriodicSync,
         data: bytes,
-        rssi: float,
+        rssi: float | None,
         tx_power: int | None,
         data_status: int = DataStatus.COMPLETE,
+        *,
+        counter: int = 0,
+        subevent: int | None = None,
     ) -> None:
         self.sink.on_periodic_report(
-            synchronization_snapshot(sync), bytes(data), rssi, tx_power, data_status
+            synchronization_snapshot(sync),
+            bytes(data),
+            rssi,
+            tx_power,
+            data_status,
+            counter=counter,
+            subevent=subevent,
         )
 
     def on_sync_lost(self, sync: PeriodicSync) -> None:

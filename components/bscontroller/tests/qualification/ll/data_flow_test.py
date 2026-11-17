@@ -183,6 +183,10 @@ async def transmit_fragmented_l2cap_header(tester, *, central):
         with length 24 and a dynamic LE CID, then 24 deterministic data octets.
         Read HCI buffer size/credits, using shared buffers if LE has none.
 
+    Test Case Configuration:
+        LL/DFL/CEN/BV-01-C: Central IUT.
+        LL/DFL/PER/BV-01-C: Peripheral IUT.
+
     Test Steps:
         Repeat Steps 1/2 for every Table 4.9-2 round, with start-fragment lengths
         0, 1, 2, 3, 4 and 5 octets respectively.
@@ -229,6 +233,10 @@ async def receive_fragmented_l2cap_header(tester, *, central):
         Select public IUT address, 30-ms interval, zero latency and one-second
         supervision timeout. Build a 28-octet L2CAP frame with a four-octet
         length/CID header and 24 deterministic data octets.
+
+    Test Case Configuration:
+        LL/DFL/CEN/BV-02-C: Central IUT.
+        LL/DFL/PER/BV-02-C: Peripheral IUT.
 
     Test Steps:
         Repeat Steps 1/2 for every Table 4.9-4 round, with start-fragment lengths

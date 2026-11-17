@@ -6,7 +6,7 @@
 
 | Host | 上游 | 版本 |
 |---|---|---|
-| Bumble | [google/bumble](https://github.com/google/bumble) | `bumble==0.0.235`，在 [pyproject.toml](../../../pyproject.toml) 中固定 |
+| Bumble | [google/bumble](https://github.com/google/bumble) | `bumble==0.0.236`，在 [pyproject.toml](../../../pyproject.toml) 中固定 |
 
 ## 准备环境
 
@@ -44,7 +44,7 @@ async with AsyncExitStack() as stack:
     await observer.start_scanning()
 ```
 
-标准双设备场景使用 [conftest.py](conftest.py) 中的 `bumble_pair` fixture。它负责创建 Controller、配置 45 dB 衰减、启动拓扑并打开两个 Host。`open_bumble_device()` 只打开 HCI 连接并初始化 Bumble，不配置或启动拓扑。HCI 抓包位于 `bumble/<role>/`，其余见[产物目录结构](../../../docs/zh-CH/artifacts.md)。
+标准双设备场景使用 [conftest.py](conftest.py) 中的 `bumble_pair` fixture。它负责创建 Controller、配置 45 dB 衰减、启动拓扑并打开两个 Host。`open_bumble_device()` 直接使用上游 Bumble 的传输和 Device API 管理连接与 Host 生命周期，不配置或启动拓扑；广播测试使用 [common/](common/) 中的广播集上下文。HCI 抓包位于 `bumble/<role>/`，其余见[产物目录结构](../../../docs/zh-CH/artifacts.md)。
 
 ## 许可证
 

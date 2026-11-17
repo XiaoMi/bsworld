@@ -27,6 +27,7 @@ from bscontroller import hci
 from bscontroller.hci.backend import RadioBackend
 from bscontroller.hci.controller import Controller
 from bscontroller.linklayer.connection import Connection
+from tests.support import LE_EVENT_MASK_V1
 from tests.unit.helpers import PARAMETERS
 from tests.unit.linklayer.air.harness import ScriptedRadio
 
@@ -51,7 +52,7 @@ class HostSink:
 
 
 class HciHarness:
-    def __init__(self, *, unmask=True, address=IUT_ADDRESS, config=None):
+    def __init__(self, *, unmask=True, address=IUT_ADDRESS, config=None, le_mask=None):
         self.loop = asyncio.new_event_loop()
         self.radio = ScriptedRadio()
         self.host = HostSink()
@@ -70,9 +71,10 @@ class HciHarness:
         self.ll = self.controller.le_procedures.ll
         self.events: list[hci.HCI_Packet] = []
         if unmask:
+            le_mask = LE_EVENT_MASK_V1 if le_mask is None else le_mask
             self.cmd(hci.HCI_Set_Event_Mask_Command(ALL.to_bytes(8, 'little')))
             self.cmd(hci.HCI_Set_Event_Mask_Page_2_Command(ALL.to_bytes(8, 'little')))
-            self.cmd(hci.HCI_LE_Set_Event_Mask_Command(ALL.to_bytes(8, 'little')))
+            self.cmd(hci.HCI_LE_Set_Event_Mask_Command(le_mask.to_bytes(8, 'little')))
 
     def close(self):
         self.loop.close()

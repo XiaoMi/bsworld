@@ -17,17 +17,22 @@ from bscontroller.address import Address, AddressType, OwnAddressType
 from bscontroller.capabilities import (
     CONTROLLER_ADV_DATA_SIZE_MAX,
 )
+from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
     LL_ADV_PRIMARY_CHANNELS,
+    LL_CHANNEL_MAP_SIZE,
     LL_CONN_AUX_WINDOW_DELAY_CODED_US,
     LL_CONN_AUX_WINDOW_DELAY_UNCODED_US,
     LL_DATA_CHANNEL_COUNT,
     LL_DATA_CHANNEL_MAP_ALL,
+    LL_EVENT_COUNTER_MASK,
     LL_IFS_US,
     LL_MAFS_US,
     LL_PERIODIC_INTERVAL_MIN,
+    LL_PERIODIC_INTERVAL_UNIT_US,
     LL_SCA_50_PPM,
     LL_SCA_500_PPM,
+    PDU_ADV_ADDRESS_OFFSET,
     PDU_ADV_ADDRESS_SIZE,
     PDU_ADV_ADDRESSES_END,
     PDU_ADV_ADI_DID_BITS,
@@ -35,10 +40,14 @@ from bscontroller.linklayer import (
     PDU_ADV_CONNECT_PAYLOAD_SIZE,
     PDU_ADV_CONNECT_SIZE,
     PDU_ADV_OFFSET_UNIT_30_US,
+    PDU_ADV_OFFSET_UNIT_300_US,
+    PDU_ADV_OFFSET_VALUE_MASK,
     PDU_ADV_RXADD_MASK,
     PDU_ADV_SCAN_REQ_SIZE,
+    PDU_ADV_SECOND_ADDRESS_OFFSET,
     PDU_ADV_TXADD_MASK,
     PDU_ADV_TYPE_MASK,
+    PDU_CONTROL_INSTANT_SIZE,
     AdvertisingMode,
     AdvertisingPduType,
 )
@@ -50,6 +59,7 @@ from bscontroller.linklayer.advertising import (
     align_offset_us,
     scan_request,
 )
+from bscontroller.linklayer.discovery import AD_TYPE_CHANNEL_MAP_UPDATE_INDICATION
 from bscontroller.linklayer.filtering import (
     DecisionMode,
     InitiatorFilterPolicy,
@@ -58,6 +68,7 @@ from bscontroller.linklayer.filtering import (
 )
 from bscontroller.linklayer.parameters import Parameters
 from bscontroller.linklayer.results import ConnectionAccepted, SyncInfoReceived
+from bscontroller.linklayer.scheduler import RadioPriority
 from bscontroller.linklayer.state import (
     LL_ADV_FILTER_CONNECT_MASK,
     LL_ADV_FILTER_SCAN_MASK,
@@ -70,7 +81,7 @@ from bscontroller.linklayer.timing import window_widening
 from bscontroller.radio.base import RADIO_SWITCH_TIME_US, Phy
 
 if TYPE_CHECKING:
-    from bscontroller.linklayer.discovery import Advertising
+    from bscontroller.linklayer.discovery import Advertising, Initiating, PeriodicSync
     from bscontroller.linklayer.link import RadioLink
     from bscontroller.radio.base import Received
 
@@ -132,6 +143,9 @@ def fragments(first: ExtendedPdu, data: bytes | bytearray, channel: int, phy: Ph
 
 
 def auxiliary_pdu(item: Advertising, sync: SyncInfo | None = None) -> ExtendedPdu:
+    """AUX_ADV_IND fields; a PAwR train's SyncInfo comes with its timing ACAD
+    (Core Vol 6, Part B, 2.3.4.8).
+    """
     return ExtendedPdu(
         address=None if item.anonymous else bytes(item.address),
         random_address=not item.anonymous and item.address.is_random,
@@ -141,7 +155,25 @@ def auxiliary_pdu(item: Advertising, sync: SyncInfo | None = None) -> ExtendedPd
         mode=item.mode,
         sync_info=sync,
         tx_power=item.tx_power_dbm if item.include_tx_power else None,
+        acad=(
+            item.pawr.acad(item.pawr_state.rsp_aa if item.pawr_state else 0)
+            if item.pawr is not None and sync is not None
+            else b''
+        ),
     )
+
+
+def channel_map_acad(item: Advertising) -> bytes:
+    """Channel Map Update Indication while the train has a pending update
+    (Core Vol 6, Part B, 2.3.4.8, 4.4.2.12.1).
+    """
+    if item.periodic_channel_update is None:
+        return b''
+    instant, channels = item.periodic_channel_update
+    value = channels.to_bytes(LL_CHANNEL_MAP_SIZE, 'little') + (
+        instant.to_bytes(PDU_CONTROL_INSTANT_SIZE, 'little')
+    )
+    return bytes([len(value) + 1, AD_TYPE_CHANNEL_MAP_UPDATE_INDICATION]) + value
 
 
 def chain_time_us(packets, phy: Phy) -> int:
@@ -150,21 +182,70 @@ def chain_time_us(packets, phy: Phy) -> int:
     )
 
 
+def connect_request(initiator: Address, advertiser: Address, parameters) -> bytes:
+    """AUX_CONNECT_REQ: InitA, AdvA and LLData (Core Vol 6, Part B, 2.3.3.2)."""
+    return (
+        bytes(
+            [
+                AdvertisingPduType.AUX_CONNECT_REQ
+                | (PDU_ADV_TXADD_MASK if initiator.is_random else 0)
+                | (PDU_ADV_RXADD_MASK if advertiser.is_random else 0),
+                PDU_ADV_CONNECT_PAYLOAD_SIZE,
+            ]
+        )
+        + bytes(initiator)
+        + bytes(advertiser)
+        + parameters.encode()
+    )
+
+
+def connect_response_matches(
+    pdu: ExtendedPdu, advertiser: Address, initiator: Address
+) -> bool:
+    """AUX_CONNECT_RSP from ``advertiser``, targeting ``initiator`` (2.3.2.2)."""
+    return (
+        pdu.kind == AdvertisingPduType.AUX_CONNECT_RSP
+        and not pdu.mode
+        and pdu.address == bytes(advertiser)
+        and pdu.random_address == advertiser.is_random
+        and pdu.target == bytes(initiator)
+        and pdu.random_target == initiator.is_random
+    )
+
+
 def periodic_pdu(item: Advertising) -> ExtendedPdu:
     """First AUX_SYNC_IND fields: the ADI only while the Host includes it.
 
     Its SID matches the superior AUX_ADV_IND; its DID is the periodic data's own
     (Core Vol 6, Part B, 2.3.1.7, 4.4.2.11 and 4.4.2.12.1). fragments() repeats
-    the ADI in every AUX_CHAIN_IND, as Table 2.7 C.1 requires.
+    the ADI in every AUX_CHAIN_IND, as Table 2.7 C.1 requires; a pending
+    channel map update stays in the first PDU's ACAD.
     """
     return ExtendedPdu(
         adi=item.sid << PDU_ADV_ADI_DID_BITS | item.periodic_did
         if item.periodic_adi
-        else None
+        else None,
+        acad=channel_map_acad(item),
+    )
+
+
+def subevent_pdu(item: Advertising, data: bytes = b'') -> ExtendedPdu:
+    """AUX_SYNC_SUBEVENT_IND: optional ADI and ACAD, no AdvA, AuxPtr or chain
+    (Core Vol 6, Part B, 2.3.1.9).
+    """
+    return replace(
+        periodic_pdu(item),
+        data=bytes(data),
+        kind=AdvertisingPduType.AUX_SYNC_SUBEVENT_IND,
     )
 
 
 def periodic_time_us(item: Advertising) -> int:
+    """One periodic event's AUX_SYNC_IND chain, or an empty AUX_SYNC_SUBEVENT_IND:
+    a PAwR train ignores periodic advertising data.
+    """
+    if item.pawr is not None:
+        return item.secondary_phy.airtime_us(len(subevent_pdu(item).encode()))
     return chain_time_us(
         fragments(periodic_pdu(item), item.periodic_data, 0, item.secondary_phy),
         item.secondary_phy,
@@ -372,16 +453,26 @@ class ExtendedProcedures:
         )
         aux_channel = item.did % LL_DATA_CHANNEL_COUNT
         aux_start = start + primary_offset_us(item)
+        anchor_us, counter = item.periodic_next_us, item.periodic_counter
+        if item.pawr is not None:
+            # Point at subevent 0 of an event that has not started: the next
+            # PAwR event's anchor once the current one is under way (2.3.4.6).
+            while anchor_us - aux_start < PDU_ADV_OFFSET_UNIT_30_US:
+                anchor_us += item.periodic_interval * LL_PERIODIC_INTERVAL_UNIT_US
+                counter = (counter + 1) & LL_EVENT_COUNTER_MASK
         info = (
             SyncInfo(
-                item.periodic_next_us - aux_start,
+                anchor_us - aux_start,
                 item.periodic_interval,
-                LL_DATA_CHANNEL_MAP_ALL,
+                item.periodic_channel_map,
                 item.periodic_aa,
                 item.periodic_crc,
-                item.periodic_counter,
+                counter,
             )
             if item.periodic_enabled
+            and PDU_ADV_OFFSET_UNIT_30_US
+            <= anchor_us - aux_start
+            < (PDU_ADV_OFFSET_VALUE_MASK + 1) * PDU_ADV_OFFSET_UNIT_300_US
             else None
         )
         # All enabled primary channels point to one auxiliary event, not three
@@ -667,7 +758,7 @@ class ExtendedProcedures:
         info = ext.sync_info
         if info is not None and sid is not None:
             link.roles.synchronization.acquired(
-                SyncInfoReceived(identity, sid, info, received, address)
+                SyncInfoReceived(identity, sid, info, received, address, ext.acad)
             )
         if (
             link.scan
@@ -784,19 +875,7 @@ class ExtendedProcedures:
             + packet.phy.airtime_us(PDU_ADV_AUX_CONNECT_RSP_SIZE)
         ):
             return
-        request = (
-            bytes(
-                [
-                    AdvertisingPduType.CONNECT_IND
-                    | (PDU_ADV_TXADD_MASK if item.address.is_random else 0)
-                    | (PDU_ADV_RXADD_MASK if address.is_random else 0),
-                    PDU_ADV_CONNECT_PAYLOAD_SIZE,
-                ]
-            )
-            + bytes(item.address)
-            + bytes(address)
-            + parameters.encode()
-        )
+        request = connect_request(item.address, address, parameters)
         request_end = await link._transmit(
             channel, request, start_us=packet.end_us + LL_IFS_US, phy=packet.phy
         )
@@ -852,5 +931,158 @@ class ExtendedProcedures:
                 window_delay_us=window_delay,
                 phy=packet.phy,
                 initiator=item,
+            )
+        )
+
+    async def pawr_connect(
+        self, item: Advertising, initiating: Initiating, channel: int, start_us: int
+    ) -> None:
+        """Send AUX_CONNECT_REQ in place of a PAwR subevent's AUX_SYNC_SUBEVENT_IND,
+        then wait T_IFS for AUX_CONNECT_RSP (Core Vol 6, Part B, 4.4.2.12.2).
+
+        Without that response the request is discarded, once, and the Host
+        learns that the connection failed (Vol 4, Part E, 7.7.65.10).
+        """
+        link = self.link
+        peer, phy = initiating.peer, item.secondary_phy
+        initiating.address, generated = link.privacy.select_local_address(
+            initiating.own_address_type,
+            initiating.identity_address or initiating.address,
+            link.privacy.identity(peer),
+        )
+        local_rpa = initiating.address if generated else None
+        window_delay = (
+            LL_CONN_AUX_WINDOW_DELAY_CODED_US
+            if phy == Phy.LE_CODED
+            else LL_CONN_AUX_WINDOW_DELAY_UNCODED_US
+        )
+        request_end = start_us + phy.airtime_us(PDU_ADV_CONNECT_SIZE)
+        parameters = link.connection_parameters(
+            (initiating.phy_parameters or {}).get(phy, initiating.parameters),
+            request_end,
+            window_delay,
+            phy,
+        )
+        response = None
+        if (
+            parameters is not None
+            and link.roles.connections.can_accept(peer)
+            and link.resource.admit(
+                item,
+                start_us - RADIO_SWITCH_TIME_US,
+                request_end + LL_IFS_US + phy.airtime_us(PDU_ADV_AUX_CONNECT_RSP_SIZE),
+                RadioPriority.PERIODIC_TX,
+                earliest_us=link.radio.earliest_start_us(channel, phy, transmit=True)
+                - RADIO_SWITCH_TIME_US,
+            )
+        ):
+            train = {
+                'access_address': item.periodic_aa,
+                'crc_init': item.periodic_crc,
+            }
+            request_end = await link._transmit(
+                channel,
+                connect_request(initiating.address, peer, parameters),
+                start_us=start_us,
+                phy=phy,
+                power_dbm=item.tx_power_dbm,
+                **train,
+            )
+            response = await link.receive_response(channel, request_end, phy, **train)
+        if link.initiating is not initiating:
+            return
+        try:
+            rsp = ExtendedPdu.decode(response.pdu) if response is not None else None
+        except ValueError:
+            rsp = None
+        if rsp is not None and connect_response_matches(rsp, peer, initiating.address):
+            assert parameters is not None
+            link.roles.connections.accepted(
+                ConnectionAccepted(
+                    parameters,
+                    peer,
+                    Role.CENTRAL,
+                    request_end,
+                    csa2=True,
+                    self_address=initiating.address,
+                    local_rpa=local_rpa,
+                    window_delay_us=window_delay,
+                    phy=phy,
+                    initiator=initiating,
+                    pawr_advertiser=item,
+                )
+            )
+            return
+        link.roles.scanning.cancel_initiating()
+        link.listener.on_connect_failed(
+            peer, ErrorCode.CONNECTION_FAILED_TO_BE_ESTABLISHED_ERROR
+        )
+
+    async def pawr_accept(
+        self, sync: PeriodicSync, channel: int, packet: Received
+    ) -> None:
+        """Answer an AUX_CONNECT_REQ naming this device in a synchronized PAwR
+        subevent, then become its Peripheral (Core Vol 6, Part B, 4.4.2.12.2).
+
+        AdvA must be one of this device's addresses; InitA becomes the peer.
+        """
+        link, pdu = self.link, packet.pdu
+        if (
+            len(pdu) != PDU_ADV_CONNECT_SIZE
+            or pdu[1] != PDU_ADV_CONNECT_PAYLOAD_SIZE
+            or sync.info is None
+        ):
+            return
+        initiator = Address(
+            pdu[PDU_ADV_ADDRESS_OFFSET:PDU_ADV_SECOND_ADDRESS_OFFSET],
+            AddressType(bool(pdu[0] & PDU_ADV_TXADD_MASK)),
+        )
+        target = pdu[PDU_ADV_SECOND_ADDRESS_OFFSET:PDU_ADV_ADDRESSES_END]
+        own = next(
+            (
+                address
+                for address in (link.public_address, link.random_address)
+                if address is not None
+                and bytes(address) == target
+                and address.is_random == bool(pdu[0] & PDU_ADV_RXADD_MASK)
+            ),
+            None,
+        )
+        if own is None or not link.roles.connections.can_accept(initiator):
+            return
+        try:
+            parameters = Parameters.decode(pdu[PDU_ADV_ADDRESSES_END:])
+        except ValueError:
+            return
+        response = ExtendedPdu(
+            kind=AdvertisingPduType.AUX_CONNECT_RSP,
+            address=bytes(own),
+            random_address=own.is_random,
+            target=bytes(initiator),
+            random_target=initiator.is_random,
+        )
+        await link._transmit(
+            channel,
+            response.encode(),
+            start_us=packet.end_us + LL_IFS_US,
+            access_address=sync.info.access_address,
+            crc_init=sync.info.crc_init,
+            phy=packet.phy,
+        )
+        link.roles.connections.accepted(
+            ConnectionAccepted(
+                parameters,
+                initiator,
+                Role.PERIPHERAL,
+                packet.end_us,
+                csa2=True,
+                self_address=own,
+                window_delay_us=(
+                    LL_CONN_AUX_WINDOW_DELAY_CODED_US
+                    if packet.phy == Phy.LE_CODED
+                    else LL_CONN_AUX_WINDOW_DELAY_UNCODED_US
+                ),
+                phy=packet.phy,
+                pawr_sync=sync,
             )
         )

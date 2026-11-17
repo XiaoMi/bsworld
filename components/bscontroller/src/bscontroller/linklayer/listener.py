@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from bscontroller.address import Address
     from bscontroller.linklayer.connection import Connection
     from bscontroller.linklayer.discovery import Advertising, PeriodicSync
+    from bscontroller.linklayer.pawr import SlotResponse
 
 
 class ConnectionListener(Protocol):
@@ -74,6 +75,16 @@ class AdvertisingListener(Protocol):
 
     def on_advertising_ended(self, item: Advertising, status: int) -> None: ...
     def on_scan_request(self, item: Advertising, peer: Address) -> None: ...
+    def on_subevent_data_request(
+        self, item: Advertising, start: int, count: int
+    ) -> None: ...
+    def on_response_report(
+        self,
+        item: Advertising,
+        subevent: int,
+        transmitted: bool,
+        responses: list[SlotResponse],
+    ) -> None: ...
 
 
 class ScanningListener(Protocol):
@@ -95,6 +106,7 @@ class ScanningListener(Protocol):
     ) -> None: ...
     def on_scan_timeout(self) -> None: ...
     def on_scan_period(self) -> None: ...
+    def on_connect_failed(self, peer: Address, status: int) -> None: ...
 
 
 class SynchronizationListener(Protocol):
@@ -106,9 +118,12 @@ class SynchronizationListener(Protocol):
         self,
         sync: PeriodicSync,
         data: bytes,
-        rssi: float,
+        rssi: float | None,
         tx_power: int | None,
         data_status: int = DataStatus.COMPLETE,
+        *,
+        counter: int = 0,
+        subevent: int | None = None,
     ) -> None: ...
     def on_sync_lost(self, sync: PeriodicSync) -> None: ...
 

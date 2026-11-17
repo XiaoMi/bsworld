@@ -39,7 +39,7 @@ NimBLE 源码通过外部依赖获取，不复制到本仓库。
 ## Bumble
 
 - 源码：https://github.com/google/bumble
-- 用途：[Bumble 测试](../../tests/integration/bumble/README.zh-CN.md)使用的 Python Bluetooth Host 协议栈
+- 用途：[Bumble 测试](../../tests/integration/bumble/README.zh-CN.md)和 [BSController 示例](../../components/bscontroller/samples/README.zh-CN.md)使用的 Python Bluetooth Host 协议栈
 - 许可证：Apache License 2.0
 
 BSWorld 使用公开的 Python 和 HCI transport 接口，不修改 Bumble Host 协议栈。

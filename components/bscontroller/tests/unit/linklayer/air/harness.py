@@ -39,6 +39,7 @@ from bscontroller.linklayer.advertising import ExtendedPdu, scan_request
 from bscontroller.linklayer.parameters import Parameters
 from bscontroller.linklayer.timing import LL_RESPONSE_START_TOLERANCE_US
 from bscontroller.radio.base import PHY_CODED_S8_FACTOR, Phy, RadioSwitch, Received
+from tests.support import LE_EVENT_MASK_V1
 
 ErrorCode = hci.HCI_ErrorCode
 PduType = AdvertisingPduType
@@ -293,7 +294,8 @@ class AirHarness:
         self.controller = self.loop.run_until_complete(create())
         self.events: list = []
         self.controller.send_hci_packet = self.events.append
-        self.controller.event_mask = self.controller.le_event_mask = (1 << 64) - 1
+        self.controller.event_mask = (1 << 64) - 1
+        self.controller.le_event_mask = LE_EVENT_MASK_V1
         self.controller.event_mask_page_2 = (1 << 64) - 1
         self.link = self.controller.backend.link
         self.ll = self.controller.le_procedures.ll

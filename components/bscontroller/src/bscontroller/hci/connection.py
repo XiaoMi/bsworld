@@ -13,9 +13,12 @@ from bscontroller.capabilities import (
     CONTROLLER_SUPPORTED_PHY_MASK,
 )
 from bscontroller.hci import (
+    HCI_LE_ADV_HANDLE_MAX,
     HCI_LE_ALL_PHYS_RX_MASK,
     HCI_LE_ALL_PHYS_TX_MASK,
     HCI_LE_EXT_SCAN_INTERVAL_MAX,
+    HCI_LE_NO_ADVERTISING_HANDLE,
+    HCI_LE_NO_SUBEVENT,
     HCI_LE_PHY_OPTIONS_NO_PREFERENCE,
     HCI_LE_PHY_OPTIONS_S2_PREFERRED,
     HCI_LE_PHY_OPTIONS_S8_PREFERRED,
@@ -50,6 +53,7 @@ from bscontroller.linklayer.parameters import (
     valid_channel_map,
     valid_timing,
 )
+from bscontroller.linklayer.pawr import LL_PAWR_SUBEVENTS_MAX
 from bscontroller.radio.base import PHY_CODED_S2_FACTOR, PHY_CODED_S8_FACTOR, Phy
 
 logger = logging.getLogger(__name__)
@@ -61,11 +65,14 @@ class LeConnectionCommands(LeControllerContext):
         self.controller._send_hci_command_status(request.status, command.op_code)
         request.start()
 
-    def _start_initiating(self, command, parameters, windows):
-        """Commit one validated attempt; a rejected command leaves all state intact."""
-        status = self.ll.initiating_status(
-            command.peer_address, bool(command.initiator_filter_policy)
-        )
+    def _start_initiating(self, command, parameters, windows, pawr=None):
+        """Commit one validated attempt; a rejected command leaves all state intact.
+
+        ``pawr`` names the local train and subevent of an Extended Create
+        Connection [v2]; the filter policy does not apply to it (7.8.66).
+        """
+        filter_policy = command.initiator_filter_policy if pawr is None else 0
+        status = self.ll.initiating_status(command.peer_address, bool(filter_policy))
         if status != SUCCESS:
             self.controller._send_hci_command_status(status, command.op_code)
             return
@@ -90,8 +97,10 @@ class LeConnectionCommands(LeControllerContext):
                 command.peer_address,
                 windows,
                 tuple(parameters.items()),
-                filter_policy=command.initiator_filter_policy,
+                filter_policy=filter_policy,
                 own_address_type=command.own_address_type,
+                pawr_advertising_handle=pawr[0] if pawr else None,
+                pawr_subevent=pawr[1] if pawr else 0,
             )
         )
         self.controller._send_hci_command_status(status, command.op_code)
@@ -143,10 +152,47 @@ class LeConnectionCommands(LeControllerContext):
         '''
         See Bluetooth spec Vol 4, Part E - 7.8.66 LE Extended Create Connection Command
         '''
+        self._extended_create_connection(command)
+
+    def on_hci_le_extended_create_connection_v2_command(self, command):
+        '''
+        See Bluetooth spec Vol 4, Part E - 7.8.66 LE Extended Create Connection [v2]
+        Command
+
+        Advertising_Handle and Subevent name a local PAwR train: the Link Layer
+        sends AUX_CONNECT_REQ in that subevent instead of scanning, and ignores
+        the scan parameters (Core Vol 6, Part B, 4.4.2.12.2).
+        '''
+        handle, subevent = command.advertising_handle, command.subevent
+        none = (
+            handle == HCI_LE_NO_ADVERTISING_HANDLE,
+            subevent == HCI_LE_NO_SUBEVENT,
+        )
+        if all(none):
+            self._extended_create_connection(command)
+            return
+        status = (
+            INVALID
+            if any(none)
+            or handle > HCI_LE_ADV_HANDLE_MAX
+            or subevent >= LL_PAWR_SUBEVENTS_MAX
+            else self.ll.pawr_initiating_status(
+                handle, subevent, command.initiating_phys
+            )
+        )
+        if status != SUCCESS:
+            self.controller._send_hci_command_status(status, command.op_code)
+            return
+        self._extended_create_connection(command, pawr=(handle, subevent))
+
+    def _extended_create_connection(self, command, pawr=None):
         if command.initiating_phys & ~CONTROLLER_SUPPORTED_PHY_MASK:
             self.controller._send_hci_command_status(UNSUPPORTED, command.op_code)
             return
-        if not command.initiating_phys & CONTROLLER_PRIMARY_SCAN_PHY_MASK:
+        if (
+            pawr is None
+            and not command.initiating_phys & CONTROLLER_PRIMARY_SCAN_PHY_MASK
+        ):
             self.controller._send_hci_command_status(INVALID, command.op_code)
             return
         # Parameter arrays follow set PHY bits, including LE 2M parameters even
@@ -163,7 +209,8 @@ class LeConnectionCommands(LeControllerContext):
             if (
                 not valid_timing(minimum, maximum, latency, timeout)
                 or command.min_ce_lengths[index] > command.max_ce_lengths[index]
-                or not HCI_LE_SCAN_INTERVAL_MIN
+                or pawr is None
+                and not HCI_LE_SCAN_INTERVAL_MIN
                 <= command.scan_windows[index]
                 <= command.scan_intervals[index]
                 <= HCI_LE_EXT_SCAN_INTERVAL_MAX
@@ -185,7 +232,9 @@ class LeConnectionCommands(LeControllerContext):
         self._start_initiating(
             command,
             values,
-            tuple(
+            ()
+            if pawr is not None
+            else tuple(
                 ScanWindowConfig(
                     phy,
                     command.scan_intervals[index] * HCI_LE_SCAN_INTERVAL_UNIT_US,
@@ -194,6 +243,7 @@ class LeConnectionCommands(LeControllerContext):
                 for index, phy in enumerate(phys)
                 if phy != Phy.LE_2M
             ),
+            pawr,
         )
 
     def on_hci_le_create_connection_cancel_command(self, command):

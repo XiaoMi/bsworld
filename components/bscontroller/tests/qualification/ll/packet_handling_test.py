@@ -27,6 +27,7 @@ from bscontroller.linklayer import (
     PDU_CONTROL_OPCODE_SIZE,
     PDU_CONTROL_PAYLOAD_SIZE_INITIAL_MAX,
     PDU_CONTROL_PERIODIC_SYNC_SIZE,
+    PDU_CONTROL_PERIODIC_SYNC_WR_SIZE,
     PDU_CONTROL_REJECT_EXT_SIZE,
     PDU_CONTROL_REJECT_SIZE,
     PDU_CONTROL_UNKNOWN_RSP_SIZE,
@@ -104,6 +105,7 @@ SUPPORTED_CONTROLS = frozenset(
         Opcode.LL_PHY_UPDATE_IND,
         Opcode.LL_MIN_USED_CHANNELS_IND,
         Opcode.LL_PERIODIC_SYNC_IND,
+        Opcode.LL_PERIODIC_SYNC_WR_IND,
     }
 )
 # Core 6.3, Vol 6 Part B, 2.4.2.25-58: defined CtrData, capped at 26 octets
@@ -124,7 +126,6 @@ UNSUPPORTED_CONTROL_DATA_LENGTHS = {
     Opcode.LL_SUBRATE_IND: 10,
     Opcode.LL_CHANNEL_REPORTING_IND: 3,
     Opcode.LL_CHANNEL_STATUS_IND: 10,
-    Opcode.LL_PERIODIC_SYNC_WR_IND: 26,
     Opcode.LL_FEATURE_EXT_REQ: 26,
     Opcode.LL_FEATURE_EXT_RSP: 26,
     Opcode.LL_CS_SEC_RSP: 20,
@@ -178,6 +179,7 @@ INVALID_LENGTH_CASES = {
     Opcode.LL_PHY_UPDATE_IND: (2 + PDU_CONTROL_INSTANT_SIZE, 'ad'),
     Opcode.LL_MIN_USED_CHANNELS_IND: (2, 'ad'),
     Opcode.LL_PERIODIC_SYNC_IND: (PDU_CONTROL_PERIODIC_SYNC_SIZE - 1, 'ad'),
+    Opcode.LL_PERIODIC_SYNC_WR_IND: (PDU_CONTROL_PERIODIC_SYNC_WR_SIZE - 1, 'ad'),
 }
 # Section 4.7.3.3 requires six distinct invalid lengths per supported opcode.
 INVALID_LENGTH_ROUNDS = 6
@@ -515,6 +517,10 @@ async def control_pdus_with_invalid_length(tester, *, central):
         addresses, 10-ms interval, 300-ms timeout and the corrected two-channel
         common map. Complete the optional-feature exchange preamble.
 
+    Test Case Configuration:
+        LL/PAC/CEN/BI-01-C: Central IUT.
+        LL/PAC/PER/BI-01-C: Peripheral IUT.
+
     Test Steps:
         1. Execute Steps 2-9 for each independently declared supported opcode.
         2. If its valid CtrData length exceeds zero, test zero and valid-minus-one.
@@ -658,6 +664,10 @@ async def unknown_control_pdus(tester, *, central):
         SUPPORTED_CONTROLS independently declares the DUT's implemented opcodes;
         it is not obtained from Controller dispatch code.
 
+    Test Case Configuration:
+        LL/PAC/CEN/BV-01-C: Central IUT.
+        LL/PAC/PER/BV-01-C: Peripheral IUT.
+
     Test Steps:
         1. Repeat Steps 2-3 for every opcode outside SUPPORTED_CONTROLS.
            Known unsupported PDUs carry their Core 6.3 CtrData length, truncated
@@ -788,6 +798,10 @@ async def control_pdus_not_permitted_in_the_current_role(tester, *, central):
         timeout and a legal two-channel map. Before the procedure, complete
         Feature Exchange for the optional features under test (Section 4.1.6).
         Keep the connection unencrypted while testing forbidden encryption PDUs.
+
+    Test Case Configuration:
+        LL/PAC/CEN/BV-02-C: Central IUT.
+        LL/PAC/PER/BV-02-C: Peripheral IUT.
 
     Test Steps:
         1. Repeat Steps 2-3 for every supported opcode forbidden in the current

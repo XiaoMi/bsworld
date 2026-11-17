@@ -77,6 +77,7 @@ from bscontroller.radio.base import (
     Phy,
 )
 from bscontroller.radio.packet import crc24
+from tests.support import LE_EVENT_MASK_V1
 
 AdvType = hci.HCI_LE_Set_Advertising_Parameters_Command.AdvertisingType
 TX_POWER_NO_PREFERENCE = (
@@ -191,6 +192,9 @@ class HciProbe:
         )
         allowed = status if isinstance(status, tuple) else (status,)
         assert actual in allowed, (command.name, actual, status)
+        # Preserve the original wire parameters: typed error decoders may retain
+        # Status only, although Core 4.5.1 still requires an echoed handle.
+        self.last_command_event = event
         return parameters
 
     async def event(self, event_type):
@@ -201,7 +205,7 @@ class HciProbe:
             )
         return await self.expect(lambda event: isinstance(event, event_type))
 
-    async def masks(self, *, general=(1 << 64) - 1, le=(1 << 64) - 1):
+    async def masks(self, *, general=(1 << 64) - 1, le=LE_EVENT_MASK_V1):
         await self.command(
             hci.HCI_Set_Event_Mask_Command(general.to_bytes(8, 'little'))
         )

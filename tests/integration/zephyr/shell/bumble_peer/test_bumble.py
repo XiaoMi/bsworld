@@ -18,7 +18,7 @@ from bumble.device import (
     PeriodicAdvertisingSync,
 )
 from bumble.gatt import Characteristic, Service
-from tests.integration.bumble.common import advertising_data
+from tests.integration.bumble.common import advertising, advertising_data
 from tests.integration.zephyr.shell_common import shell_identity
 
 _TIMEOUT = 30
@@ -29,9 +29,9 @@ _PAYLOAD = bytes(range(200))
 def _bumble_address(shell_address: str) -> hci.Address:
     """Convert a shell "P:" or "R:" address into a typed Bumble address."""
     kind = (
-        hci.Address.RANDOM_DEVICE_ADDRESS
+        hci.AddressType.RANDOM_DEVICE
         if shell_address.startswith("R:")
-        else hci.Address.PUBLIC_DEVICE_ADDRESS
+        else hci.AddressType.PUBLIC_DEVICE
     )
     return hci.Address(shell_address[2:], kind)
 
@@ -41,9 +41,8 @@ async def _connect(peer, *, shell_central=False):
     if shell_central:
         connected = asyncio.get_running_loop().create_future()
         bumble.once("connection", connected.set_result)
-        await bumble.start_advertising(
-            own_address_type=hci.OwnAddressType.PUBLIC,
-            advertising_data=advertising_data("Bumble peer"),
+        await peer.stack.enter_async_context(
+            advertising(bumble, connectable=True, data=advertising_data("Bumble peer"))
         )
         await shell.shell.run(f"bt connect {_ADDRESS}")
         connection = await asyncio.wait_for(connected, _TIMEOUT)
@@ -69,12 +68,13 @@ async def _disconnect(peer, connection):
 
 @pytest.mark.parametrize("active", [False, True], ids=["passive", "active"])
 async def test_shell_scans_bumble(peer, active):
-    await peer.bumble.start_advertising(
-        own_address_type=hci.OwnAddressType.PUBLIC,
-        advertising_data=advertising_data("Bumble peer")
-        if not active
-        else b"\x02\x01\x06",
-        scan_response_data=advertising_data("Bumble peer") if active else b"",
+    await peer.stack.enter_async_context(
+        advertising(
+            peer.bumble,
+            connectable=True,
+            data=advertising_data("Bumble peer") if not active else b"\x02\x01\x06",
+            scan_response_data=advertising_data("Bumble peer") if active else b"",
+        )
     )
     await peer.shell.shell.run("bt scan on" if active else "bt scan passive")
     await peer.shell.wait_log(r"\[DEVICE\]: P:F0:F1:F2:F3:F4:01,.*Bumble peer")
@@ -88,7 +88,8 @@ async def test_bumble_scans_shell(peer):
     def advertisement(report):
         if (
             not seen.done()
-            and report.data.get(AdvertisingData.COMPLETE_LOCAL_NAME) == "BSWorld shell"
+            and report.data.get(AdvertisingData.Type.COMPLETE_LOCAL_NAME)
+            == "BSWorld shell"
         ):
             seen.set_result(report)
 
@@ -162,9 +163,8 @@ async def test_shell_link_layer_updates(peer):
 async def test_shell_filter_accept_list_connects_bumble(peer):
     connected = asyncio.get_running_loop().create_future()
     peer.bumble.once("connection", connected.set_result)
-    await peer.bumble.start_advertising(
-        own_address_type=hci.OwnAddressType.PUBLIC,
-        advertising_data=advertising_data("Bumble peer"),
+    await peer.stack.enter_async_context(
+        advertising(peer.bumble, connectable=True, data=advertising_data("Bumble peer"))
     )
     await peer.shell.shell.run(f"bt fal-add {_ADDRESS}")
     await peer.shell.shell.run("bt fal-connect on")

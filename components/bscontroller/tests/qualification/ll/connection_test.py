@@ -7,6 +7,7 @@ import random
 import struct
 from collections import deque
 from dataclasses import replace
+from functools import partial
 from itertools import pairwise
 
 import pytest
@@ -62,7 +63,6 @@ from bscontroller.linklayer import (
     PDU_CONTROL_FEATURE_SET_SIZE,
     PDU_CONTROL_INSTANT_SIZE,
     PDU_CONTROL_PHY_REQ_SIZE,
-    PDU_CONTROL_PHY_UPDATE_SIZE,
     PDU_CONTROL_VERSION_SIZE,
     PDU_CRC_SIZE,
     PDU_DATA_EMPTY_TIME_CODED_S8_US,
@@ -97,6 +97,7 @@ from bscontroller.radio.base import (
     PHY_TIME_UNITS_PER_SECOND,
     Phy,
 )
+from tests.qualification import pawr as pawr_peer
 from tests.qualification import privacy as privacy_peer
 from tests.qualification.cases import (
     ProcedureMap,
@@ -116,12 +117,23 @@ from tests.qualification.link import (
     _wire_event,
 )
 from tests.qualification.peer import (
+    LONG_CONTROL_FEATURES,
+    LongControlPeer,
     PeerLink,
     establish,
+    exchange_features,
     host_send,
     peer_send,
     received_acl,
 )
+from tests.qualification.peer import change_phy as _change_phy
+from tests.qualification.peer import check_phy_choice as _check_phy_choice
+from tests.qualification.peer import finish_phy_update as _finish_update
+from tests.qualification.peer import phy_bit as _bit
+from tests.qualification.peer import phy_request as _phy_request
+from tests.qualification.peer import phy_update_pdu as _update_pdu
+from tests.qualification.peer import settle_autonomous_phy as _settle_autonomous_phy
+from tests.qualification.periodic import PeriodicTrain
 from tests.qualification.tester import (
     DUT_ADDRESS,
     LOWER_CENTRAL_PUBLIC_ADDRESS,
@@ -141,6 +153,13 @@ from tests.qualification.tester import (
     follow_auxiliary,
     legacy_parameters,
     request_pdu,
+)
+from tests.qualification.transfer import (
+    SERVICE_DATA,
+    SyncIndication,
+    TransferSession,
+    lower_train,
+    transferred_anchor,
 )
 
 EDIV = 4660
@@ -278,7 +297,10 @@ async def _connectable_advertisement(tester, link=None):
     )
 
 
-async def _initiate_auxiliary(tester, *, phy, retry, decision=False):
+async def _initiate_auxiliary(
+    tester, *, phy, retry, decision=False, timeout=None, peer_factory=PeerLink
+):
+    timeout = SUPERVISION_TIMEOUT if timeout is None else timeout
     peer = LOWER_PERIPHERAL_PUBLIC_ADDRESS
     primary_phy = Phy.LE_CODED if phy == Phy.LE_CODED else Phy.LE_1M
     if decision:
@@ -296,6 +318,7 @@ async def _initiate_auxiliary(tester, *, phy, retry, decision=False):
             initiating_phys=1 << primary_phy - 1,
             scan_intervals=[AUXILIARY_SCAN_INTERVAL],
             scan_windows=[AUXILIARY_SCAN_INTERVAL],
+            supervision_timeouts=[timeout],
         )
     )
     adi = ADVERTISING_SID << PDU_ADV_ADI_DID_BITS
@@ -345,7 +368,7 @@ async def _initiate_auxiliary(tester, *, phy, retry, decision=False):
             assert (parameters.interval, parameters.latency, parameters.timeout) == (
                 CONNECTION_INTERVAL,
                 0,
-                SUPERVISION_TIMEOUT,
+                timeout,
             )
             check_access_address(parameters.access_address, phy=phy)
             if not retry or requests > 1:
@@ -359,7 +382,7 @@ async def _initiate_auxiliary(tester, *, phy, retry, decision=False):
                     start_us=request.end_us + LL_IFS_US,
                     phy=phy,
                 )
-                link = PeerLink(
+                link = peer_factory(
                     tester, parameters, request.end_us, central=True, csa2=True, phy=phy
                 )
                 delay = (
@@ -441,48 +464,6 @@ async def _accept_remote_parameters(
         await link.exchange(update, llid=LlId.CONTROL, check_ack=True)
     await _check_parameter_update(
         tester, link, update, interval, timeout, optional_error=optional_error
-    )
-
-
-async def _change_phy(tester, link, phy, *, local):
-    mask = 1 << phy - 1
-    if local:
-        await tester.command(hci.HCI_LE_Set_PHY_Command(link.handle, 0, mask, mask, 0))
-        response = await link.control(Opcode.LL_PHY_REQ)
-        assert len(response) == PDU_CONTROL_PHY_REQ_SIZE and response[1] and response[2]
-        if not response[1] & response[2] & mask:
-            pytest.skip(
-                'Inconclusive: PHY setup request cannot select the required PHY'
-            )
-        if link.central:
-            await link.exchange(
-                bytes([Opcode.LL_PHY_RSP, mask, mask]), llid=LlId.CONTROL
-            )
-    else:
-        response = await link.control(
-            Opcode.LL_PHY_RSP, bytes([Opcode.LL_PHY_REQ, mask, mask])
-        )
-        assert len(response) == PDU_CONTROL_PHY_REQ_SIZE and response[1] and response[2]
-        if not response[1] & response[2] & mask:
-            pytest.skip(
-                'Inconclusive: PHY setup response cannot select the required PHY'
-            )
-    if link.central:
-        update = await link.control(Opcode.LL_PHY_UPDATE_IND)
-        assert len(update) == PDU_CONTROL_PHY_UPDATE_SIZE
-        allowed = {0, *(_bit(supported) for supported in Phy)}
-        assert all(value in allowed for value in update[1:3])
-        current = (link.rx_phy, link.tx_phy)
-        if any(
-            (Phy(value.bit_length()) if value else previous) != phy
-            for value, previous in zip(update[1:3], current)
-        ):
-            pytest.skip('Inconclusive: PHY setup did not select the required PHY')
-    else:
-        update = _update_pdu(link, mask, mask)
-        await link.exchange(update, llid=LlId.CONTROL)
-    await _finish_update(
-        tester, link, update, event_required=local, allowed=(mask, mask)
     )
 
 
@@ -2131,6 +2112,7 @@ DUPLICATE_WINDOW_SIZE = 4
 # Select legacy completion while keeping forbidden CSA/advertising events observable.
 LEGACY_CONNECTION_EVENT_MASK = (1 << 64) - 1 & ~(
     1 << hci.HCI_LE_ENHANCED_CONNECTION_COMPLETE_EVENT - 1
+    | 1 << hci.HCI_LE_ENHANCED_CONNECTION_COMPLETE_V2_EVENT - 1
 )
 # Keep both roles alive beyond setup rather than checking HCI notifications alone.
 MAINTAINED_EVENTS = 10
@@ -2474,33 +2456,6 @@ RESPONDING = (
 )
 
 
-def _bit(phy):
-    return 1 << phy - 1
-
-
-def _phy_request(packet):
-    if packet.pdu[0] & PDU_DATA_LLID_MASK == LlId.CONTROL and packet.pdu[
-        PDU_HEADER_SIZE : PDU_HEADER_SIZE + 1
-    ] == bytes([Opcode.LL_PHY_REQ]):
-        request = packet.pdu[PDU_HEADER_SIZE:]
-        assert len(request) == PDU_CONTROL_PHY_REQ_SIZE
-        supported = sum(_bit(phy) for phy in Phy)
-        assert request[1] and request[2] and not (request[1] | request[2]) & ~supported
-        return request
-    return None
-
-
-async def _settle_autonomous_phy(link):
-    """Answer an autonomous Central request with current-PHY-only preferences."""
-    response = bytes([Opcode.LL_PHY_RSP, _bit(link.tx_phy), _bit(link.rx_phy)])
-    update = await link.control(Opcode.LL_PHY_UPDATE_IND, response, check_ack=True)
-    assert update == bytes([Opcode.LL_PHY_UPDATE_IND, 0, 0, 0, 0])
-    assert not any(
-        isinstance(event, hci.HCI_LE_PHY_Update_Complete_Event)
-        for event in link.tester.events
-    ), 'autonomous no-change procedure notified the Host'
-
-
 async def _central_response(link, request):
     """Handle Step 3 collision, but forbid later unsolicited requests."""
     while True:
@@ -2522,74 +2477,6 @@ async def _central_response(link, request):
                 return response
             packet = await link.exchange()
         raise AssertionError('Central PHY update indication absent')
-
-
-def _check_phy_choice(update, allowed, current, *, constrained_zero=False):
-    """Validate directional choices independently of the Controller selection."""
-    assert len(update) == PDU_CONTROL_PHY_UPDATE_SIZE
-    assert update[0] == Opcode.LL_PHY_UPDATE_IND
-    choices = update[1:3]
-    for selected, common, old in zip(choices, allowed, current):
-        assert selected in (0, *(_bit(phy) for phy in Phy))
-        assert not selected or selected & common
-        assert not selected or selected != _bit(old), 'unchanged PHY must use zero'
-        if constrained_zero and any(choices) and not selected:
-            assert not common or common & _bit(old), 'illegal one-direction no-change'
-    return any(choices)
-
-
-async def _finish_update(
-    tester,
-    link,
-    update,
-    *,
-    event_required,
-    allowed,
-    constrained_zero=False,
-    allow_autonomous=False,
-):
-    current = (link.rx_phy, link.tx_phy) if link.central else (link.tx_phy, link.rx_phy)
-    changed = _check_phy_choice(
-        update, allowed, current, constrained_zero=constrained_zero
-    )
-    instant = int.from_bytes(update[-PDU_CONTROL_INSTANT_SIZE:], 'little')
-    pending = None
-    if changed:
-        assert (
-            0
-            <= (instant - link.counter & LL_EVENT_COUNTER_MASK)
-            < LL_EVENT_COUNTER_MASK // 2
-        )
-        options = (
-            {'forbidden_opcodes': (Opcode.LL_PHY_REQ,)} if allow_autonomous else {}
-        )
-        await link.apply_update(update, check_event_timing=True, **options)
-        if allow_autonomous:
-            pending = _phy_request(link.last_received)
-    else:
-        assert instant == 0
-    for _ in range(2):
-        packet = await link.exchange()
-        if allow_autonomous:
-            request = _phy_request(packet)
-            if request is not None:
-                assert pending is None or pending == request
-                pending = request
-    if event_required or changed:
-        event = await tester.event(hci.HCI_LE_PHY_Update_Complete_Event)
-        assert (event.status, event.connection_handle, event.tx_phy, event.rx_phy) == (
-            ErrorCode.SUCCESS,
-            link.handle,
-            link.rx_phy,
-            link.tx_phy,
-        )
-    assert not any(
-        isinstance(event, hci.HCI_LE_PHY_Update_Complete_Event)
-        for event in tester.events
-    ), 'unexpected or duplicate PHY completion'
-    if pending is not None:
-        await _settle_autonomous_phy(link)
-    return changed
 
 
 def _initiating_selection(request, preferences, current):
@@ -3032,17 +2919,6 @@ def _select(mask, preferences):
     if mask.bit_count() <= 1:
         return mask
     return next(value for value in preferences if value & mask)
-
-
-def _update_pdu(link, central, peripheral):
-    instant = (
-        link.counter + LL_INSTANT_MIN_LISTENING_EVENTS + 1 & LL_EVENT_COUNTER_MASK
-        if central or peripheral
-        else 0
-    )
-    return bytes([Opcode.LL_PHY_UPDATE_IND, central, peripheral]) + instant.to_bytes(
-        PDU_CONTROL_INSTANT_SIZE, 'little'
-    )
 
 
 # Minimum interval, zero latency and intermediate 3-second supervision timeout.
@@ -6275,6 +6151,11 @@ async def extended_advertising_accepting_connections(tester, *, phy):
         WinSize=WinOffset=7, latency=0, timeout=30 (300 ms), CRCInit=0x198891,
         Hop=5, SCA category 0, and the reviewed common-table ChM=0x03 correction.
 
+    Test Case Configuration:
+        LL/CON/ADV/BV-05-C: LE 1M.
+        LL/CON/ADV/BV-12-C: LE 2M.
+        LL/CON/ADV/BV-13-C: LE Coded.
+
     Test Steps:
         Execute all four ADV_EXT_IND rounds in Table 4.3-3: properties 0x0001
         with matching/wrong AdvA, then properties 0x0005 with matching/wrong
@@ -6489,6 +6370,10 @@ async def accepting_connections_channel_selection_algorithm_1(tester, *, extende
         LL/CON/ADV/BV-07-C uses legacy HCI advertising commands;
         LL/CON/ADV/BV-27-C uses extended HCI commands with legacy PDUs.
 
+    Test Case Configuration:
+        LL/CON/ADV/BV-07-C: legacy advertising.
+        LL/CON/ADV/BV-27-C: extended advertising.
+
     Test Steps:
         1. Configure advertising through the command selected by Table 4.3-4,
            using all primary channels and the minimum applicable interval. Set
@@ -6571,6 +6456,10 @@ async def directed_advertising_connection_channel_selection_algorithm_1(
         CRCInit=0x198891, Hop=5, SCA category 0, and corrected ChM=0x03.
         LL/CON/ADV/BV-08-C uses legacy HCI advertising commands;
         LL/CON/ADV/BV-28-C uses extended HCI commands with legacy PDUs.
+
+    Test Case Configuration:
+        LL/CON/ADV/BV-08-C: legacy advertising.
+        LL/CON/ADV/BV-28-C: extended advertising.
 
     Test Steps:
         1. Configure advertising through the command selected by Table 4.3-5,
@@ -6655,6 +6544,10 @@ async def accepting_connections_channel_selection_algorithm_2(tester, *, extende
         LL/CON/ADV/BV-09-C uses legacy HCI advertising commands;
         LL/CON/ADV/BV-29-C uses extended HCI commands with legacy PDUs.
 
+    Test Case Configuration:
+        LL/CON/ADV/BV-09-C: legacy advertising.
+        LL/CON/ADV/BV-29-C: extended advertising.
+
     Test Steps:
         1. Configure advertising through the command selected by Table 4.3-6,
            using all primary channels and the minimum applicable interval. Set
@@ -6736,6 +6629,10 @@ async def directed_advertising_connection_channel_selection_algorithm_2(
         CRCInit=0x198891, Hop=5, SCA category 0, and corrected ChM=0x03.
         LL/CON/ADV/BV-10-C uses legacy HCI advertising commands;
         LL/CON/ADV/BV-30-C uses extended HCI commands with legacy PDUs.
+
+    Test Case Configuration:
+        LL/CON/ADV/BV-10-C: legacy advertising.
+        LL/CON/ADV/BV-30-C: extended advertising.
 
     Test Steps:
         1. Configure advertising through the command selected by Table 4.3-7,
@@ -7542,6 +7439,10 @@ async def initiation_device_filtering_undirected(tester, *, directed):
         ADV_IND for BV-40-C and ADV_DIRECT_IND targeting the IUT for BV-41-C.
         Both selected variants permit and require the supported CSA notification.
 
+    Test Case Configuration:
+        LL/CON/INI/BV-40-C: undirected advertising.
+        LL/CON/INI/BV-41-C: directed advertising.
+
     Test Steps:
         1. Clear the Filter Accept List and add the selected common peer address
            with public address type.
@@ -7651,6 +7552,11 @@ async def extended_scanning_connection_initiation(tester, *, phy):
         BV-26-C: initiating LE Coded, primary LE Coded, secondary LE Coded.
         These three selected cases all use ADV_EXT_IND, not decision PDUs.
 
+    Test Case Configuration:
+        LL/CON/INI/BV-13-C: LE 1M.
+        LL/CON/INI/BV-25-C: LE 2M.
+        LL/CON/INI/BV-26-C: LE Coded.
+
     Test Steps:
         1. Set Decision Instructions only for Table 4.3-22 decision-PDU cases.
            This step does not apply to the three selected ADV_EXT_IND variants.
@@ -7737,6 +7643,10 @@ async def connection_initiation_channel_selection_algorithm_1(tester, *, directe
         BV-15-C. Use the selected advertising cadence and enable the required
         connection and Channel Selection Algorithm events.
 
+    Test Case Configuration:
+        LL/CON/INI/BV-14-C: undirected advertising.
+        LL/CON/INI/BV-15-C: directed advertising.
+
     Test Steps:
         1. Send LE Create Connection with filter policy 0x00, matching public peer
            address/type and selected connection parameters. Require successful
@@ -7804,6 +7714,10 @@ async def connection_initiation_channel_selection_algorithm_2(tester, *, directe
         selects ADV_IND for BV-16-C or ADV_DIRECT_IND targeting the IUT for
         BV-17-C. Use the selected advertising cadence and enable the required
         connection and Channel Selection Algorithm events.
+
+    Test Case Configuration:
+        LL/CON/INI/BV-16-C: undirected advertising.
+        LL/CON/INI/BV-17-C: directed advertising.
 
     Test Steps:
         1. Send LE Create Connection with filter policy 0x00, matching public peer
@@ -9415,6 +9329,11 @@ async def accepting_connection_parameter_request_preferred_periodicity(
         An unencrypted connected Peripheral with supported own address type,
         common interval/channel parameters, selected timeout and SCA. Select
         public peers; the Lower Tester maintains the Central role and ACL handle.
+
+    Test Case Configuration:
+        LL/CON/PER/BV-31-C: Preferred_Periodicity without preferred anchor
+            points.
+        LL/CON/PER/BV-32-C: Preferred_Periodicity with preferred anchor points.
 
     Test Steps:
         1. Select alternative 1A or 1B according to Table 4.3-40:
@@ -11838,6 +11757,10 @@ async def phy_update_procedure_invalid_or_unsupported_phy_central_initiated(
         is Central. Read the declared local feature set to validate any later
         Feature Response. The IUT supports LE 1M, LE 2M and LE Coded.
 
+    Test Case Configuration:
+        LL/CON/PER/BI-20-C: multiple PHY bits 0x03.
+        LL/CON/PER/BI-21-C: RFU PHY bit 0x80.
+
     Test Steps:
         1. Send LL_PHY_REQ with TX_PHYS=RX_PHYS=0xFF.
         2. Receive LL_PHY_RSP with nonzero TX/RX masks containing only the
@@ -13331,6 +13254,11 @@ async def accepting_connection_parameter_request(tester, *, anchors):
         BV-32-C: preferred periodicity and Offset0=0.
         BV-33-C: preferred periodicity, a valid reference event and Offset0=1.25 ms;
         Offset1-5 are unspecified.
+
+    Test Case Configuration:
+        LL/CON/CEN/BV-32-C: Preferred_Periodicity without preferred anchor
+            points.
+        LL/CON/CEN/BV-33-C: Preferred_Periodicity with preferred anchor points.
 
     Test Steps:
         1. Send LL_CONNECTION_PARAM_REQ with a nonzero interval range, zero
@@ -15211,6 +15139,22 @@ async def data_length_update_invalid_parameters(tester, *, central, phy, report_
         peer limits (no effective change); for ALT 5B negotiate maximum peer
         limits (an effective receive-length change and Host event).
 
+    Test Case Configuration:
+        LL/CON/CEN/BI-07-C: Central IUT, LE 1M, ALT 5A, minimum peer lengths.
+        LL/CON/CEN/BI-08-C: Central IUT, LE 2M, ALT 5A, minimum peer lengths.
+        LL/CON/CEN/BI-09-C: Central IUT, LE Coded, ALT 5A, minimum peer lengths.
+        LL/CON/CEN/BI-24-C: Central IUT, LE 1M, ALT 5B, maximum peer lengths.
+        LL/CON/CEN/BI-25-C: Central IUT, LE 2M, ALT 5B, maximum peer lengths.
+        LL/CON/CEN/BI-26-C: Central IUT, LE Coded, ALT 5B, maximum peer lengths.
+        LL/CON/PER/BI-10-C: Peripheral IUT, LE 1M, ALT 5A, minimum peer lengths.
+        LL/CON/PER/BI-11-C: Peripheral IUT, LE 2M, ALT 5A, minimum peer lengths.
+        LL/CON/PER/BI-12-C: Peripheral IUT, LE Coded, ALT 5A, minimum peer
+            lengths.
+        LL/CON/PER/BI-31-C: Peripheral IUT, LE 1M, ALT 5B, maximum peer lengths.
+        LL/CON/PER/BI-32-C: Peripheral IUT, LE 2M, ALT 5B, maximum peer lengths.
+        LL/CON/PER/BI-33-C: Peripheral IUT, LE Coded, ALT 5B, maximum peer
+            lengths.
+
     Test Steps:
         For all twelve Table 4.3-117 rows, exercise both request alternatives:
         1-3. Send valid peer LENGTH_REQ, verify LENGTH_RSP and any corresponding
@@ -15979,6 +15923,11 @@ async def decision_advertising_accepting_connections(tester, *, phy):
         Public local/peer addresses, all primary channels, minimum interval;
         Table 4.3-2 selects 1M/1M, 1M/2M or Coded/Coded PHYs.
 
+    Test Case Configuration:
+        LL/CON/ADV/BV-17-C: LE 1M.
+        LL/CON/ADV/BV-18-C: LE 2M.
+        LL/CON/ADV/BV-19-C: LE Coded.
+
     Test Steps:
         Execute Section 4.3.3.3 steps 1-16 for Table 4.3-3 rounds 5 and 6:
         configure properties 0x0081 and six random decision-data octets with
@@ -16012,6 +15961,11 @@ async def extended_advertising_random_initiator(tester, *, phy):
 
     Initial Condition:
         Public IUT advertiser, accept-all policy, all primary channels.
+
+    Test Case Configuration:
+        LL/CON/ADV/BV-14-C: LE 1M.
+        LL/CON/ADV/BV-15-C: LE 2M.
+        LL/CON/ADV/BV-16-C: LE Coded.
 
     Test Steps:
         Execute steps 1-11 for every Table 4.3-9 InitA class: random static,
@@ -16418,6 +16372,11 @@ async def privacy_initiation_reject_identity(tester, *, directed=False, enabled=
         A nonzero Peer IRK is associated with the public peer identity in network
         privacy mode. Address resolution is enabled or disabled per Table 4.3-28.
 
+    Test Case Configuration:
+        LL/CON/INI/BV-18-C: undirected advertising, address resolution enabled.
+        LL/CON/INI/BV-19-C: directed advertising, address resolution enabled.
+        LL/CON/INI/BV-24-C: undirected advertising, address resolution disabled.
+
     Test Steps:
         1-3. Configure identity advertising, populate the resolving list and
              start initiation using the peer identity and local private address.
@@ -16444,6 +16403,11 @@ async def decision_initiation_phys(tester, *, phy):
     Initial Condition:
         Public local and peer addresses; Table 4.3-22 selects the primary and
         secondary PHYs and continuous scanning interval/window 0x10.
+
+    Test Case Configuration:
+        LL/CON/INI/BV-30-C: LE 1M.
+        LL/CON/INI/BV-31-C: LE 2M.
+        LL/CON/INI/BV-32-C: LE Coded.
 
     Test Steps:
         1-3. Install one all-outcomes decision instruction, initiate with policy 2,
@@ -16636,6 +16600,355 @@ async def decision_initiation_filter_policy(tester):
         await _decision_initiating_observation(
             tester, decision=decision, expected=expected
         )
+
+
+# Table 4.3-1: WR_IND is the longest supported control PDU (42 + 1 octets).
+LONG_CONTROL_PAYLOAD_SIZE = 43
+LONG_CONTROL_EVENTS = 10
+
+
+async def _long_control_link(
+    tester,
+    *,
+    central,
+    phy,
+    reject=False,
+    features=LONG_CONTROL_FEATURES,
+    feature_delay_us=0,
+    lengths=MINIMUM,
+):
+    """Connect on the target PHY without an intervening Feature Exchange."""
+    peer_factory = partial(
+        LongControlPeer,
+        features=features,
+        lengths=lengths,
+        reject=reject,
+        feature_delay_us=feature_delay_us,
+    )
+    if central and phy != Phy.LE_1M:
+        link = await _initiate_auxiliary(
+            tester, phy=phy, retry=False, timeout=200, peer_factory=peer_factory
+        )
+    else:
+        link = await establish(
+            tester,
+            central=central,
+            extended=True,
+            phy=phy,
+            timeout=200,
+            peer_address=(
+                LOWER_PERIPHERAL_PUBLIC_ADDRESS
+                if central
+                else LOWER_CENTRAL_PUBLIC_ADDRESS
+            ),
+            peer_factory=peer_factory,
+        )
+    assert link.tx_phy == link.rx_phy == phy
+    if central:
+        assert link.parameters.timeout >= 200
+    return link
+
+
+async def _long_control_data_length(tester, link):
+    """Complete maximum DLE without performing Feature Exchange."""
+    link.lengths = MAXIMUM
+    payload = await link.control(
+        Opcode.LL_LENGTH_RSP,
+        bytes([Opcode.LL_LENGTH_REQ]) + LENGTH_FIELDS.pack(*MAXIMUM),
+    )
+    dut = _check_parameters(payload, Opcode.LL_LENGTH_RSP, MAXIMUM)
+    assert dut[0] >= LONG_CONTROL_PAYLOAD_SIZE
+    await link.exchange()
+    changed = await tester.event(hci.HCI_LE_Data_Length_Change_Event)
+    assert changed.connection_handle == link.handle
+    assert changed.max_rx_octets == min(dut[0], MAXIMUM[2])
+    assert changed.max_tx_octets == min(dut[2], MAXIMUM[0])
+    assert changed.max_rx_octets >= LONG_CONTROL_PAYLOAD_SIZE
+    assert changed.max_tx_octets >= LONG_CONTROL_PAYLOAD_SIZE
+    tester.output.write(f'LONG CONTROL DLE peer={MAXIMUM} effective={changed}\n')
+
+
+async def acknowledging_long_control_pdus(tester, *, central, phy):
+    """Acknowledging Long Control PDUs.
+
+    Initial Condition:
+        No connections or advertising; the selected role and connection PHY.
+        The declared longest supported received control is WR_IND, with
+        42-octet CtrData. Initial ACL data limits are 27 octets.
+
+    Test Case Configuration:
+        Table 4.3-85 selects Central or Peripheral and LE 1M, LE 2M or LE Coded.
+
+    Test Steps:
+        1. Establish directly on the selected PHY without a PHY Update.
+        2. Answer any autonomous Data Length Update with the minimum limits.
+        3. Send an independently encoded 43-octet LL_PERIODIC_SYNC_WR_IND.
+        4. Require its sequence-number acknowledgement and maintain at least
+           ten more connection events with valid packets on the selected PHY.
+        5. Terminate the connection.
+
+    Expected Outcome:
+        The IUT acknowledges the longest supported control PDU despite the
+        27-octet data limit, and the connection remains active.
+
+    Source Correction:
+        The source Expected Outcome refers to transferring synchronization
+        information, although its purpose and Steps 3-4 require receiving and
+        acknowledging it. Follow those explicit purpose and procedure steps.
+        Transfer reception remains disabled; no new periodic sync is required.
+
+    Reference:
+        LL.TS.p28, 4.3.7.11, Table 4.3-85, Steps 1-5;
+        LL/CON/CEN/BV-105-C..107-C and PER/BV-109-C..111-C.
+        Core Vol 6, Part B, 4.5.11 and 2.4.2.40.
+    """
+    link = await _long_control_link(tester, central=central, phy=phy)
+    session = TransferSession(tester, link, lower_train(link, pawr=True), mode='off')
+    payload = session.indication(address=PEER_ADDRESS)
+    assert len(payload) == LONG_CONTROL_PAYLOAD_SIZE and payload[0] == 0x2A
+    await session.send_control(payload)
+    await session.run(LONG_CONTROL_EVENTS)
+    assert not session.transfers()
+    await link.disconnect(local=True)
+
+
+async def _reject_long_control(tester, *, central, phy, features, data_length):
+    if data_length or features:
+        await tester.command(
+            hci.HCI_LE_Write_Suggested_Default_Data_Length_Command(251, 17040)
+        )
+    unsupported = LONG_CONTROL_FEATURES & ~(
+        hci.LeFeatureMask.PERIODIC_ADVERTISING_SYNC_TRANSFER_RECIPIENT
+        | hci.LeFeatureMask.PERIODIC_ADVERTISING_WITH_RESPONSES_SCANNER
+    )
+    link = await _long_control_link(
+        tester,
+        central=central,
+        phy=phy,
+        reject=True,
+        features=unsupported if features else None,
+        feature_delay_us=1_000_000 if not features and not data_length else 0,
+        lengths=MAXIMUM if data_length else MINIMUM,
+    )
+    if features:
+        await exchange_features(link, unsupported)
+    if data_length:
+        await _long_control_data_length(tester, link)
+    await pawr_peer.configure(tester, interval=96, timing=(2, 6, 1, 10), slots=1)
+    session = TransferSession(tester, link, mode='off')
+    # Transmit real subevents first, so rejection cannot be caused by a source
+    # which has never advertised. Observe every intervening ACL control PDU.
+    await session.run_for(3 * 96 * 1250)
+    for maximum in (False, True) if features else (False,):
+        if maximum:
+            await _long_control_data_length(tester, link)
+        await session.command(
+            hci.HCI_LE_Periodic_Advertising_Set_Info_Transfer_Command(
+                link.handle, SERVICE_DATA, 0
+            ),
+            ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR,
+        )
+        await session.run(LONG_CONTROL_EVENTS)
+    await pawr_peer.stop_advertising(tester)
+    await link.disconnect(local=True)
+
+
+async def rejecting_long_control_before_feature_exchange(tester, *, central, phy):
+    """Rejecting Request to Send Long Control PDUs before Feature Exchange and DLU.
+
+    Initial Condition:
+        No connections; a selected target PHY, initial 27-octet data limits and
+        no completed Feature Exchange. Central supervision timeout is 2 s.
+
+    Test Case Configuration:
+        LL/CON/CEN/BV-108-C: Central IUT, LE 1M.
+        LL/CON/CEN/BV-109-C: Central IUT, LE 2M.
+        LL/CON/CEN/BV-110-C: Central IUT, LE Coded.
+        LL/CON/PER/BV-112-C: Peripheral IUT, LE 1M.
+        LL/CON/PER/BV-113-C: Peripheral IUT, LE 2M.
+        LL/CON/PER/BV-114-C: Peripheral IUT, LE Coded.
+
+    Test Steps:
+        1. Establish directly on the selected PHY, without Feature Exchange.
+        2. Reject autonomous Peripheral Feature Exchange; detect an autonomous
+           Central exchange, wait one second and complete it before ending
+           Inconclusive, as required by source alternative 2A.
+        3. Answer any autonomous Data Length Update with minimum values.
+        4. Enable a PAwR advertiser and command Set Info Transfer on the ACL.
+        5. Require a nonzero command status and observe ten connection events.
+        6. Disable advertising and terminate the connection.
+
+    Expected Outcome:
+        Set Info Transfer is rejected. No control with CtrData longer than
+        26 octets is sent before, during or after the command.
+
+    Reference:
+        LL.TS.p28, 4.3.7.12, Table 4.3-86, Steps 1-6;
+        LL/CON/CEN/BV-108-C..110-C and PER/BV-112-C..114-C.
+        Core Vol 6, Part B, 4.5.11.
+    """
+    await _reject_long_control(
+        tester, central=central, phy=phy, features=False, data_length=False
+    )
+
+
+async def rejecting_long_control_after_data_length_update(tester, *, central, phy):
+    """Rejecting Request to Send Long Control PDUs before Feature Exchange after DLU.
+
+    Initial Condition:
+        No connections; the selected role/PHY and no completed Feature Exchange.
+
+    Test Case Configuration:
+        LL/CON/CEN/BV-161-C: Central IUT, LE 1M.
+        LL/CON/CEN/BV-162-C: Central IUT, LE 2M.
+        LL/CON/CEN/BV-163-C: Central IUT, LE Coded.
+        LL/CON/PER/BV-162-C: Peripheral IUT, LE 1M.
+        LL/CON/PER/BV-163-C: Peripheral IUT, LE 2M.
+        LL/CON/PER/BV-164-C: Peripheral IUT, LE Coded.
+
+    Test Steps:
+        1. Establish directly on the selected PHY without Feature Exchange.
+        2. Reject autonomous Peripheral Feature Exchange; detect an autonomous
+           Central exchange, complete it and end Inconclusive.
+        3. Initiate Data Length Update with 251 octets and maximum packet time;
+           check the response and the effective Data Length Change event.
+        4. Command Set Info Transfer from a running PAwR advertising set.
+        5. Require a nonzero command status and observe ten connection events.
+        6. Disable advertising and terminate the connection.
+
+    Expected Outcome:
+        Data Length Update completes and permits reception of a 43-octet data
+        payload by the Lower Tester. Set Info Transfer is still rejected;
+        no control with CtrData longer than 26 octets is transmitted.
+
+    Reference:
+        LL.TS.p28, 4.3.7.13, Table 4.3-87, Steps 1-6;
+        LL/CON/CEN/BV-161-C..163-C and PER/BV-162-C..164-C.
+        Core Vol 6, Part B, 4.5.11 and 5.1.9.
+    """
+    await _reject_long_control(
+        tester, central=central, phy=phy, features=False, data_length=True
+    )
+
+
+async def rejecting_long_control_after_feature_exchange(tester, *, central, phy):
+    """Rejecting Request to Send Long Control PDUs after Feature Exchange.
+
+    Initial Condition:
+        No connections; the selected role and connection PHY.
+
+    Test Case Configuration:
+        LL/CON/CEN/BV-111-C: Central IUT, LE 1M.
+        LL/CON/CEN/BV-112-C: Central IUT, LE 2M.
+        LL/CON/CEN/BV-113-C: Central IUT, LE Coded.
+        LL/CON/PER/BV-115-C: Peripheral IUT, LE 1M.
+        LL/CON/PER/BV-116-C: Peripheral IUT, LE 2M.
+        LL/CON/PER/BV-117-C: Peripheral IUT, LE Coded.
+
+    Test Steps:
+        1. Establish directly on the selected PHY.
+        2. Complete Feature Exchange without PAST Recipient or PAwR Scanner
+           support, retaining only features that use short control PDUs.
+        3. Keep minimum data limits; answer autonomous DLU with 27 octets.
+        4-5. Command Set Info Transfer from a running PAwR set and require
+             rejection; verify that ten further events contain no long control.
+        6-9. Complete maximum DLU and repeat the command, rejection and
+             observation despite the expanded data-length limits.
+        10. Disable advertising and terminate the connection.
+
+    Expected Outcome:
+        Set Info Transfer returns nonzero status in both data-length states.
+        Feature Exchange and DLU do not authorize a long control procedure
+        whose required features the Lower Tester did not advertise.
+
+    Reference:
+        LL.TS.p28, 4.3.7.14, Table 4.3-88, Steps 1-10;
+        LL/CON/CEN/BV-111-C..113-C and PER/BV-115-C..117-C.
+        Core Vol 6, Part B, 4.5.11.
+    """
+    await _reject_long_control(
+        tester, central=central, phy=phy, features=True, data_length=False
+    )
+
+
+async def sending_long_control_after_feature_exchange(tester, *, central, phy):
+    """Sending Long Control PDUs after Feature Exchange.
+
+    Initial Condition:
+        No connections; the selected role/PHY and initial 27-octet data limits.
+        WR_IND is the longest supported transmitted LL Control PDU.
+
+    Test Case Configuration:
+        LL/CON/CEN/BV-114-C: Central IUT, LE 1M.
+        LL/CON/CEN/BV-115-C: Central IUT, LE 2M.
+        LL/CON/CEN/BV-116-C: Central IUT, LE Coded.
+        LL/CON/PER/BV-118-C: Peripheral IUT, LE 1M.
+        LL/CON/PER/BV-119-C: Peripheral IUT, LE 2M.
+        LL/CON/PER/BV-120-C: Peripheral IUT, LE Coded.
+
+    Test Steps:
+        1. Establish directly on the selected PHY.
+        2. Complete Feature Exchange with PAST Recipient and PAwR Scanner.
+        3. Retain the minimum ACL data limits, answering autonomous DLU with
+           27 octets and the minimum packet time.
+        4. Start a PAwR train and command Set Info Transfer on this connection.
+        5-6. Receive and acknowledge the 43-octet WR_IND, decode its fields
+             independently and derive the transferred periodic anchor.
+        7. Receive the described subevent-0 train while maintaining at least
+           ten more ACL events, then disable advertising and disconnect.
+
+    Expected Outcome:
+        The IUT transmits the longest supported control despite the 27-octet
+        ACL data limit. Service_Data, identity, PHY, SyncInfo, PAwR timing and
+        RspAA are valid; the transferred train can be received at its anchor.
+
+    Reference:
+        LL.TS.p28, 4.3.7.15, Table 4.3-89, Steps 1-7;
+        LL/CON/CEN/BV-114-C..116-C and PER/BV-118-C..120-C.
+        Core Vol 6, Part B, 4.5.11, 5.1.13 and 2.4.2.40.
+    """
+    link = await _long_control_link(tester, central=central, phy=phy)
+    await exchange_features(link, LONG_CONTROL_FEATURES)
+    await pawr_peer.configure(tester, interval=96, timing=(2, 6, 1, 10), slots=1)
+    session = TransferSession(tester, link, mode='off')
+    await session.run_for(3 * 96 * 1250)
+    await session.command(
+        hci.HCI_LE_Periodic_Advertising_Set_Info_Transfer_Command(
+            link.handle, SERVICE_DATA, 0
+        )
+    )
+    payload, counter, anchor = await session.expect_control(
+        Opcode.LL_PERIODIC_SYNC_WR_IND
+    )
+    assert len(payload) == LONG_CONTROL_PAYLOAD_SIZE
+    indication = SyncIndication.decode(payload)
+    assert indication.identifier == SERVICE_DATA
+    assert indication.address == bytes(DUT_ADDRESS) and not indication.random
+    assert indication.phy == 1 and indication.pawr == (2, 6, 1, 10)
+    target, info = transferred_anchor(indication, counter, anchor, session.interval_us)
+    assert info.interval == 96 and info.access_address != indication.rsp_aa
+    assert indication.rsp_aa
+    session.train = PeriodicTrain(
+        target,
+        info.interval,
+        info.counter,
+        info.access_address,
+        info.crc_init,
+        info.channel_map,
+        pawr=indication.pawr,
+        rsp_aa=indication.rsp_aa,
+    )
+    session.mode = 'receive'
+    await session.run(2 * LONG_CONTROL_EVENTS)
+    assert session.received, 'train absent at the transferred subevent-0 anchor'
+    assert not any(
+        isinstance(event, hci.HCI_LE_Data_Length_Change_Event)
+        and (event.max_tx_octets > 27 or event.max_rx_octets > 27)
+        for event in tester.events
+    ), 'long control transmission depended on expanded data limits'
+    session.mode = 'off'
+    await pawr_peer.stop_advertising(tester)
+    await link.disconnect(local=True)
 
 
 PROCEDURES: ProcedureMap = {}
@@ -19117,6 +19430,162 @@ PROCEDURES |= procedure_cases(
             'Extended Scanning, Connection Initiation, Decision-Based Advertising, '
             'Initiator Filter Policy',
             {},
+        ),
+    },
+)
+
+
+# Verify acknowledging long control pdus on each supported connection PHY.
+PROCEDURES |= procedure_cases(
+    acknowledging_long_control_pdus,
+    {
+        'LL/CON/CEN/BV-105-C': (
+            'Acknowledging Long Control PDUs',
+            {'central': True, 'phy': Phy.LE_1M},
+        ),
+        'LL/CON/CEN/BV-106-C': (
+            'Acknowledging Long Control PDUs',
+            {'central': True, 'phy': Phy.LE_2M},
+        ),
+        'LL/CON/CEN/BV-107-C': (
+            'Acknowledging Long Control PDUs',
+            {'central': True, 'phy': Phy.LE_CODED},
+        ),
+        'LL/CON/PER/BV-109-C': (
+            'Acknowledging Long Control PDUs',
+            {'central': False, 'phy': Phy.LE_1M},
+        ),
+        'LL/CON/PER/BV-110-C': (
+            'Acknowledging Long Control PDUs',
+            {'central': False, 'phy': Phy.LE_2M},
+        ),
+        'LL/CON/PER/BV-111-C': (
+            'Acknowledging Long Control PDUs',
+            {'central': False, 'phy': Phy.LE_CODED},
+        ),
+    },
+)
+
+# Verify rejection before Feature Exchange on each supported connection PHY.
+PROCEDURES |= procedure_cases(
+    rejecting_long_control_before_feature_exchange,
+    {
+        'LL/CON/CEN/BV-108-C': (
+            'Rejecting Long Control PDUs before Feature Exchange',
+            {'central': True, 'phy': Phy.LE_1M},
+        ),
+        'LL/CON/CEN/BV-109-C': (
+            'Rejecting Long Control PDUs before Feature Exchange',
+            {'central': True, 'phy': Phy.LE_2M},
+        ),
+        'LL/CON/CEN/BV-110-C': (
+            'Rejecting Long Control PDUs before Feature Exchange',
+            {'central': True, 'phy': Phy.LE_CODED},
+        ),
+        'LL/CON/PER/BV-112-C': (
+            'Rejecting Long Control PDUs before Feature Exchange',
+            {'central': False, 'phy': Phy.LE_1M},
+        ),
+        'LL/CON/PER/BV-113-C': (
+            'Rejecting Long Control PDUs before Feature Exchange',
+            {'central': False, 'phy': Phy.LE_2M},
+        ),
+        'LL/CON/PER/BV-114-C': (
+            'Rejecting Long Control PDUs before Feature Exchange',
+            {'central': False, 'phy': Phy.LE_CODED},
+        ),
+    },
+)
+
+# Verify that maximum DLU does not authorize long controls before Feature Exchange.
+PROCEDURES |= procedure_cases(
+    rejecting_long_control_after_data_length_update,
+    {
+        'LL/CON/CEN/BV-161-C': (
+            'Rejecting Long Control PDUs before Feature Exchange after DLU',
+            {'central': True, 'phy': Phy.LE_1M},
+        ),
+        'LL/CON/CEN/BV-162-C': (
+            'Rejecting Long Control PDUs before Feature Exchange after DLU',
+            {'central': True, 'phy': Phy.LE_2M},
+        ),
+        'LL/CON/CEN/BV-163-C': (
+            'Rejecting Long Control PDUs before Feature Exchange after DLU',
+            {'central': True, 'phy': Phy.LE_CODED},
+        ),
+        'LL/CON/PER/BV-162-C': (
+            'Rejecting Long Control PDUs before Feature Exchange after DLU',
+            {'central': False, 'phy': Phy.LE_1M},
+        ),
+        'LL/CON/PER/BV-163-C': (
+            'Rejecting Long Control PDUs before Feature Exchange after DLU',
+            {'central': False, 'phy': Phy.LE_2M},
+        ),
+        'LL/CON/PER/BV-164-C': (
+            'Rejecting Long Control PDUs before Feature Exchange after DLU',
+            {'central': False, 'phy': Phy.LE_CODED},
+        ),
+    },
+)
+
+# Verify rejecting long control after feature exchange on each supported connection PHY.
+PROCEDURES |= procedure_cases(
+    rejecting_long_control_after_feature_exchange,
+    {
+        'LL/CON/CEN/BV-111-C': (
+            'Rejecting Long Control PDUs after Feature Exchange',
+            {'central': True, 'phy': Phy.LE_1M},
+        ),
+        'LL/CON/CEN/BV-112-C': (
+            'Rejecting Long Control PDUs after Feature Exchange',
+            {'central': True, 'phy': Phy.LE_2M},
+        ),
+        'LL/CON/CEN/BV-113-C': (
+            'Rejecting Long Control PDUs after Feature Exchange',
+            {'central': True, 'phy': Phy.LE_CODED},
+        ),
+        'LL/CON/PER/BV-115-C': (
+            'Rejecting Long Control PDUs after Feature Exchange',
+            {'central': False, 'phy': Phy.LE_1M},
+        ),
+        'LL/CON/PER/BV-116-C': (
+            'Rejecting Long Control PDUs after Feature Exchange',
+            {'central': False, 'phy': Phy.LE_2M},
+        ),
+        'LL/CON/PER/BV-117-C': (
+            'Rejecting Long Control PDUs after Feature Exchange',
+            {'central': False, 'phy': Phy.LE_CODED},
+        ),
+    },
+)
+
+# Verify sending long control after feature exchange on each supported connection PHY.
+PROCEDURES |= procedure_cases(
+    sending_long_control_after_feature_exchange,
+    {
+        'LL/CON/CEN/BV-114-C': (
+            'Sending Long Control PDUs after Feature Exchange',
+            {'central': True, 'phy': Phy.LE_1M},
+        ),
+        'LL/CON/CEN/BV-115-C': (
+            'Sending Long Control PDUs after Feature Exchange',
+            {'central': True, 'phy': Phy.LE_2M},
+        ),
+        'LL/CON/CEN/BV-116-C': (
+            'Sending Long Control PDUs after Feature Exchange',
+            {'central': True, 'phy': Phy.LE_CODED},
+        ),
+        'LL/CON/PER/BV-118-C': (
+            'Sending Long Control PDUs after Feature Exchange',
+            {'central': False, 'phy': Phy.LE_1M},
+        ),
+        'LL/CON/PER/BV-119-C': (
+            'Sending Long Control PDUs after Feature Exchange',
+            {'central': False, 'phy': Phy.LE_2M},
+        ),
+        'LL/CON/PER/BV-120-C': (
+            'Sending Long Control PDUs after Feature Exchange',
+            {'central': False, 'phy': Phy.LE_CODED},
         ),
     },
 )

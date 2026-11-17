@@ -12,6 +12,7 @@ import struct
 from dataclasses import dataclass
 
 from bscontroller import hci
+from bscontroller.hci import HCI_LE_PERIODIC_SYNC_TIMEOUT_MIN
 from bscontroller.linklayer import (
     LL_CONN_INTERVAL_UNIT_US,
     LL_DATA_CHANNEL_MAP_ALL,
@@ -29,13 +30,33 @@ from bscontroller.linklayer import (
     LlId,
 )
 from bscontroller.radio.base import Phy
+from tests.qualification.peer import (
+    PEER_FEATURES,
+    change_phy,
+    establish,
+    exchange_features,
+)
 from tests.qualification.periodic import PeriodicTrain
+from tests.qualification.tester import (
+    LOWER_CENTRAL_PUBLIC_ADDRESS,
+    LOWER_PERIPHERAL_PUBLIC_ADDRESS,
+)
 
 Opcode = ControlOpcode
 ErrorCode = hci.HCI_ErrorCode
 RECEIVED = hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_Event
 RECEIVED_V2 = hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_V2_Event
 REPORT = hci.HCI_LE_Periodic_Advertising_Report_Event
+TransferParameters = (
+    hci.HCI_LE_Set_Periodic_Advertising_Sync_Transfer_Parameters_Command
+)
+
+# The Lower Tester advertiser, distinct from its ACL addresses.
+ADVERTISER = hci.Address('00:5A:A5:00:5A:A5', hci.AddressType.PUBLIC_DEVICE)
+
+# Selected bound on connection events before an expected event or PDU.
+RESPONSE_EVENTS = 64
+
 
 # Figure 2.48: ID, SyncInfo, connEventCount, lastPaEventCounter, SID/AType/SCA,
 # PHY, AdvA, syncConnEventCount. The opcode precedes these 34 octets.
@@ -82,25 +103,41 @@ class SyncIndication:
     phy: int
     address: bytes
     sync_event: int
+    pawr: tuple[int, int, int, int] | None = None
+    rsp_aa: int = 0
 
     def encode(self):
-        return bytes([Opcode.LL_PERIODIC_SYNC_IND]) + CTRDATA.pack(
-            self.identifier,
-            self.sync_info,
-            self.event,
-            self.last,
-            self.sid | int(self.random) << 4 | self.sca << 5,
-            self.phy,
-            self.address,
-            self.sync_event,
+        return (
+            bytes(
+                [
+                    Opcode.LL_PERIODIC_SYNC_WR_IND
+                    if self.pawr
+                    else Opcode.LL_PERIODIC_SYNC_IND
+                ]
+            )
+            + CTRDATA.pack(
+                self.identifier,
+                self.sync_info,
+                self.event,
+                self.last,
+                self.sid | int(self.random) << 4 | self.sca << 5,
+                self.phy,
+                self.address,
+                self.sync_event,
+            )
+            + (struct.pack('<IBBBB', self.rsp_aa, *self.pawr) if self.pawr else b'')
         )
 
     @classmethod
     def decode(cls, payload):
-        assert len(payload) == PERIODIC_SYNC_SIZE, 'LL_PERIODIC_SYNC_IND length'
-        assert payload[0] == Opcode.LL_PERIODIC_SYNC_IND
+        responses = payload[0] == Opcode.LL_PERIODIC_SYNC_WR_IND
+        assert payload[0] in (
+            Opcode.LL_PERIODIC_SYNC_IND,
+            Opcode.LL_PERIODIC_SYNC_WR_IND,
+        )
+        assert len(payload) == PERIODIC_SYNC_SIZE + (8 if responses else 0)
         identifier, info, event, last, flags, phy, address, sync_event = CTRDATA.unpack(
-            payload[1:]
+            payload[1:PERIODIC_SYNC_SIZE]
         )
         return cls(
             identifier,
@@ -113,6 +150,8 @@ class SyncIndication:
             phy,
             address,
             sync_event,
+            tuple(payload[-4:]) if responses else None,
+            int.from_bytes(payload[-8:-4], 'little') if responses else 0,
         )
 
 
@@ -188,7 +227,9 @@ def encode_sync_info(train, counter, reference_us, *, sca=TRAIN_SCA):
     )
 
 
-def lower_train(link, *, interval=96, phy=Phy.LE_1M, counter=0x1234, events=2):
+def lower_train(
+    link, *, interval=96, phy=Phy.LE_1M, counter=0x1234, events=2, pawr=False
+):
     """A Lower Tester train phased between connection events.
 
     The anchor sits half the shorter of the two intervals after a connection
@@ -205,6 +246,7 @@ def lower_train(link, *, interval=96, phy=Phy.LE_1M, counter=0x1234, events=2):
         TRAIN_ACCESS_ADDRESS,
         TRAIN_CRC_INIT,
         phy=phy,
+        pawr=(2, 6, 1, 10) if pawr else None,
     )
 
 
@@ -247,6 +289,8 @@ class TransferSession:
 
     def _budget(self):
         airtime = self.train.phy.airtime_us(PDU_HEADER_SIZE + 64)
+        if self.train.pawr is not None and self.mode == 'transmit':
+            airtime += (self.train.pawr[0] - 1) * self.train.pawr[1] * 1250
         return airtime + (3000 if self.mode == 'receive' else 300)
 
     async def _fill(self):
@@ -354,16 +398,25 @@ class TransferSession:
         return found
 
     def reports(self, handle=None):
-        reports = self.take_all(REPORT)
+        reports = self.take_all(
+            (REPORT, hci.HCI_LE_Periodic_Advertising_Report_V2_Event)
+        )
+        reports = [report for report in reports if report.data_status != 0xFF]
         assert handle is None or all(report.sync_handle == handle for report in reports)
         return reports
 
     def transfers(self):
         events = self.take_all((RECEIVED, RECEIVED_V2))
-        assert not any(isinstance(event, RECEIVED_V2) for event in events), (
-            'v2 transfer event from a Controller without PAwR'
-        )
+        assert all(type(event) is self.received_type for event in events)
         return events
+
+    @property
+    def received_type(self):
+        return (
+            RECEIVED_V2
+            if self.train is not None and self.train.pawr is not None
+            else RECEIVED
+        )
 
     def indication(
         self,
@@ -398,6 +451,8 @@ class TransferSession:
             phy_bit(train.phy) if phy is None else phy,
             bytes(address),
             (self.link.counter - 1) & LL_EVENT_COUNTER_MASK,
+            train.pawr,
+            train.rsp_aa if train.pawr is not None else 0,
         ).encode()
 
 
@@ -412,7 +467,14 @@ def transferred_anchor(indication, counter, anchor, interval_us):
 
 def check_received(event, link, train, *, sid, address, address_type=None, status=0):
     """Transfer Received [v1] fields (Vol 4, Part E, 7.7.65.24)."""
-    assert type(event) is RECEIVED
+    assert type(event) is (RECEIVED_V2 if train.pawr else RECEIVED)
+    if train.pawr:
+        assert (
+            event.num_subevents,
+            event.subevent_interval,
+            event.response_slot_delay,
+            event.response_slot_spacing,
+        ) == train.pawr
     assert event.status == status
     assert event.connection_handle == link.handle
     assert event.service_data == SERVICE_DATA
@@ -426,3 +488,88 @@ def check_received(event, link, train, *, sid, address, address_type=None, statu
     assert event.advertiser_clock_accuracy == TRAIN_SCA
     if status == ErrorCode.SUCCESS:
         assert 0 <= event.sync_handle <= 0x0EFF
+
+
+def sync_timeout(interval, factor):
+    """Sync_Timeout of ``factor`` periodic intervals, in 10-ms units.
+
+    A selected floor applies the HCI minimum of 100 ms to short trains
+    (Core Vol 4, Part E, 7.8.91).
+    """
+    return max(
+        HCI_LE_PERIODIC_SYNC_TIMEOUT_MIN,
+        -(-factor * interval * LL_PERIODIC_INTERVAL_UNIT_US // 10_000),
+    )
+
+
+async def transfer_link(
+    tester, *, central, phy=Phy.LE_1M, interval=24, timeout=100, pawr=False
+):
+    """Initial Condition: connected on the selected PHY, LE 1M establishment.
+
+    Extended commands establish the link: after a legacy advertising command,
+    the transfer-mode commands are Command Disallowed (Core Vol 4, Part E,
+    3.1.1).
+    """
+    link = await establish(
+        tester,
+        central=central,
+        extended=True,
+        interval=interval,
+        timeout=timeout,
+        peer_address=(
+            LOWER_PERIPHERAL_PUBLIC_ADDRESS if central else LOWER_CENTRAL_PUBLIC_ADDRESS
+        ),
+    )
+    if phy != Phy.LE_1M:
+        await exchange_features(link, PEER_FEATURES)
+        # A Central IUT answers LL_PHY_REQ with LL_PHY_UPDATE_IND, not a response
+        # the remote form expects; its Host starts the procedure instead.
+        await change_phy(tester, link, phy, local=central)
+    if pawr:
+        from tests.support import LE_EVENT_MASK_V1
+
+        mask = LE_EVENT_MASK_V1 | sum(1 << (code - 1) for code in (0x24, 0x25, 0x26))
+        await tester.masks(le=mask)
+    return link
+
+
+async def disconnect(tester, link):
+    """The Lower Tester terminates; the IUT acknowledges and reports it.
+
+    The termination is served on the connection grid, so a long connection
+    interval cannot delay the acknowledgement past the HCI observation.
+    """
+    reason = ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR
+    session = TransferSession(tester, link)
+    await session.send_control(bytes([Opcode.LL_TERMINATE_IND, reason]))
+    event = await tester.event(hci.HCI_Disconnection_Complete_Event)
+    assert (event.connection_handle, event.reason) == (link.handle, reason)
+
+
+async def set_transfer_mode(session, mode, *, skip=0, timeout=None):
+    train = session.train
+    await session.command(
+        TransferParameters(
+            session.link.handle,
+            mode,
+            skip,
+            sync_timeout(train.interval, 3) if timeout is None else timeout,
+            0,
+        )
+    )
+
+
+async def receive_transfer(session, *, sid, address=ADVERTISER, **expected):
+    event = await session.until(
+        lambda item: isinstance(item, session.received_type), events=RESPONSE_EVENTS
+    )
+    assert event is not None, 'no Periodic Advertising Sync Transfer Received'
+    check_received(
+        event, session.link, session.train, sid=sid, address=address, **expected
+    )
+    if session.train.pawr and event.status == 0 and session.train.pawr[0] > 1:
+        await session.command(
+            hci.HCI_LE_Set_Periodic_Sync_Subevent_Command(event.sync_handle, 0, [1])
+        )
+    return event

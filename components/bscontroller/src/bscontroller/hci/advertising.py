@@ -15,6 +15,9 @@ from bscontroller.hci import (
     HCI_LE_ADV_INTERVAL_UNIT_US,
     HCI_LE_DURATION_UNIT_US,
     HCI_LE_EXT_ADV_INTERVAL_MAX,
+    HCI_LE_PAWR_DATA_SIZE_MAX,
+    HCI_LE_PAWR_RESPONSE_SLOTS_MAX,
+    HCI_LE_PAWR_SUBEVENT_DATA_ENTRIES_MAX,
 )
 from bscontroller.hci.context import (
     DISALLOWED,
@@ -35,6 +38,16 @@ from bscontroller.linklayer import (
     AdvertisingPduType,
 )
 from bscontroller.linklayer.api import AdvertisingConfig
+from bscontroller.linklayer.pawr import (
+    LL_PAWR_RESPONSE_SLOT_DELAY_MAX,
+    LL_PAWR_RESPONSE_SLOT_DELAY_MIN,
+    LL_PAWR_RESPONSE_SLOT_SPACING_MIN,
+    LL_PAWR_SPACING_PER_DELAY_UNIT,
+    LL_PAWR_SUBEVENT_INTERVAL_MIN,
+    LL_PAWR_SUBEVENTS_MAX,
+    PawrTiming,
+    SubeventData,
+)
 from bscontroller.linklayer.timing import LL_DIRECT_ADV_INTERVAL_US
 from bscontroller.radio.base import RADIO_TX_POWER_MAX_DBM, RADIO_TX_POWER_MIN_DBM, Phy
 
@@ -644,28 +657,127 @@ class LeAdvertisingCommands(LeControllerContext):
         See Bluetooth spec Vol 4, Part E - 7.8.61 LE Set Periodic Advertising Parameters
         Command
         '''
+        return hci.HCI_StatusReturnParameters(self._set_periodic_parameters(command))
+
+    def on_hci_le_set_periodic_advertising_parameters_v2_command(self, command):
+        '''
+        See Bluetooth spec Vol 4, Part E - 7.8.61 LE Set Periodic Advertising Parameters
+        [v2] Command
+
+        Num_Subevents 0 configures a train without responses and ignores the other
+        PAwR parameters. With one subevent, Periodic_Advertising_Interval_Max takes
+        the place of Subevent_Interval.
+        '''
+        status, pawr = self._parse_pawr_timing(command)
+        if status == SUCCESS:
+            status = self._set_periodic_parameters(
+                command, pawr=pawr, response_slots=command.num_response_slots
+            )
+        return hci.HCI_LE_Set_Periodic_Advertising_Parameters_V2_ReturnParameters(
+            status, command.advertising_handle
+        )
+
+    @staticmethod
+    def _parse_pawr_timing(command) -> tuple[int, PawrTiming | None]:
+        if not command.num_subevents:
+            return SUCCESS, None
+        slots = command.num_response_slots
+        subevent_interval = (
+            command.subevent_interval
+            if command.num_subevents > 1
+            else command.periodic_advertising_interval_max
+        )
+        if (
+            command.num_subevents > LL_PAWR_SUBEVENTS_MAX
+            or not 1 <= slots <= HCI_LE_PAWR_RESPONSE_SLOTS_MAX
+            or not LL_PAWR_RESPONSE_SLOT_DELAY_MIN
+            <= command.response_slot_delay
+            <= LL_PAWR_RESPONSE_SLOT_DELAY_MAX
+            or command.response_slot_spacing < LL_PAWR_RESPONSE_SLOT_SPACING_MIN
+            or command.response_slot_delay >= subevent_interval
+            or (
+                slots > 1
+                and command.response_slot_spacing * slots
+                > LL_PAWR_SPACING_PER_DELAY_UNIT
+                * (subevent_interval - command.response_slot_delay)
+            )
+        ):
+            return INVALID, None
+        if command.num_subevents > 1 and (
+            command.subevent_interval < LL_PAWR_SUBEVENT_INTERVAL_MIN
+            or command.subevent_interval * command.num_subevents
+            > command.periodic_advertising_interval_min
+        ):
+            return INVALID, None
+        return SUCCESS, PawrTiming(
+            command.num_subevents,
+            command.subevent_interval,
+            command.response_slot_delay,
+            command.response_slot_spacing,
+        )
+
+    def _set_periodic_parameters(self, command, *, pawr=None, response_slots=0) -> int:
         item = self.ll.advertising.snapshot(command.advertising_handle)
         if item is None:
-            return hci.HCI_StatusReturnParameters(UNKNOWN_ADV)
+            return UNKNOWN_ADV
         if item.periodic_enabled:
-            return hci.HCI_StatusReturnParameters(DISALLOWED)
+            return DISALLOWED
         if not item.extended or item.mode or item.anonymous:
-            return hci.HCI_StatusReturnParameters(INVALID)
+            return INVALID
         if command.periodic_advertising_properties:
-            return hci.HCI_StatusReturnParameters(UNSUPPORTED)
+            return UNSUPPORTED
         if (
             not LL_PERIODIC_INTERVAL_MIN
             <= command.periodic_advertising_interval_min
             <= command.periodic_advertising_interval_max
             <= LL_PERIODIC_INTERVAL_MAX
         ):
-            return hci.HCI_StatusReturnParameters(INVALID)
-        return hci.HCI_StatusReturnParameters(
-            self.ll.advertising.set_periodic_interval(
-                command.advertising_handle,
-                command.periodic_advertising_interval_min,
-                command.periodic_advertising_interval_max,
+            return INVALID
+        return self.ll.advertising.set_periodic_interval(
+            command.advertising_handle,
+            command.periodic_advertising_interval_min,
+            command.periodic_advertising_interval_max,
+            pawr=pawr,
+            response_slots=response_slots,
+        )
+
+    def on_hci_le_set_periodic_advertising_subevent_data_command(self, command):
+        '''
+        See Bluetooth spec Vol 4, Part E - 7.8.125 LE Set Periodic Advertising Subevent
+        Data Command
+        '''
+        handle = command.advertising_handle
+        status = (
+            INVALID
+            if handle > HCI_LE_ADV_HANDLE_MAX
+            else self.ll.advertising.pawr_status(handle)
+        )
+        if status == SUCCESS and (
+            not command.complete
+            or not 1 <= len(command.subevent) <= HCI_LE_PAWR_SUBEVENT_DATA_ENTRIES_MAX
+            or any(subevent >= LL_PAWR_SUBEVENTS_MAX for subevent in command.subevent)
+            or len(set(command.subevent)) != len(command.subevent)
+            or any(
+                len(data) > HCI_LE_PAWR_DATA_SIZE_MAX for data in command.subevent_data
             )
+        ):
+            status = INVALID
+        if status == SUCCESS:
+            status = self.ll.advertising.set_subevent_data(
+                handle,
+                tuple(
+                    (subevent, SubeventData(bytes(data), start, count))
+                    for subevent, start, count, data in zip(
+                        command.subevent,
+                        command.response_slot_start,
+                        command.response_slot_count,
+                        command.subevent_data,
+                        strict=True,
+                    )
+                ),
+            )
+        return hci.HCI_LE_Set_Periodic_Advertising_Subevent_Data_ReturnParameters(
+            status, handle
         )
 
     def on_hci_le_set_periodic_advertising_data_command(self, command):

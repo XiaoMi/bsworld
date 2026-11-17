@@ -27,6 +27,9 @@ class DataStatus(IntEnum):
     COMPLETE = 0
     INCOMPLETE = 1
     TRUNCATED = 2
+    # A PAwR packet listened for was not received (Vol 4, Part E, 7.7.65.15,
+    # 7.7.65.37).
+    RECEIVE_FAILED = 0xFF
 
 
 @dataclass(frozen=True)
