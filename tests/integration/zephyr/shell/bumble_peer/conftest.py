@@ -40,7 +40,6 @@ async def peer(topo, monkeypatch, controller_type):
         )
         bumble.keystore = MemoryKeyStore()
         bumble.pairing_config_factory = lambda _: pairing.PairingConfig(mitm=False)
-        try:
-            yield SimpleNamespace(shell=shell, bumble=bumble, controller=controller)
-        finally:
-            await bumble.power_off()
+        yield SimpleNamespace(
+            shell=shell, bumble=bumble, controller=controller, stack=stack
+        )

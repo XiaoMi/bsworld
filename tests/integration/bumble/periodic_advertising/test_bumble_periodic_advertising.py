@@ -106,7 +106,7 @@ async def test_bumble_observer_syncs_periodic_advertising(topo):
             def on_periodic_advertisement(advertisement) -> None:  # noqa: ANN001
                 if (
                     advertisement.data
-                    and advertisement.data.get(AdvertisingData.COMPLETE_LOCAL_NAME)
+                    and advertisement.data.get(AdvertisingData.Type.COMPLETE_LOCAL_NAME)
                     == PERIODIC_NAME
                 ):
                     periodic_report.set()

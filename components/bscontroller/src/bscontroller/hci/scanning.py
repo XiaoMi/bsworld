@@ -14,6 +14,8 @@ from bscontroller.capabilities import (
 from bscontroller.hci import (
     HCI_LE_DURATION_UNIT_US,
     HCI_LE_EXT_SCAN_INTERVAL_MAX,
+    HCI_LE_PAWR_DATA_SIZE_MAX,
+    HCI_LE_PAWR_SYNC_SUBEVENTS_MAX,
     HCI_LE_PERIODIC_SYNC_SKIP_MAX,
     HCI_LE_PERIODIC_SYNC_TIMEOUT_MAX,
     HCI_LE_PERIODIC_SYNC_TIMEOUT_MIN,
@@ -24,6 +26,7 @@ from bscontroller.hci import (
     HCI_LE_SCAN_INTERVAL_MIN,
     HCI_LE_SCAN_INTERVAL_UNIT_US,
     HCI_LE_SCAN_PERIOD_UNIT_US,
+    HCI_LE_SYNC_HANDLE_MAX,
 )
 from bscontroller.hci.context import (
     DISALLOWED,
@@ -42,7 +45,13 @@ from bscontroller.linklayer.filtering import (
     EXTENDED_SCANNING_FILTER_POLICIES,
     LEGACY_SCANNING_FILTER_POLICIES,
 )
+from bscontroller.linklayer.pawr import LL_PAWR_SUBEVENTS_MAX
 from bscontroller.radio.base import Phy
+
+# Periodic_Advertising_Properties bit 6: TxPower in AUX_SYNC_SUBEVENT_RSP (7.8.127).
+INCLUDE_TX_POWER = int(
+    hci.HCI_LE_Set_Periodic_Advertising_Parameters_Command.Properties.INCLUDE_TX_POWER
+)
 
 SyncOptions = hci.HCI_LE_Periodic_Advertising_Create_Sync_Command.Options
 # Option bit 2 (duplicate filtering) needs Periodic Advertising ADI Support (7.8.67).
@@ -441,6 +450,53 @@ class LeScanningCommands(LeControllerContext):
     def on_hci_le_periodic_advertising_terminate_sync_command(self, command):
         return hci.HCI_StatusReturnParameters(
             self.ll.terminate_synchronization(command.sync_handle)
+        )
+
+    def on_hci_le_set_periodic_sync_subevent_command(self, command):
+        '''
+        See Bluetooth spec Vol 4, Part E - 7.8.127 LE Set Periodic Sync Subevent
+        Command
+        '''
+        subevents = tuple(command.subevent)
+        status = (
+            INVALID
+            if command.sync_handle > HCI_LE_SYNC_HANDLE_MAX
+            or not command.complete
+            or not 1 <= len(subevents) <= HCI_LE_PAWR_SYNC_SUBEVENTS_MAX
+            or any(subevent >= LL_PAWR_SUBEVENTS_MAX for subevent in subevents)
+            else self.ll.set_sync_subevents(
+                command.sync_handle,
+                subevents,
+                include_tx_power=bool(
+                    command.periodic_advertising_properties & INCLUDE_TX_POWER
+                ),
+            )
+        )
+        return hci.HCI_LE_Set_Periodic_Sync_Subevent_ReturnParameters(
+            status, command.sync_handle
+        )
+
+    def on_hci_le_set_periodic_advertising_response_data_command(self, command):
+        '''
+        See Bluetooth spec Vol 4, Part E - 7.8.126 LE Set Periodic Advertising Response
+        Data Command
+        '''
+        status = (
+            INVALID
+            if command.sync_handle > HCI_LE_SYNC_HANDLE_MAX
+            or not command.complete
+            or len(command.response_data) > HCI_LE_PAWR_DATA_SIZE_MAX
+            else self.ll.set_response_data(
+                command.sync_handle,
+                command.request_event,
+                command.request_subevent,
+                command.response_subevent,
+                command.response_slot,
+                bytes(command.response_data),
+            )
+        )
+        return hci.HCI_LE_Set_Periodic_Advertising_Response_Data_ReturnParameters(
+            status, command.sync_handle
         )
 
     def on_hci_le_set_periodic_advertising_receive_enable_command(self, command):

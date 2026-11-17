@@ -854,7 +854,13 @@ def test_legacy_connection_complete_when_enhanced_is_masked(host):
     Expected:
         - A legacy LE Connection Complete (status 0, this handle) is delivered.
     """
-    mask = ((1 << 64) - 1) & ~(1 << (hci.HCI_LE_ENHANCED_CONNECTION_COMPLETE_EVENT - 1))
+    mask = ((1 << 64) - 1) & ~sum(
+        1 << (code - 1)
+        for code in (
+            hci.HCI_LE_ENHANCED_CONNECTION_COMPLETE_EVENT,
+            hci.HCI_LE_ENHANCED_CONNECTION_COMPLETE_V2_EVENT,
+        )
+    )
     host.cmd(hci.HCI_LE_Set_Event_Mask_Command(mask.to_bytes(8, 'little')))
     from bscontroller.linklayer.connection import Connection
     from tests.unit.helpers import PARAMETERS

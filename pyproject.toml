@@ -32,10 +32,10 @@ dependencies = [
 
 [project.optional-dependencies]
 # Bumble Hosts in tests.
-bumble = ["bumble==0.0.235"]
+bumble = ["bumble==0.0.236"]
 # BSWorld's own checks and test suites.
 test = [
-    "bumble==0.0.235",
+    "bumble==0.0.236",
     "packaging>=24",
     "pytest-cov>=4.0",
     "pytest-xdist>=3.0",

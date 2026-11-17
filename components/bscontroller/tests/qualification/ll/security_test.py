@@ -1103,6 +1103,10 @@ async def peripheral_pause_encryption(tester, *, send_data):
         latency and 300-ms timeout, with LE Encryption feature exchange.
         Table 4.8-8 selects no queued data for BV-02 and queued data for BV-03.
 
+    Test Case Configuration:
+        LL/SEC/PER/BV-02-C: no queued data.
+        LL/SEC/PER/BV-03-C: queued data variant.
+
     Test Steps:
         1. Establish an encrypted connection with the IUT as Peripheral.
         2. Send encrypted LL_PAUSE_ENC_REQ and receive encrypted
@@ -1628,6 +1632,10 @@ async def peripheral_mic_failure_corrupted_mic(tester, *, header_error):
         zero latency and 300-ms timeout. Table 4.8-9 selects MIC corruption for
         BI-03-C and authenticated-header corruption for BI-04-C.
 
+    Test Case Configuration:
+        LL/SEC/PER/BI-03-C: corrupted MIC.
+        LL/SEC/PER/BI-04-C: corrupted header.
+
     Test Steps:
         1. Complete encrypted connection setup with the common connection and
            encryption-key variables. Exchange valid data in both directions.
@@ -1670,6 +1678,10 @@ async def peripheral_receiving_unexpected_pdu_during_encryption_start(tester, *,
         interval and timeout, common IR/ER and encryption keys. Select public
         addresses, 10-ms interval, zero latency and 300-ms timeout. Table 4.8-10
         selects LL_VERSION_IND for BI-05-C and unencrypted DATA for BI-07-C.
+
+    Test Case Configuration:
+        LL/SEC/PER/BI-05-C: LL_VERSION_IND.
+        LL/SEC/PER/BI-07-C: unencrypted Data PDU.
 
     Test Steps:
         1. Establish the connection using public Lower Tester address and a
@@ -1787,6 +1799,10 @@ async def central_pause_encryption(tester, *, send_data):
         addresses, 10-ms interval, zero latency and 300-ms timeout; retain the
         independently derived key and IV. Table 4.8-11 selects no data for
         LL/SEC/CEN/BV-02-C and data for LL/SEC/CEN/BV-05-C.
+
+    Test Case Configuration:
+        LL/SEC/CEN/BV-02-C: no data variant.
+        LL/SEC/CEN/BV-05-C: data before LL_PAUSE_ENC_RSP.
 
     Test Steps:
         1. Send HCI LE Enable Encryption for the existing encrypted handle and
@@ -2568,6 +2584,10 @@ async def central_mic_failure(tester, *, header_error):
         both directions. Table 4.8-12 selects calculated-MIC corruption for
         LL/SEC/CEN/BI-05-C and authenticated-header corruption for BI-06-C.
 
+    Test Case Configuration:
+        LL/SEC/CEN/BI-05-C: corrupted MIC.
+        LL/SEC/CEN/BI-06-C: corrupted header.
+
     Test Steps:
         1. Receive a Central DATA packet and respond at T_IFS with independently
            encrypted DATA containing ten plaintext octets. After encryption,
@@ -2958,6 +2978,10 @@ async def privacy_nonconnectable_advertising(tester, *, resolvable=False):
         The Host supplies an NRPA, or a nonzero Local IRK and v2 RPA timeout
         range one to two seconds; all primary advertising channels are enabled.
 
+    Test Case Configuration:
+        LL/SEC/ADV/BV-02-C: non-resolvable private address.
+        LL/SEC/ADV/BV-27-C: resolvable private address.
+
     Test Steps:
         1-3. Monitor the radio, provide the address/IRK and enable nonconnectable
              advertising at a supported interval.
@@ -3119,6 +3143,14 @@ async def privacy_scannable_identity_policy(
     Initial Condition:
         Shared IRKs and a sole accept-list identity; device mode only for BV-18.
         BV-21 keeps address resolution disabled and sends a peer RPA.
+
+    Test Case Configuration:
+        LL/SEC/ADV/BV-15-C: Network Privacy Mode, address resolution enabled,
+            Advertising_Filter_Policy 0x01.
+        LL/SEC/ADV/BV-18-C: Device Privacy Mode, address resolution enabled,
+            Advertising_Filter_Policy 0x03.
+        LL/SEC/ADV/BV-21-C: Network Privacy Mode, address resolution disabled,
+            Advertising_Filter_Policy 0x03.
 
     Test Steps:
         Populate both lists before enabling, configure scannable advertising with
@@ -3334,6 +3366,10 @@ async def privacy_connectable_local_only(tester, *, extended=False):
         Standby with shared identities/IRKs configured as specified below.
         Use all primary advertising channels and a one-second RPA lifetime.
 
+    Test Case Configuration:
+        LL/SEC/ADV/BV-07-C: legacy advertising.
+        LL/SEC/ADV/BV-23-C: extended advertising.
+
     Test Steps:
         Steps 1-4: use a peer identity, zero Peer IRK, valid Local IRK and
         identity in the Filter Accept List; enable connectable advertising.
@@ -3364,6 +3400,10 @@ async def privacy_connectable_mutual_irks(tester, *, extended=False):
     Initial Condition:
         Standby with shared identities/IRKs configured as specified below.
         Use all primary advertising channels and a one-second RPA lifetime.
+
+    Test Case Configuration:
+        LL/SEC/ADV/BV-08-C: legacy advertising.
+        LL/SEC/ADV/BV-24-C: extended advertising.
 
     Test Steps:
         Steps 1-8: configure mutual IRKs and accept-list filtering, advertise a
@@ -3470,6 +3510,10 @@ async def privacy_directed_local_only(tester, *, extended=False):
     Initial Condition:
         Standby with shared identities/IRKs configured as specified below.
         Use all primary advertising channels and a one-second RPA lifetime.
+
+    Test Case Configuration:
+        LL/SEC/ADV/BV-12-C: legacy advertising.
+        LL/SEC/ADV/BV-25-C: extended advertising.
 
     Test Steps:
         Steps 1-8: install zero Peer IRK and nonzero Local IRK, enable directed
@@ -3615,6 +3659,10 @@ async def privacy_connectable_device_mode(tester, *, extended=False):
         Standby with shared identities/IRKs configured as specified below.
         Use all primary advertising channels and a one-second RPA lifetime.
 
+    Test Case Configuration:
+        LL/SEC/ADV/BV-19-C: legacy advertising.
+        LL/SEC/ADV/BV-26-C: extended advertising.
+
     Test Steps:
         Steps 1-8: install mutual IRKs in device mode and accept-list filtering,
         enable advertising, connect using the peer identity and verify local RPA
@@ -3756,6 +3804,10 @@ async def privacy_random_address_scanning(tester, *, encrypt):
     Initial Condition:
         The common IR is used to derive IRK with d1(IR, 1, 0); the IUT actively
         scans with one Host-generated random address.
+
+    Test Case Configuration:
+        LL/SEC/SCN/BV-01-C: include LE Encrypt verification of the RPA hash.
+        LL/SEC/SCN/BV-02-C: omit the optional LE Encrypt verification.
 
     Test Steps:
         1-3. Set the local random address, enable active scanning using own type 1,

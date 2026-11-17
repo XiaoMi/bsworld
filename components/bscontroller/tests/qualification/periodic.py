@@ -8,8 +8,6 @@ from dataclasses import dataclass
 
 from bscontroller import hci
 from bscontroller.linklayer import (
-    LL_CHANNEL_ID_BITS,
-    LL_DATA_CHANNEL_COUNT,
     LL_DATA_CHANNEL_MAP_ALL,
     LL_EVENT_COUNTER_MASK,
     LL_MAFS_US,
@@ -37,36 +35,12 @@ from tests.qualification.tester import (
     aux_pointer,
     chain,
     csa2_channel,
-    csa2_mam,
-    csa2_prn,
     decode_extended,
     ext_pdu,
 )
 
 # Selected preparation gap when a periodic PDU displaced an announcement.
 ANNOUNCEMENT_GUARD_US = 100
-
-
-def subevent_channels(counter, access_address, count=3):
-    """Independent CSA#2 subevents for the selected all37-channel PAwR train."""
-    channel_id, value = csa2_prn(counter, access_address)
-    channel = (value ^ channel_id) % LL_DATA_CHANNEL_COUNT
-    result = [channel]
-    distance = max(
-        1, min(3, LL_DATA_CHANNEL_COUNT - 5), min(11, (LL_DATA_CHANNEL_COUNT - 10) // 2)
-    )
-    for _ in range(count - 1):
-        value = csa2_mam(value, channel_id)
-        channel = (
-            channel
-            + distance
-            + (
-                (value ^ channel_id) * (LL_DATA_CHANNEL_COUNT - 2 * distance + 1)
-                >> LL_CHANNEL_ID_BITS
-            )
-        ) % LL_DATA_CHANNEL_COUNT
-        result.append(channel)
-    return result
 
 
 @dataclass
@@ -81,6 +55,10 @@ class PeriodicTrain:
     offset_unit: int = PDU_ADV_OFFSET_UNIT_30_US
     # ADI (SID << 12 | DID) of the last AUX_SYNC_IND that receive() accepted.
     received_adi: int | None = None
+    # Independent PAwR timing: NumSubevents, SI, RSD and RSS; RspAA follows
+    # SyncInfo in LL_PERIODIC_SYNC_WR_IND and in the ACAD AD structure 0x32.
+    pawr: tuple[int, int, int, int] | None = None
+    rsp_aa: int = 0x9A328370
 
     @classmethod
     def from_advertisement(cls, packet, fields):
@@ -161,6 +139,18 @@ class PeriodicTrain:
         return payload
 
     async def transmit(self, tester, data=b'periodic', *, adi=None):
+        if self.pawr is not None:
+            for subevent in range(self.pawr[0]):
+                await tester.transmit(
+                    csa2_channel(
+                        self.counter ^ subevent, self.access_address, self.channel_map
+                    ),
+                    ext_pdu(data=data, **({'adi': adi} if adi is not None else {})),
+                    start_us=self.anchor + subevent * self.pawr[1] * 1250,
+                    **self.parameters,
+                )
+            self.next_event()
+            return
         for offset, wire in self.packets(data, adi=adi):
             await tester.transmit(
                 self.channel,
@@ -248,6 +238,8 @@ class PeriodicTrain:
         data=b'announcement',
     ):
         start = tester.radio.now_us + 100 if start is None else start
+        if self.pawr is not None:
+            acad += bytes([9, 0x32]) + struct.pack('<IBBBB', self.rsp_aa, *self.pawr)
         auxiliary = start + auxiliary_offset
         sync = self.sync_info(auxiliary)
         pointer = aux_pointer(0, auxiliary - start, self.phy)

@@ -19,6 +19,7 @@ from bscontroller.linklayer import (
     ControlOpcode,
     LlId,
 )
+from tests.qualification import pawr as pawr_peer
 from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
@@ -210,18 +211,18 @@ async def write_suggested_data_length(tester):
     Initial Condition:
         The IUT is in standby.
 
+    Test Case Configuration:
+        Rounds 1-9 use the ordered Cartesian product TxOctets = 0x001B, 0x00FB,
+        0x0080 and, for each, TxTime = 0x0148, 0x4290, 0x2000. Rounds 10-20
+        choose each value randomly in the inclusive ranges 0x001B..0x00FB and
+        0x0148..0x4290. A locally seeded generator makes those stimuli repeatable.
+
     Test Steps:
         The source describes an unnumbered procedure for every Table 4.33 row:
         - Send LE Write Suggested Default Data Length with that row's TxOctets
           and TxTime, and receive Command Complete.
         - Send LE Read Suggested Default Data Length and receive Command
           Complete with both stored values.
-
-    Test Case Configuration:
-        Rounds 1-9 use the ordered Cartesian product TxOctets = 0x001B, 0x00FB,
-        0x0080 and, for each, TxTime = 0x0148, 0x4290, 0x2000. Rounds 10-20
-        choose each value randomly in the inclusive ranges 0x001B..0x00FB and
-        0x0148..0x4290. A locally seeded generator makes those stimuli repeatable.
 
     Expected Outcome:
         Pass verdict: all twenty writes and reads succeed with matching opcode
@@ -384,6 +385,12 @@ async def invalid_periodic_data_parameters(tester):
         The IUT is in standby. Its feature mask declares Periodic Advertising ADI
         Support.
 
+    Test Case Configuration:
+        Steps 4 and 12 do not give a data length; send zero octets, so the
+        disabled train (step 4) and the missing data (step 12) are the only
+        invalid conditions. The selected extended interval is 100 ms and the
+        minimum periodic interval is 0x0006 (7.5 ms).
+
     Test Steps:
         1. Send LE Set Extended Advertising Parameters on all advertising
            channels with a selected supported interval, properties 0x0000,
@@ -403,12 +410,6 @@ async def invalid_periodic_data_parameters(tester):
         11. Send Operation 0x03 with Advertising_Data_Length 0; require Success.
         12. Send LE Set Periodic Advertising Data with Operation 0x04.
         13. Require Command Complete with Invalid HCI Command Parameters (0x12).
-
-    Test Case Configuration:
-        Steps 4 and 12 do not give a data length; send zero octets, so the
-        disabled train (step 4) and the missing data (step 12) are the only
-        invalid conditions. The selected extended interval is 100 ms and the
-        minimum periodic interval is 0x0006 (7.5 ms).
 
     Observation Setup:
         Read the local features before step 1 to establish the ADI initial
@@ -554,18 +555,18 @@ async def invalid_periodic_parameters(tester):
     Initial Condition:
         A valid advertising set is configured, without periodic advertising enabled.
 
-    Test Steps:
-        Repeat steps 1 and 2 for the rounds selected by Table 4.56:
-        1. Send the selected Set Periodic Advertising Parameters command with
-           the parameters of the Table 4.57 round.
-        2. Require Command Complete with that round's prescribed status.
-
     Test Case Configuration:
         BI-64 selects v1, rounds 1 and 2 only: unknown handle with other values
         valid returns 0x42; Min greater than Max with other values valid returns
         0x12. Configure valid handle zero before the rounds; use unknown handle
         one in round 1, then handle zero with Min = 41, Max = 40 in round 2.
         The unselected BI-65 uses v2 and all Table 4.57 rounds.
+
+    Test Steps:
+        Repeat steps 1 and 2 for the rounds selected by Table 4.56:
+        1. Send the selected Set Periodic Advertising Parameters command with
+           the parameters of the Table 4.57 round.
+        2. Require Command Complete with that round's prescribed status.
 
     Expected Outcome:
         Pass verdict: Table 4.57 rounds 1 and 2 return 0x42 and 0x12 respectively,
@@ -647,6 +648,10 @@ async def resolving_list_remove(tester, *, clear=False):
     Initial Condition:
         The IUT is in standby with address resolution disabled.
 
+    Test Case Configuration:
+        HCI/CCO/BV-12-C: remove one resolving-list entry.
+        HCI/CCO/BV-13-C: clear the resolving list.
+
     Test Steps:
         The source describes an unnumbered procedure: add a valid peer identity,
         receive successful Command Complete, then remove that identity or clear
@@ -698,14 +703,14 @@ async def resolving_list_busy(tester, *, role):
     Initial Condition:
         Standby; add one valid peer and enable address resolution.
 
+    Test Case Configuration:
+        Advertising uses ADV_NONCONN_IND; scanning is active; initiation uses
+        explicit peer filtering; periodic acquisition uses Options zero.
+
     Test Steps:
         1. Send the role configuration and enable commands in Table 4.38.
         2. Send Add, Remove, Clear, Set Address Resolution Enable (both 0 and 1),
            and Set Privacy Mode for both public and random identity types.
-
-    Test Case Configuration:
-        Advertising uses ADV_NONCONN_IND; scanning is active; initiation uses
-        explicit peer filtering; periodic acquisition uses Options zero.
 
     Expected Outcome:
         Role setup succeeds. Each of the seven list commands returns nonzero
@@ -745,6 +750,11 @@ async def resolving_list_duplicate(tester, *, change):
 
     Initial Condition:
         The resolving list is empty and not in use.
+
+    Test Case Configuration:
+        HCI/CCO/BI-46-C: identical resolving-list entry.
+        HCI/CCO/BI-47-C: same Peer IRK with a changed identity address type.
+        HCI/CCO/BI-48-C: same Peer IRK with a changed identity address.
 
     Test Steps:
         1-2. Add a valid identity and receive Success.
@@ -796,6 +806,20 @@ async def create_without_random_address(tester, *, extended, own_type, policy):
 
     Initial Condition:
         Reset IUT, no random address and no usable Local IRK.
+
+    Test Case Configuration:
+        HCI/CCO/BI-51-C: LE Create Connection, Own_Address_Type 0x01,
+            Initiator_Filter_Policy 0x00.
+        HCI/CCO/BI-52-C: LE Create Connection, Own_Address_Type 0x03,
+            Initiator_Filter_Policy 0x00.
+        HCI/CCO/BI-53-C: LE Create Connection, Own_Address_Type 0x03,
+            Initiator_Filter_Policy 0x01.
+        HCI/CCO/BI-54-C: LE Extended Create Connection, Own_Address_Type 0x01,
+            Initiator_Filter_Policy 0x00.
+        HCI/CCO/BI-55-C: LE Extended Create Connection, Own_Address_Type 0x03,
+            Initiator_Filter_Policy 0x00.
+        HCI/CCO/BI-56-C: LE Extended Create Connection, Own_Address_Type 0x03,
+            Initiator_Filter_Policy 0x01.
 
     Test Steps:
         1. Send Create Connection or Extended Create Connection with own address
@@ -928,6 +952,294 @@ async def eight_decision_tests(tester):
             [3] + [2] * 7, [6] * 8, [bytes([7]) + bytes(15)] * 8
         )
     )
+
+
+async def pawr_invalid_parameters(tester):
+    """LE Set Periodic Advertising Parameters [v2], Invalid Parameters.
+
+    Initial Condition:
+        Standby with a valid non-connectable, non-scannable advertising set.
+
+    Test Steps:
+        1. Configure extended advertising set 0 on LE 1M.
+        2. Send all fourteen Table 4.57 combinations, including unknown handle,
+           interval ordering, subevent count/interval, response delay, spacing
+           and slot count boundaries.
+        3. For Num_Subevents zero, send invalid ignored PAwR fields. For one
+           subevent, send Subevent_Interval below its otherwise valid range.
+
+    Expected Outcome:
+        Each Command Complete returns the table's status: 0x42 for an unknown
+        set, 0x12 for invalid parameters, and success for the two ignored-field
+        rounds. Every reply echoes Advertising_Handle.
+
+    Reference:
+        HCI.TS.p39, 4.10.15, HCI/CCO/BI-65-C, Tables 4.56/4.57.
+        Core Vol 4, Part E, 7.8.61.
+    """
+    await tester.command(extended_parameters())
+    baseline = dict(interval=800, timing=(10, 80, 8, 25), slots=25)
+    rounds = [
+        (dict(handle=1), 0x42),
+        (dict(interval=800), 0x12),
+        (dict(timing=(10, 81, 8, 25)), 0x12),
+        (dict(timing=(10, 80, 80, 25)), 0x12),
+        (dict(timing=(10, 80, 0, 25)), 0x12),
+        (dict(timing=(10, 80, 8, 29)), 0x12),
+        (dict(timing=(129, 6, 1, 2)), 0x12),
+        (dict(timing=(10, 5, 1, 2)), 0x12),
+        (dict(timing=(10, 80, 255, 25)), 0x12),
+        (dict(timing=(10, 80, 8, 1)), 0x12),
+        (dict(slots=0), 0x12),
+        (dict(timing=(10, 24, 12, 25), slots=5), 0x12),
+        (dict(timing=(0, 5, 255, 1), slots=0), 0),
+        (dict(timing=(1, 5, 1, 10), slots=3), 0),
+    ]
+    for index, (changes, status) in enumerate(rounds, 1):
+        command = pawr_peer.parameters(**(baseline | changes))
+        if index == 2:
+            # Construct the deliberately reversed interval pair on the wire.
+            command = type(command)(0, 801, 800, 0, 10, 80, 8, 25, 25)
+        await tester.command(command, status)
+        assert tester.last_command_event.parameters[3:] == bytes(
+            [status, command.advertising_handle]
+        )
+
+
+async def pawr_invalid_connection(tester):
+    """LE Extended Create Connection [v2], Invalid Parameters.
+
+    Initial Condition:
+        PAwR advertising set 0 is enabled on LE 1M.
+
+    Test Steps:
+        1. Send the four Table 4.55 rounds: unknown handle, Subevent 0x80,
+           mismatched 0xFF handle/subevent, and Min_CE_Length > Max_CE_Length.
+        2. Observe Command Status for every asynchronous command.
+
+    Expected Outcome:
+        Unknown handle returns 0x42. The three invalid combinations return
+        0x12. No connection procedure replaces a periodic subevent.
+
+    Reference:
+        HCI.TS.p39, HCI/CCO/BI-63-C, Table 4.55; Core 7.8.66.
+    """
+    await pawr_peer.configure(tester)
+    for handle, subevent, minimum, maximum, status in (
+        (1, 1, 0, 0, 0x42),
+        (0, 128, 0, 0, 0x12),
+        (255, 1, 0, 0, 0x12),
+        (0, 1, 1, 0, 0x12),
+    ):
+        await tester.command(
+            hci.HCI_LE_Extended_Create_Connection_V2_Command(
+                handle,
+                subevent,
+                0,
+                0,
+                PEER_ADDRESS.address_type,
+                PEER_ADDRESS,
+                1,
+                [16],
+                [16],
+                [24],
+                [24],
+                [0],
+                [100],
+                [minimum],
+                [maximum],
+            ),
+            status,
+        )
+    await pawr_peer.stop_advertising(tester)
+
+
+async def pawr_invalid_subevent_data(tester):
+    """LE Set Periodic Advertising Subevent Data, Invalid Parameters.
+
+    Initial Condition:
+        Extended set 0 has ten PAwR subevents, SI 318.75 ms, RSD 1.25 ms,
+        RSS 1.25 ms and five response slots. No data request exists yet.
+
+    Test Steps:
+        1. Before enabling the train, send subevent data and require rejection.
+        2. Enable periodic and extended advertising; wait for a data request.
+        3. Execute Table 4.60: handle range/existence, excessive airtime, zero
+           or excessive entry count, subevent range/request window, truncated
+           data, invalid response-slot range and duplicate subevent entries.
+        4. On a fresh request, publish valid data, then publish the same
+           requested instance again.
+
+    Expected Outcome:
+        Commands return the specified 0x42, 0x12, 0x45 or 0x0C status. A valid
+        instance is accepted once; its second publication is rejected.
+
+    Reference:
+        HCI.TS.p39, 4.10.15.1, HCI/CCO/BI-124-C, Tables 4.59/4.60.
+        Core Vol 4, Part E, 7.8.125.
+    """
+    await tester.command(extended_parameters())
+    await tester.command(
+        pawr_peer.parameters(interval=2550, timing=(10, 255, 1, 10), slots=5)
+    )
+    await tester.command(pawr_peer.SET_DATA(0, [0], [0], [1], [b'x']), 0x0C)
+    await tester.masks(le=(1 << 64) - 1)
+    await tester.command(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 0))
+    await tester.command(
+        hci.HCI_LE_Set_Extended_Advertising_Enable_Command(1, [0], [0], [0])
+    )
+    for index in range(10):
+        event = await pawr_peer.next_request(tester)
+        sub = event.subevent_start
+        command = pawr_peer.SET_DATA(0, [sub], [0], [1], [b'x'])
+        status = 0x12
+        if index == 0:
+            command = pawr_peer.SET_DATA(1, [sub], [0], [1], [b'x'])
+            status = 0x42
+        if index == 1:
+            command = pawr_peer.SET_DATA(240, [sub], [0], [1], [b'x'])
+        if index == 2:
+            command = pawr_peer.SET_DATA(0, [sub], [0], [1], [bytes(127)])
+            status = 0x45
+        if index == 3:
+            command = pawr_peer.SET_DATA(0, [], [], [], [])
+        if index == 4:
+            command = pawr_peer.SET_DATA(
+                0, list(range(16)), [0] * 16, [1] * 16, [b'x'] * 16
+            )
+        if index == 5:
+            command = pawr_peer.SET_DATA(0, [128], [0], [1], [b'x'])
+        if index == 6:
+            outside = next(
+                value
+                for value in range(128)
+                if not sub <= value < sub + event.subevent_data_count
+            )
+            command = pawr_peer.SET_DATA(0, [outside], [0], [1], [b'x'])
+            status = 0x0C
+        if index == 7:
+            command = pawr_peer.SET_DATA.from_parameters(
+                bytes([0, 1, sub, 0, 1, 255]) + bytes(249)
+            )
+        if index == 8:
+            command = pawr_peer.SET_DATA(0, [sub], [6], [1], [b'x'])
+        if index == 9:
+            command = pawr_peer.SET_DATA(
+                0, [sub, sub], [0, 0], [1, 1], [b'\x01', b'\x01']
+            )
+        await tester.command(command, status)
+    event = await pawr_peer.next_request(tester)
+    command = pawr_peer.SET_DATA(0, [event.subevent_start], [0], [1], [b'x'])
+    await tester.command(command)
+    await tester.command(command, 0x0C)
+    await pawr_peer.stop_advertising(tester)
+
+
+async def pawr_invalid_response_data(tester):
+    """LE Set Periodic Advertising Response Data, Invalid Parameters.
+
+    Initial Condition:
+        Synchronize to the Lower Tester's five-subevent train and select 0.
+
+    Test Steps:
+        1. Before each Table 4.58 round, receive a fresh subevent-0 report;
+           send the selected combination:
+           invalid handle, excessive airtime, past slot, truncated payload,
+           subevent outside the train and a subevent not synchronized with.
+        2. For the passed-slot row, wait past that current event's slot.
+           Observe no response after each rejected command.
+        3. Terminate synchronization successfully.
+
+    Expected Outcome:
+        Status is respectively 0x12, 0x45, 0x46, 0x12, 0x0C and 0x0C.
+        Invalid data never produces a response PDU.
+
+    Reference:
+        HCI.TS.p39, HCI/CCO/BI-66-C, Table 4.58; Core 7.8.126.
+    """
+    train, handle = await pawr_peer.scanner(tester)
+    await tester.command(pawr_peer.SET_SUBEVENTS(handle, 0, [0]))
+    for row in range(6):
+        # Table 4.58 repeats Steps 2-4, including a fresh subevent-0 report.
+        train.next_event()
+        await pawr_peer.transmit_indication(tester, train, data=b'round')
+        report = await tester.expect(
+            lambda event: isinstance(event, pawr_peer.REPORT)
+            and event.sync_handle == handle
+            and event.periodic_event_counter == train.counter
+            and event.subevent == 0
+            and event.data == b'round'
+        )
+        assert report.data_status == 0
+        counter = report.periodic_event_counter
+        command = pawr_peer.SET_RESPONSE(handle, counter, 0, 0, 0, b'x')
+        if row == 0:
+            command = pawr_peer.SET_RESPONSE(0xF00, counter, 0, 0, 0, b'x')
+        elif row == 1:
+            command = pawr_peer.SET_RESPONSE(handle, counter, 0, 0, 0, bytes(127))
+        elif row == 2:
+            due = train.anchor + train.pawr[2] * 1250
+            await tester.wait(max(0, due + 200 - tester.radio.now_us))
+        elif row == 3:
+            command = pawr_peer.SET_RESPONSE.from_parameters(
+                handle.to_bytes(2, 'little')
+                + counter.to_bytes(2, 'little')
+                + bytes([0, 0, 0, 255])
+                + bytes(247)
+            )
+        elif row == 4:
+            command = pawr_peer.SET_RESPONSE(handle, counter, 0, 5, 0, b'x')
+        else:
+            command = pawr_peer.SET_RESPONSE(handle, counter, 0, 2, 0, b'x')
+        await tester.command(command, (0x12, 0x45, 0x46, 0x12, 0x0C, 0x0C)[row])
+        # Observe the remainder of this event's response window. An error
+        # status alone does not prove that invalid response data was discarded.
+        end = train.anchor + train.pawr[2] * 1250 + 10 * train.pawr[3] * 125
+        packet = await tester.receive(
+            train.channel,
+            duration_us=max(1, end - tester.radio.now_us),
+            access_address=train.rsp_aa,
+            crc_init=train.crc_init,
+        )
+        assert packet is None, 'response emitted after an invalid command'
+    await tester.command(hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(handle))
+
+
+async def pawr_invalid_sync_subevents(tester):
+    """LE Set Periodic Sync Subevent, Invalid Parameters.
+
+    Initial Condition:
+        An established five-subevent Lower Tester PAwR train on LE 1M.
+
+    Test Steps:
+        1. Execute Table 4.61 with handle > 0x0EFF, zero/129 entries, more
+           entries than the train's subevents and a subevent > 0x7F.
+        2. Terminate the established synchronization.
+
+    Expected Outcome:
+        Every invalid command returns 0x12; synchronization remains usable.
+
+    Reference:
+        HCI.TS.p39, HCI/CCO/BI-68-C, Table 4.61; Core 7.8.127.
+    """
+    train, handle = await pawr_peer.scanner(tester)
+    for selected, subevents in (
+        (0xF00, [0]),
+        (handle, []),
+        (handle, [0] * 129),
+        (handle, [0] * 6),
+        (handle, [128]),
+    ):
+        await tester.command(pawr_peer.SET_SUBEVENTS(selected, 0, subevents), 0x12)
+    train.next_event()
+    await pawr_peer.transmit_indication(tester, train, data=b'still synchronized')
+    report = await tester.expect(
+        lambda event: isinstance(event, pawr_peer.REPORT)
+        and event.sync_handle == handle
+        and event.data == b'still synchronized'
+    )
+    assert report.periodic_event_counter == train.counter and report.data_status == 0
+    await tester.command(hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(handle))
 
 
 PROCEDURES: ProcedureMap = {}
@@ -1166,7 +1478,71 @@ PROCEDURES |= procedure_cases(
     },
 )
 
-RADIO_CASES = ('HCI/CCO/BV-09-C', 'HCI/CCO/BI-40-C', 'HCI/CCO/BI-43-C')
+RADIO_CASES = (
+    'HCI/CCO/BV-09-C',
+    'HCI/CCO/BI-40-C',
+    'HCI/CCO/BI-43-C',
+    'HCI/CCO/BI-63-C',
+    'HCI/CCO/BI-124-C',
+    'HCI/CCO/BI-66-C',
+    'HCI/CCO/BI-68-C',
+)
+
+
+# Verify LE Extended Create Connection [v2], Invalid Parameters.
+PROCEDURES |= procedure_cases(
+    pawr_invalid_connection,
+    {
+        'HCI/CCO/BI-63-C': (
+            'LE Extended Create Connection [v2], Invalid Parameters.',
+            {},
+        ),
+    },
+)
+
+# Verify LE Set Periodic Advertising Parameters [v2], Invalid Parameters.
+PROCEDURES |= procedure_cases(
+    pawr_invalid_parameters,
+    {
+        'HCI/CCO/BI-65-C': (
+            'LE Set Periodic Advertising Parameters [v2], Invalid Parameters.',
+            {},
+        ),
+    },
+)
+
+# Verify LE Set Periodic Advertising Subevent Data, Invalid Parameters.
+PROCEDURES |= procedure_cases(
+    pawr_invalid_subevent_data,
+    {
+        'HCI/CCO/BI-124-C': (
+            'LE Set Periodic Advertising Subevent Data, Invalid Parameters.',
+            {},
+        ),
+    },
+)
+
+# Verify LE Set Periodic Advertising Response Data, Invalid Parameters.
+PROCEDURES |= procedure_cases(
+    pawr_invalid_response_data,
+    {
+        'HCI/CCO/BI-66-C': (
+            'LE Set Periodic Advertising Response Data, Invalid Parameters.',
+            {},
+        ),
+    },
+)
+
+# Verify LE Set Periodic Sync Subevent, Invalid Parameters.
+PROCEDURES |= procedure_cases(
+    pawr_invalid_sync_subevents,
+    {
+        'HCI/CCO/BI-68-C': (
+            'LE Set Periodic Sync Subevent, Invalid Parameters.',
+            {},
+        ),
+    },
+)
 
 
 @pytest.mark.asyncio

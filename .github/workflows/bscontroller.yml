@@ -38,10 +38,10 @@ jobs:
           python-version: '3.12'
 
       - name: Install BSController and test dependencies
-        run: python -m pip install -e '.[test]'
+        run: python -m pip install -e '.[test,bumble]'
 
       - name: Lint BSController
-        run: python -m ruff check --no-cache src tests examples
+        run: python -m ruff check --no-cache src tests samples
 
       - name: Run unit tests
         run: |
@@ -79,8 +79,12 @@ jobs:
             --basetemp="$RUNNER_TEMP/bscontroller-results/protocol" \
             --junitxml="$RUNNER_TEMP/bscontroller-results/protocol.xml"
 
-      - name: Run the H4 advertising and scanning example
-        run: python examples/advertise_scan.py
+      - name: Run Bumble Host samples
+        run: |
+          for sample in advertise_scan scan_adv gatt central_multilink periodic coexistence; do
+            python -m "samples.$sample" \
+              --log-dir "$RUNNER_TEMP/bscontroller-results/samples"
+          done
 
       - name: Upload test reports and protocol logs
         if: ${{ always() }}

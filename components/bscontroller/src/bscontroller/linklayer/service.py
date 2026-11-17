@@ -59,13 +59,22 @@ from bscontroller.linklayer.extended import (
     advertising_time_us,
     auxiliary_pdu,
     periodic_time_us,
+    subevent_pdu,
 )
 from bscontroller.linklayer.llcp import PreparedProcedure
+from bscontroller.linklayer.pawr import (
+    LL_PAWR_SUBEVENT_INTERVAL_MAX,
+    PawrTiming,
+    SubeventData,
+    fits,
+    indication_limit_us,
+)
 from bscontroller.linklayer.state import Role
 from bscontroller.linklayer.transfer import (
     AdvertisingSource,
     SynchronizationSource,
 )
+from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
     from bscontroller.address import Address
@@ -366,21 +375,102 @@ class AdvertisingService:
         self.link.roles.advertising.clear()
         return SUCCESS
 
-    def set_periodic_interval(self, handle: int, minimum: int, maximum: int) -> int:
+    def set_periodic_interval(
+        self,
+        handle: int,
+        minimum: int,
+        maximum: int,
+        *,
+        pawr: PawrTiming | None = None,
+        response_slots: int = 0,
+    ) -> int:
+        """Configure the train, with responses if ``pawr`` is given (Vol 4, Part
+        E, 7.8.61).
+
+        One subevent has no subevent interval: its responses must fit the
+        periodic advertising interval, so pick the shortest allowed one that
+        holds them; the timing information then carries that interval, up to its
+        318.75 ms maximum (Core Vol 6, Part B, 4.4.2.2.4).
+        """
         item = self.link.advertisers[handle]
         if item.periodic_enabled:
             return DISALLOWED
         if not item.extended or item.mode or item.anonymous:
             return INVALID
+        interval = minimum
+        if pawr is not None and pawr.num_subevents == 1:
+            needed = -(
+                -(
+                    pawr.response_slot_delay_us
+                    + response_slots * pawr.response_slot_spacing_us
+                )
+                // LL_PERIODIC_INTERVAL_UNIT_US
+            )
+            interval = min(maximum, max(minimum, needed))
+            pawr = replace(
+                pawr,
+                subevent_interval=min(interval, LL_PAWR_SUBEVENT_INTERVAL_MAX),
+            )
+        candidate = replace(item, pawr=pawr)
         if (
-            periodic_time_us(item) + LL_MAFS_US
+            periodic_time_us(candidate) + LL_MAFS_US
             >= maximum * LL_PERIODIC_INTERVAL_UNIT_US
         ):
             return TOO_LONG
         if not item.periodic_interval:
             # The first periodic configuration seeds a random DID (4.4.2.11).
             item.periodic_did = self.link.random.randrange(PDU_ADV_ADI_DID_MASK + 1)
-        item.periodic_interval = minimum
+        item.periodic_interval = interval
+        item.pawr = pawr
+        item.pawr_response_slots = response_slots if pawr is not None else 0
+        return SUCCESS
+
+    def pawr_status(self, handle: int) -> int:
+        """Whether Host subevent data can be accepted at all (Vol 4, Part E,
+        7.8.125): the set exists, has responses and asked for data.
+        """
+        item = self.link.advertisers.get(handle)
+        if item is None:
+            return UNKNOWN_ADV
+        if item.pawr is None or item.pawr_state is None or not item.pawr_state.window:
+            return DISALLOWED
+        return SUCCESS
+
+    def set_subevent_data(
+        self, handle: int, entries: tuple[tuple[int, SubeventData], ...]
+    ) -> int:
+        """Store data for requested subevents, all or nothing (Vol 4, Part E,
+        7.8.125).
+
+        Each subevent names its instance in the outstanding request. The data
+        must fit an AUX_SYNC_SUBEVENT_IND before the first response slot (Core
+        Vol 6, Part B, 4.4.2.2.4).
+        """
+        status = self.pawr_status(handle)
+        if status != SUCCESS:
+            return status
+        item = self.link.advertisers[handle]
+        timing, state = item.pawr, item.pawr_state
+        assert timing is not None and state is not None
+        if any(
+            entry.slot_start + entry.slot_count > item.pawr_response_slots
+            for _, entry in entries
+        ):
+            return INVALID
+        instances = []
+        current = state.instance(timing.num_subevents)
+        limit = indication_limit_us(timing, item.pawr_response_slots)
+        for subevent, entry in entries:
+            instance = state.window_instance(subevent, timing.num_subevents)
+            if instance is None or instance in state.data:
+                return DISALLOWED
+            if instance < current:
+                return ErrorCode.TOO_LATE_ERROR
+            pdu = replace(subevent_pdu(item, entry.data), acad=b'')
+            if not fits(pdu, item.secondary_phy, limit):
+                return TOO_LONG
+            instances.append((instance, entry))
+        state.data.update(instances)
         return SUCCESS
 
     def enable_periodic(
@@ -442,6 +532,7 @@ class LinkLayerService:
 
     def reset_configuration(self, address: Address) -> None:
         self._scan_parameters = Scanning(AddressSnapshot(address), *self._default_scan)
+        self.link.public_address = AddressSnapshot(address)
         self.host_channel_map = LL_DATA_CHANNEL_MAP_ALL
         self.link.default_tx_phys = self.link.default_rx_phys = (
             CONTROLLER_SUPPORTED_PHY_MASK
@@ -520,6 +611,7 @@ class LinkLayerService:
         if OwnAddressType(self._scan_parameters.own_address_type).uses_random_fallback:
             self._scan_parameters.identity_address = AddressSnapshot(address)
             self._scan_parameters.address = AddressSnapshot(address)
+        self.link.random_address = AddressSnapshot(address)
         return SUCCESS
 
     def configure_scan_windows(self, windows: tuple[ScanWindowConfig, ...]) -> None:
@@ -575,7 +667,7 @@ class LinkLayerService:
                 for item in config.windows
             )
             parameters = dict(config.phy_parameters)
-            first = windows[0]
+            first = windows[0] if windows else ScanWindow(Phy.LE_1M, 0, 0)
             item = Initiating(
                 address,
                 config.peer,
@@ -588,9 +680,31 @@ class LinkLayerService:
                 filter_policy=config.filter_policy,
                 own_address_type=config.own_address_type,
                 identity_address=config.address,
+                pawr_advertising=(
+                    self.link.advertisers[config.pawr_advertising_handle]
+                    if config.pawr_advertising_handle is not None
+                    else None
+                ),
+                pawr_subevent=config.pawr_subevent,
             )
             self.link.roles.scanning.start_initiating(item)
         return status
+
+    def pawr_initiating_status(self, handle: int, subevent: int, phys: int) -> int:
+        """Whether Extended Create Connection [v2] can use this train (Vol 4,
+        Part E, 7.8.66): an enabled PAwR set with that subevent, on one of the
+        initiating PHYs.
+        """
+        item = self.link.advertisers.get(handle)
+        if item is None:
+            return UNKNOWN_ADV
+        if item.pawr is None or not item.periodic_enabled:
+            return DISALLOWED
+        if subevent >= item.pawr.num_subevents or not phys & (
+            1 << (item.secondary_phy - 1)
+        ):
+            return INVALID
+        return SUCCESS
 
     def cancel_initiating(self) -> Address | None:
         item = self.link.roles.scanning.cancel_initiating()
@@ -650,6 +764,47 @@ class LinkLayerService:
             handle, enabled=enabled, filter_duplicates=filter_duplicates
         )
         return SUCCESS
+
+    def sync_subevents_status(self, handle: int, subevents: tuple[int, ...]) -> int:
+        """Whether a synchronized train can listen to these subevents only."""
+        sync = self.link.syncs.get(handle)
+        if sync is None:
+            return UNKNOWN_ADV
+        if sync.pawr is None:
+            return DISALLOWED
+        if len(subevents) > sync.pawr.timing.num_subevents or any(
+            subevent >= sync.pawr.timing.num_subevents for subevent in subevents
+        ):
+            return INVALID
+        return SUCCESS
+
+    def set_sync_subevents(
+        self, handle: int, subevents: tuple[int, ...], *, include_tx_power: bool
+    ) -> int:
+        """Synchronize with these PAwR subevents only (Vol 4, Part E, 7.8.127)."""
+        status = self.sync_subevents_status(handle, subevents)
+        if status == SUCCESS:
+            self.link.roles.synchronization.set_subevents(
+                self.link.syncs[handle], subevents, include_tx_power
+            )
+        return status
+
+    def set_response_data(
+        self,
+        handle: int,
+        request_event: int,
+        request_subevent: int,
+        response_subevent: int,
+        slot: int,
+        data: bytes,
+    ) -> int:
+        """Send Host data in one response slot (Vol 4, Part E, 7.8.126)."""
+        sync = self.link.syncs.get(handle)
+        if sync is None:
+            return UNKNOWN_ADV
+        return self.link.roles.synchronization.respond(
+            sync, request_event, request_subevent, response_subevent, slot, data
+        )
 
     def transfer_synchronization(
         self, handle: int, service_data: int, sync_handle: int
@@ -779,6 +934,7 @@ class LinkLayerService:
         for connection in centrals:
             connection.controls.request_channel_map(value)
         self.host_channel_map = value
+        self.link.roles.advertising.update_periodic_channel_maps(value)
         return SUCCESS
 
     def set_default_data_length(self, octets: int, time_us: int) -> None:

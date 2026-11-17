@@ -113,6 +113,10 @@ async def cancel_without_pending_attempt(tester, *, extended=False):
         No IUT initiation is pending. The Lower Tester uses a public address
         and advertises ADV_IND on all supported primary channels until connected.
 
+    Test Case Configuration:
+        HCI/CM/BI-02-C: LE Create Connection.
+        HCI/CM/BI-03-C: LE Extended Create Connection.
+
     Test Steps:
         1. Send LE Create Connection Cancel.
         2. Require Command Complete with Command Disallowed (0x0C).
@@ -177,6 +181,10 @@ async def reject_connected_peer(tester, *, extended=False):
     Initial Condition:
         The Lower Tester advertises ADV_IND with a public address on all primary
         channels and continues advertising after the first connection.
+
+    Test Case Configuration:
+        HCI/CM/BI-04-C: LE Create Connection.
+        HCI/CM/BI-05-C: LE Extended Create Connection.
 
     Test Steps:
         1. Send the Table 4.88 connect command with Peer_Address_Type = 0x00

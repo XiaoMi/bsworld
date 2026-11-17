@@ -6,6 +6,7 @@
 import csv
 import random
 from bisect import bisect_right
+from dataclasses import replace
 from itertools import pairwise
 from types import SimpleNamespace
 
@@ -73,6 +74,7 @@ from bscontroller.radio.base import (
     PHY_TIME_UNITS_PER_SECOND,
     Phy,
 )
+from tests.qualification import pawr as pawr_peer
 from tests.qualification import privacy as privacy_peer
 from tests.qualification.cases import (
     ProcedureMap,
@@ -98,11 +100,16 @@ from tests.qualification.link import (
     _ScanRound,
     _start_scanning,
 )
-from tests.qualification.peer import PeerLink
+from tests.qualification.peer import (
+    PEER_FEATURES,
+    PeerLink,
+    establish,
+    exchange_features,
+)
+from tests.qualification.peer import exchange_iut_features as _iut_features
 from tests.qualification.periodic import (
     PeriodicAdvertiser,
     PeriodicTrain,
-    subevent_channels,
 )
 from tests.qualification.tester import (
     DUT_ADDRESS,
@@ -130,6 +137,11 @@ from tests.qualification.tester import (
     scan_parameters,
     set_extended_data,
 )
+from tests.qualification.transfer import SyncIndication, TransferSession, lower_train
+from tests.qualification.transfer import disconnect as _disconnect
+from tests.qualification.transfer import receive_transfer as _received
+from tests.qualification.transfer import set_transfer_mode as _transfer_mode
+from tests.qualification.transfer import transfer_link as _link
 from tests.support import (
     AD_CHANNEL_MAP_UPDATE_INDICATION,
     AD_COMPLETE_LOCAL_NAME,
@@ -394,6 +406,12 @@ async def advertising_events(tester, *, nonconnectable):
         Table 4.2-1 selects non-connectable or undirected advertising. Use a
         public own address and the minimum advertising interval as the IXIT.
 
+    Test Case Configuration:
+        BV-01 selects ADV_NONCONN_IND and repeats the complete procedure on
+        channels 37/38/39. BV-02 selects ADV_IND on the selected channel 37.
+        Select public AdvA, the minimum IXIT interval and the common IUT name.
+        Receive 101 packets to measure 100 complete intervals, not 100 packets.
+
     Test Steps:
         1. Configure the Lower Tester to monitor IUT advertising packets.
         2. Enable the Table 4.2-1 advertising type on a selected channel, using
@@ -404,12 +422,6 @@ async def advertising_events(tester, *, nonconnectable):
         5. Repeat steps 3-4 until 100 advertising intervals have been detected.
         6. Send LE Set Advertising Enable to disable advertising and receive
            Command Complete.
-
-    Test Case Configuration:
-        BV-01 selects ADV_NONCONN_IND and repeats the complete procedure on
-        channels 37/38/39. BV-02 selects ADV_IND on the selected channel 37.
-        Select public AdvA, the minimum IXIT interval and the common IUT name.
-        Receive 101 packets to measure 100 complete intervals, not 100 packets.
 
     Expected Outcome:
         Pass verdict: all 100 intervals lie within the common 500-ppm drift and
@@ -451,6 +463,11 @@ async def advertising_data(tester, *, nonconnectable):
         Table 4.2-2 selects ADV_NONCONN_IND or ADV_IND. Configure public AdvA,
         channel 37 and the selected minimum advertising interval.
 
+    Test Case Configuration:
+        Table 4.2-2 selects ADV_NONCONN_IND for BV-03 and ADV_IND for BV-04.
+        Use the selected channel 37 and minimum IXIT interval; the four data
+        rounds are 1, 0, 31 and 0 octets, each measuring 50 complete intervals.
+
     Test Steps:
         1. Configure the Lower Tester to monitor IUT advertising packets.
         2. Configure the Table 4.2-2 type, selected channel and an interval within
@@ -476,11 +493,6 @@ async def advertising_data(tester, *, nonconnectable):
             least-significant bit first; all remaining octets are zero. Receive
             Command Complete. This DUT selects the default 31-octet maximum.
         16. Repeat steps 4-14 with the maximum-length data followed by empty data.
-
-    Test Case Configuration:
-        Table 4.2-2 selects ADV_NONCONN_IND for BV-03 and ADV_IND for BV-04.
-        Use the selected channel 37 and minimum IXIT interval; the four data
-        rounds are 1, 0, 31 and 0 octets, each measuring 50 complete intervals.
 
     Expected Outcome:
         Pass verdict: all four rounds transmit the selected PDU with the exact
@@ -799,6 +811,10 @@ async def scan_request_invalid_crc(tester, *, scannable):
         Table 4.2-7 selects ADV_IND or ADV_SCAN_IND, using public AdvA, the
         minimum interval, all primary channels and unrestricted filtering.
 
+    Test Case Configuration:
+        LL/DDI/ADV/BI-01-C: ADV_IND.
+        LL/DDI/ADV/BI-10-C: ADV_SCAN_IND.
+
     Test Steps:
         1. Configure the Lower Tester for active scanning with invalid-CRC
            SCAN_REQ packets.
@@ -1011,6 +1027,10 @@ async def advertising_always_le_1m(tester, *, nonconnectable):
         Table 4.2-8 selects ADV_IND or ADV_NONCONN_IND with public AdvA, all
         supported channels and the minimum advertising interval.
 
+    Test Case Configuration:
+        LL/DDI/ADV/BV-111-C: ADV_NONCONN_IND.
+        LL/DDI/ADV/BV-20-C: ADV_IND.
+
     Test Steps:
         1. Configure the Lower Tester to accept only LE 1M advertising packets;
            scan each supported primary channel for at least thirty intervals.
@@ -1068,6 +1088,11 @@ async def extended_legacy_nonconnectable(tester):
         Configure a public extended advertising set using legacy non-connectable
         properties, channel 37 and the minimum interval.
 
+    Test Case Configuration:
+        Table 4.2-9 selects one octet 0x01, no data, then 31 octets consisting of
+        0xF8 followed by thirty zeroes. Use public AdvA and selected channel 37;
+        verify PDU type, PHY, address and exact data in every packet.
+
     Test Steps:
         1. Configure the Lower Tester to monitor IUT advertising packets.
         2. Send LE Set Extended Advertising Parameters on the selected primary
@@ -1082,11 +1107,6 @@ async def extended_legacy_nonconnectable(tester):
         6. Measure the next event relative to the first packet's start.
         7. Repeat steps 5-6 until fifty complete intervals have been detected.
         8. Disable with LE Set Extended Advertising Enable; receive Command Complete.
-
-    Test Case Configuration:
-        Table 4.2-9 selects one octet 0x01, no data, then 31 octets consisting of
-        0xF8 followed by thirty zeroes. Use public AdvA and selected channel 37;
-        verify PDU type, PHY, address and exact data in every packet.
 
     Expected Outcome:
         Pass verdict: all three rounds use ADV_NONCONN_IND on LE 1M, carry the
@@ -1119,6 +1139,14 @@ async def extended_legacy_undirected(tester, *, extended=False, connectable=Fals
         ADV_NONCONN_IND, or extended-HCI legacy ADV_NONCONN_IND. All channels
         are enabled with public AdvA and the minimum advertising interval.
 
+    Test Case Configuration:
+        BV-22 uses legacy HCI, ADV_IND and ChSel = 1; BV-112 uses legacy HCI,
+        ADV_NONCONN_IND and ChSel = 0; BV-113 uses extended HCI, legacy
+        ADV_NONCONN_IND properties 0x10 and ChSel = 0. The three payload/channel
+        rounds are 0x01 on 37, empty on 38, then 0xF8 plus thirty zeroes on 39.
+        Enable all supported channels throughout; only the observation channel
+        changes per round. Check LE 1M, public AdvA, exact data and timing.
+
     Test Steps:
         1. Configure the Lower Tester to monitor IUT advertising packets.
         2. Send the Table 4.2-10 Set Parameters command with its type/properties,
@@ -1133,14 +1161,6 @@ async def extended_legacy_undirected(tester, *, extended=False, connectable=Fals
         6. Repeat step 5 until fifty complete intervals have been detected.
         7. Disable advertising with the selected Enable command; receive
            Command Complete.
-
-    Test Case Configuration:
-        BV-22 uses legacy HCI, ADV_IND and ChSel = 1; BV-112 uses legacy HCI,
-        ADV_NONCONN_IND and ChSel = 0; BV-113 uses extended HCI, legacy
-        ADV_NONCONN_IND properties 0x10 and ChSel = 0. The three payload/channel
-        rounds are 0x01 on 37, empty on 38, then 0xF8 plus thirty zeroes on 39.
-        Enable all supported channels throughout; only the observation channel
-        changes per round. Check LE 1M, public AdvA, exact data and timing.
 
     Expected Outcome:
         Pass verdict: each round carries the exact Table 4.2-11 data on its
@@ -1205,6 +1225,14 @@ async def extended_nonconnectable(tester, *, phy):
         (BV-48), or 1M/2M (BV-49). All three selected cases have no additional
         Host feature initial condition and both coding options are zero.
 
+    Test Case Configuration:
+        Table 4.2-14 rows 1-6: undirected data lengths 0, 31, 474, 711, 948,
+        capacity; row 7: capacity with fragmentation preference 1. Rows 8-10:
+        directed lengths 0, 251, capacity. Rows 11/12: undirected/directed, no
+        data, Duration 500 (5 s). Rows 13/14: undirected/directed, no data,
+        Max_Extended_Advertising_Events 50. Unspecified preferences, durations
+        and event counts are zero.
+
     Test Steps:
         1. Read the maximum advertising-data capacity and require 31..1650 octets.
            Store the returned capacity for the subsequent rounds.
@@ -1245,14 +1273,6 @@ async def extended_nonconnectable(tester, *, phy):
         12. Otherwise, repeat Steps 6-9 until ten complete intervals are observed
             (eleven primary packets on one monitored primary channel).
         13. Disable using LE Set Extended Advertising Enable before the next row.
-
-    Test Case Configuration:
-        Table 4.2-14 rows 1-6: undirected data lengths 0, 31, 474, 711, 948,
-        capacity; row 7: capacity with fragmentation preference 1. Rows 8-10:
-        directed lengths 0, 251, capacity. Rows 11/12: undirected/directed, no
-        data, Duration 500 (5 s). Rows 13/14: undirected/directed, no data,
-        Max_Extended_Advertising_Events 50. Unspecified preferences, durations
-        and event counts are zero.
 
     Expected Outcome:
         Pass verdict: the capacity is in range and every executed row produces
@@ -1463,6 +1483,13 @@ async def extended_scan_response(tester, *, phy):
         cases, AUX_SCAN_RSP ADI may be absent or match AUX_ADV_IND ADI. The selected
         interval is 100 ms on uncoded PHYs and 150 ms on Coded to fit the data chain.
 
+    Test Case Configuration:
+        Table 4.2-16 rows 1-6: undirected scannable lengths 1, 31, 474, 711, 948,
+        capacity. Row 7: capacity, notification enabled, fragmentation preference 1.
+        Row 8: 31 octets, wrong AdvA. Rows 9-11: directed scannable lengths 1,
+        251, capacity. Row 12: directed, 31 octets, wrong AdvA. All other rows
+        disable notifications and use fragmentation preference 0.
+
     Test Steps:
         1. Read maximum advertising-data capacity and require 31..1650 octets.
            Store the capacity for subsequent rows.
@@ -1496,13 +1523,6 @@ async def extended_scan_response(tester, *, phy):
             selected handle and the request's public scanner address/type.
         13. Disable extended advertising before the next row. Before disabling,
             observe another primary/auxiliary event to confirm continued advertising.
-
-    Test Case Configuration:
-        Table 4.2-16 rows 1-6: undirected scannable lengths 1, 31, 474, 711, 948,
-        capacity. Row 7: capacity, notification enabled, fragmentation preference 1.
-        Row 8: 31 octets, wrong AdvA. Rows 9-11: directed scannable lengths 1,
-        251, capacity. Row 12: directed, 31 octets, wrong AdvA. All other rows
-        disable notifications and use fragmentation preference 0.
 
     Expected Outcome:
         Pass verdict: capacity is in range and every executed row produces the
@@ -1693,6 +1713,10 @@ async def periodic_advertising(tester, *, phy=Phy.LE_1M):
         largest Coded chain. Table 4.2-17 selects primary/secondary PHYs 1M/1M
         (BV-26), 1M/2M (BV-55), or Coded/Coded (BV-56).
 
+    Test Case Configuration:
+        Table 4.2-18 lengths are 0, 252, 474, 711, 948, the returned capacity,
+        and 31 octets. The last row exercises one-octet HCI fragmentation.
+
     Test Steps:
         1. Read maximum data capacity, receive successful Command Complete,
            require 31..1650 octets and retain the capacity.
@@ -1726,10 +1750,6 @@ async def periodic_advertising(tester, *, phy=Phy.LE_1M):
             continues, advancing the decoded event counter/channel/anchor.
         15. Disable periodic advertising and receive successful Command Complete.
         16. Clear advertising sets and receive successful Command Complete.
-
-    Test Case Configuration:
-        Table 4.2-18 lengths are 0, 252, 474, 711, 948, the returned capacity,
-        and 31 octets. The last row exercises one-octet HCI fragmentation.
 
     Expected Outcome:
         Pass verdict: capacity is in range and every executed row produces
@@ -1988,6 +2008,9 @@ async def extended_data_update(tester):
         non-connectable/non-scannable undirected advertising on all primary
         channels, LE 1M on both PHYs and a selected interval of 100 ms.
 
+    Test Case Configuration:
+        Table 4.2-19 submits the reported capacity, one octet, and 251 octets.
+
     Test Steps:
         1. Read capacity, require 31..1650 octets and store the result.
         2. Configure all primary channels, a supported selected interval,
@@ -2014,9 +2037,6 @@ async def extended_data_update(tester):
            the submitted data to appear during the ten observations.
         10. Disable extended advertising after all executed rows or the capacity
             branch from Step 3.
-
-    Test Case Configuration:
-        Table 4.2-19 submits the reported capacity, one octet, and 251 octets.
 
     Expected Outcome:
         Pass verdict: capacity is in range. ADV_EXT_IND has the configured SID
@@ -2097,6 +2117,12 @@ async def overlapping_events(tester, *, rounds=(1, 2, 3)):
         4.2-20 selects rounds 1-3 for BV-28, round 4 for BV-115, round 5 for
         BV-116 and round 6 for BV-117.
 
+    Test Case Configuration:
+        Table 4.2-21 rows (properties, Max_Skip, repeat count):
+        1: (0, 1, 100); 2: (0, 15, 50); 3: (0, 255, 10);
+        4: (connectable, 8, 50); 5: (directed, 8, 50);
+        6: (connectable directed, 8, 50).
+
     Test Steps:
         Repeat Steps 1-9 for each selected Table 4.2-21 row:
         1. Set extended advertising parameters using all primary channels and a
@@ -2120,12 +2146,6 @@ async def overlapping_events(tester, *, rounds=(1, 2, 3)):
            Require at most Max_Skip skips and hence at most Max_Skip+1
            overlapping extended events. Check the configured addresses and data.
         9. Disable extended advertising before the next selected row.
-
-    Test Case Configuration:
-        Table 4.2-21 rows (properties, Max_Skip, repeat count):
-        1: (0, 1, 100); 2: (0, 15, 50); 3: (0, 255, 10);
-        4: (connectable, 8, 50); 5: (directed, 8, 50);
-        6: (connectable directed, 8, 50).
 
     Expected Outcome:
         Pass verdict: every ADV_EXT_IND AuxPtr refers to a valid AUX_ADV_IND
@@ -2521,6 +2541,14 @@ async def multiple_sets_1m(tester, *, rounds):
         Both primary and secondary PHYs are LE 1M. Table 4.2-22 selects which
         Table 4.2-23 rows are executed; directed sets use the public Lower Tester.
 
+    Test Case Configuration:
+        Table 4.2-23 rows (first properties, second properties, first length,
+        second length): (0,1,0,0), (1,0,0,191), (0,5,191,0), (0,0,191,191),
+        (0,4,251,251), (0,1,253,0), (0,0,474,0). Properties 0/1/4/5 mean
+        non-connectable undirected/connectable undirected/non-connectable
+        directed/connectable directed. BV-29 selects rows 4/7; BV-118 selects
+        1/2/6; BV-119 selects 5; BV-120 selects 3. All HCI commands require success.
+
     Test Steps:
         1. Read maximum advertising-data length, require 31..1650 octets and
            store the capacity.
@@ -2547,14 +2575,6 @@ async def multiple_sets_1m(tester, *, rounds):
            Require every chain PHY to remain LE 1M and the ADI to match.
         10. Disable both sets in one extended advertising enable command.
         11. Clear both sets using LE Clear Advertising Sets.
-
-    Test Case Configuration:
-        Table 4.2-23 rows (first properties, second properties, first length,
-        second length): (0,1,0,0), (1,0,0,191), (0,5,191,0), (0,0,191,191),
-        (0,4,251,251), (0,1,253,0), (0,0,474,0). Properties 0/1/4/5 mean
-        non-connectable undirected/connectable undirected/non-connectable
-        directed/connectable directed. BV-29 selects rows 4/7; BV-118 selects
-        1/2/6; BV-119 selects 5; BV-120 selects 3. All HCI commands require success.
 
     Expected Outcome:
         Pass verdict: capacity is in range and both configured sets produce
@@ -2592,6 +2612,14 @@ async def multiple_sets_phys(tester, *, phys):
         across the two sets for BV-30, and 1M/Coded for BV-31. Directed sets
         target the public Lower Tester.
 
+    Test Case Configuration:
+        Table 4.2-25 rows (first properties, second properties, first length,
+        second length): (0,1,0,0), (1,0,0,191), (0,5,191,0), (0,0,191,191),
+        (0,4,251,251), (0,1,253,0), (0,0,474,0). The properties mean
+        non-connectable undirected (0), connectable undirected (1),
+        non-connectable directed (4), or connectable directed (5).
+        Both cases execute every applicable row. All commands require success.
+
     Test Steps:
         1. Read maximum advertising-data length, require 31..1650 octets and
            retain the capacity.
@@ -2617,14 +2645,6 @@ async def multiple_sets_phys(tester, *, phys):
            received, retaining that set's secondary PHY and matching ADI.
         10. Disable both sets in one extended advertising enable command.
         11. Clear the advertising sets with one LE Clear Advertising Sets command.
-
-    Test Case Configuration:
-        Table 4.2-25 rows (first properties, second properties, first length,
-        second length): (0,1,0,0), (1,0,0,191), (0,5,191,0), (0,0,191,191),
-        (0,4,251,251), (0,1,253,0), (0,0,474,0). The properties mean
-        non-connectable undirected (0), connectable undirected (1),
-        non-connectable directed (4), or connectable directed (5).
-        Both cases execute every applicable row. All commands require success.
 
     Expected Outcome:
         Pass verdict: capacity is in range; both sets produce interlaced primary
@@ -2659,6 +2679,14 @@ async def multiple_legacy_extended_sets(tester, *, rounds):
         intervals for non-high-duty sets, handles/SIDs 0/1, and the public Lower
         Tester for directed advertising. Table 4.2-26 selects the rows per case.
 
+    Test Case Configuration:
+        Table 4.2-27 rows (first properties, second properties, first length,
+        second length): (0x00,0x10,0,0), (0x13,0x00,0,191), (0x00,0x13,191,31),
+        (0x13,0x10,31,31), (0x15,0x04,0,251), (0x00,0x1D,253,0),
+        (0x00,0x12,474,0). BV-32 selects row 1; BV-121 selects 2-4;
+        BV-122 selects 5; BV-123 selects 6; BV-124 selects 7.
+        Require successful HCI responses throughout.
+
     Test Steps:
         1. Read maximum advertising-data length, require 31..1650 octets and
            store the capacity.
@@ -2686,14 +2714,6 @@ async def multiple_legacy_extended_sets(tester, *, rounds):
            on every secondary PDU, and exact set-specific reassembled data.
         10. Disable both sets using one extended advertising enable command.
         11. Clear the advertising sets using one LE Clear Advertising Sets command.
-
-    Test Case Configuration:
-        Table 4.2-27 rows (first properties, second properties, first length,
-        second length): (0x00,0x10,0,0), (0x13,0x00,0,191), (0x00,0x13,191,31),
-        (0x13,0x10,31,31), (0x15,0x04,0,251), (0x00,0x1D,253,0),
-        (0x00,0x12,474,0). BV-32 selects row 1; BV-121 selects 2-4;
-        BV-122 selects 5; BV-123 selects 6; BV-124 selects 7.
-        Require successful HCI responses throughout.
 
     Expected Outcome:
         Pass verdict: capacity is in range and both sets interlace the expected
@@ -2745,6 +2765,14 @@ async def multiple_periodic_sets(tester):
         and all primary channels. Round 1 always applies; optional-PHY rounds
         apply according to the declaration, not by silently omitting a set.
 
+    Test Case Configuration:
+        Table 4.2-28 rows 1/2/3 use two sets on 1M/1M, 2M/2M, or Coded/Coded
+        secondary PHYs respectively; uncoded primary PHYs are 1M. Rows 10/11/12
+        use three secondary PHYs ordered (1M,2M,Coded), (2M,Coded,1M), and
+        (Coded,1M,2M), with matching Coded primary or otherwise 1M primary.
+        The IXIT selects these six rows. Clear advertising sets after Step 12
+        as the postamble before the next row.
+
     Test Steps:
         Repeat Steps 1-12 for every selected Table 4.2-28 row:
         1. Configure all specified extended advertising sets, using 50-ms intervals,
@@ -2776,14 +2804,6 @@ async def multiple_periodic_sets(tester):
         11. For every configured train, receive at least 100 AUX_SYNC_IND PDUs
             on its assigned secondary PHY with correct timing and CSA #2 channels.
         12. Disable periodic advertising on all configured sets.
-
-    Test Case Configuration:
-        Table 4.2-28 rows 1/2/3 use two sets on 1M/1M, 2M/2M, or Coded/Coded
-        secondary PHYs respectively; uncoded primary PHYs are 1M. Rows 10/11/12
-        use three secondary PHYs ordered (1M,2M,Coded), (2M,Coded,1M), and
-        (Coded,1M,2M), with matching Coded primary or otherwise 1M primary.
-        The IXIT selects these six rows. Clear advertising sets after Step 12
-        as the postamble before the next row.
 
     Expected Outcome:
         Pass verdict: every configured set sends ADV_EXT_IND with AuxPtr to an
@@ -3032,6 +3052,10 @@ async def invalid_legacy_size(tester, *, scannable=False):
         own-address type and primary channels. Table 4.2-34 selects legacy
         non-connectable (BI-05) or legacy scannable (BI-06) PDUs through extended
         HCI commands. This implementation uses a public advertising set.
+
+    Test Case Configuration:
+        LL/DDI/ADV/BI-05-C: non-connectable legacy advertising.
+        LL/DDI/ADV/BI-06-C: scannable legacy advertising.
 
     Test Steps:
         1. Send LE Set Extended Advertising Parameters with the Table 4.2-34
@@ -5296,6 +5320,15 @@ async def multiple_legacy_and_extended_primary_advertising_sets(tester, *, numbe
         non-scannable and undirected, while set 1 uses the case's legacy properties.
         Both sets use LE 1M and distinct SIDs; directed rows target the Lower Tester.
 
+    Test Case Configuration:
+        Table 4.2-36 set 1 properties/PDU/Duration:
+        BV-64: 0x0010 / ADV_NONCONN_IND / 0;
+        BV-65: 0x0013 / ADV_IND / 0;
+        BV-66: 0x001D / high-duty ADV_DIRECT_IND / 0x007D (1.25 s);
+        BV-67: 0x0015 / low-duty ADV_DIRECT_IND / 0;
+        BV-68: 0x0012 / ADV_SCAN_IND / 0.
+        Both sets use the row's Duration. All HCI commands require success.
+
     Test Steps:
         1. Configure set 0 with properties zero, all primary channels, both PHYs
            LE 1M and a 20-ms interval (0x20 in 625-us units).
@@ -5323,15 +5356,6 @@ async def multiple_legacy_and_extended_primary_advertising_sets(tester, *, numbe
            Step 3's empty-data branch and skip the data-update loop.
         10. Disable both sets, using one extended enable command per set.
         11. Clear the advertising sets with LE Clear Advertising Sets.
-
-    Test Case Configuration:
-        Table 4.2-36 set 1 properties/PDU/Duration:
-        BV-64: 0x0010 / ADV_NONCONN_IND / 0;
-        BV-65: 0x0013 / ADV_IND / 0;
-        BV-66: 0x001D / high-duty ADV_DIRECT_IND / 0x007D (1.25 s);
-        BV-67: 0x0015 / low-duty ADV_DIRECT_IND / 0;
-        BV-68: 0x0012 / ADV_SCAN_IND / 0.
-        Both sets use the row's Duration. All HCI commands require success.
 
     Expected Outcome:
         Pass verdict: Step 7 receives only the expected primary PDU types on the
@@ -5407,6 +5431,10 @@ async def passive_scanning(tester, *, kind):
         0x00. Use a 20-ms advertising base with a 5-ms mean AdvDelay, and a 75-ms
         scan interval/window: three times the mean advertising interval. Disable
         duplicate filtering. BV-01 sends ADV_NONCONN_IND; BV-10 sends ADV_IND.
+
+    Test Case Configuration:
+        LL/DDI/SCN/BV-01-C: ADV_NONCONN_IND.
+        LL/DDI/SCN/BV-10-C: ADV_IND.
 
     Test Steps:
         1. Configure the Lower Tester on the first supported channel (37) with
@@ -5854,6 +5882,17 @@ async def extended_scanning_passive(tester, *, primary_phy, secondary_phy):
         only in the 1M/1M case. Coded transmissions use S=2 in odd-numbered
         rounds and S=8 in even-numbered rounds.
 
+    Test Case Configuration:
+        Table 4.2-52: rounds 1/2 use ADV_IND with 0/31 data octets; 3/4 use
+        ADV_DIRECT_IND targeting IUT/Not IUT; 5/6 use ADV_NONCONN_IND with 0/31
+        octets; 7/8/9 use primary-only ADV_EXT_IND, undirected/IUT/Not IUT.
+        Rounds 10/11/12 use primary-plus-auxiliary PDUs with no data and the same
+        three target choices. Rounds 13/14/15 carry 191/382/Scan_Max_Data octets.
+        Round 16 is primary-only directed at the IUT with Duration 0x01F4 (5 s).
+        Round 17 places AdvA in the primary and 31 data octets in the auxiliary
+        for LE 1M; use the approved Coded correction below. Round 18 has 242
+        first-auxiliary octets and 1403 chained octets. Other Durations are zero.
+
     Test Steps:
         1. For each assigned Table 4.2-52 round, send LE Set Extended Scan
            Parameters with the selected primary PHY, passive scan type, public
@@ -5888,17 +5927,6 @@ async def extended_scanning_passive(tester, *, primary_phy, secondary_phy):
            5B.1. With nonzero Duration, repeat Step 4 until that time elapses,
                  then receive LE Scan Timeout. Do not impose 5A.1's ten-report
                  threshold on this branch. Require at least one accepted report.
-
-    Test Case Configuration:
-        Table 4.2-52: rounds 1/2 use ADV_IND with 0/31 data octets; 3/4 use
-        ADV_DIRECT_IND targeting IUT/Not IUT; 5/6 use ADV_NONCONN_IND with 0/31
-        octets; 7/8/9 use primary-only ADV_EXT_IND, undirected/IUT/Not IUT.
-        Rounds 10/11/12 use primary-plus-auxiliary PDUs with no data and the same
-        three target choices. Rounds 13/14/15 carry 191/382/Scan_Max_Data octets.
-        Round 16 is primary-only directed at the IUT with Duration 0x01F4 (5 s).
-        Round 17 places AdvA in the primary and 31 data octets in the auxiliary
-        for LE 1M; use the approved Coded correction below. Round 18 has 242
-        first-auxiliary octets and 1403 chained octets. Other Durations are zero.
 
     Expected Outcome:
         Pass verdict:
@@ -6065,6 +6093,14 @@ async def extended_scanning_active(tester, *, primary_phy, secondary_phy):
         round 11 are not selected by the workbook. For every assigned round,
         skip that round if ScanData exceeds Scan_Max_Data.
 
+    Test Case Configuration:
+        Table 4.2-54 rounds 1/2 use ADV_IND with 0/31 response octets; 3/4 use
+        ADV_SCAN_IND with 0/31 response octets. Rounds 5/6/7 use scannable
+        ADV_EXT_IND plus AUX_ADV_IND, one response octet, and no TargetA/IUT/Not
+        IUT respectively. Round 8 uses 191 response octets, round 9 uses 382
+        and round 10 uses Scan_Max_Data. AdvData stays empty in the scannable
+        advertisement; ScanData is transmitted in the response and its chain.
+
     Test Steps:
         1. Set extended scan parameters with Scanning_PHYs from Table 4.2-53,
            active Scan_Type 1, interval/window 0x0010, public own address and
@@ -6096,14 +6132,6 @@ async def extended_scanning_active(tester, *, primary_phy, secondary_phy):
            the source pass verdict's chain-boundary truncation allowance.
         7. Disable scanning with LE Set Extended Scan Enable and require
            successful Command Complete (see Source Correction).
-
-    Test Case Configuration:
-        Table 4.2-54 rounds 1/2 use ADV_IND with 0/31 response octets; 3/4 use
-        ADV_SCAN_IND with 0/31 response octets. Rounds 5/6/7 use scannable
-        ADV_EXT_IND plus AUX_ADV_IND, one response octet, and no TargetA/IUT/Not
-        IUT respectively. Round 8 uses 191 response octets, round 9 uses 382
-        and round 10 uses Scan_Max_Data. AdvData stays empty in the scannable
-        advertisement; ScanData is transmitted in the response and its chain.
 
     Expected Outcome:
         Pass verdict: accepted undirected/IUT-directed advertisements elicit a
@@ -6311,6 +6339,10 @@ async def extended_scanning_passive_reporting_tx_power(tester, *, phy):
         advertising and interval/window 0x0010. Select distinct Power1=-20 dBm
         and Power2=10 dBm. Each of four data chunks is min(100, Scan_Max_Data/4).
 
+    Test Case Configuration:
+        LL/DDI/SCN/BV-75-C: LE 1M.
+        LL/DDI/SCN/BV-76-C: LE Coded.
+
     Test Steps:
         1. Set extended scan parameters with the assigned Scanning_PHYs, passive
            Scan_Type 0, accept-all policy and other valid selected values;
@@ -6368,6 +6400,10 @@ async def extended_scanning_active_reporting_tx_power(tester, *, phy):
         4 * 229 = 916 octets; mark inconclusive if this exceeds Scan_Max_Data.
         Select four distinct powers -20, -10, 0 and 10 dBm.
 
+    Test Case Configuration:
+        LL/DDI/SCN/BV-77-C: LE 1M.
+        LL/DDI/SCN/BV-78-C: LE Coded.
+
     Test Steps:
         1. Set extended scan parameters with the assigned Scanning_PHYs, active
            Scan_Type 1, interval/window 0x0010, public own address and accept-all
@@ -6420,6 +6456,10 @@ async def periodic_advertising_report_rssi_power_and_data_status(tester, *, phy)
         selects LE 1M/1M for BV-79 and Coded/Coded for BV-80. Choose Power1=-20 dBm.
         The selected five-second periodic interval accommodates two maximum
         AuxPtr offsets and the complete chain.
+
+    Test Case Configuration:
+        LL/DDI/SCN/BV-79-C: LE 1M.
+        LL/DDI/SCN/BV-80-C: LE Coded.
 
     Test Steps:
         1. Set extended scan parameters with the assigned Scanning_PHYs, passive
@@ -6616,6 +6656,13 @@ async def extended_scanning_periodic_advertising_reception(
         assigned PHY pairs and rounds 1-6 and 9. Each round starts a separate
         periodic train with the counter initially zero.
 
+    Test Case Configuration:
+        Table 4.2-61 lengths/Skip: round 1 is empty/0; rounds 2-5 are
+        31/191/382/Scan_Max_Data octets with Skip 0. Rounds 6/7/8 use
+        Scan_Max_Data with Skip 1/249/499; round 9 uses 31 octets with Skip 15.
+        Select 40-ms periodic intervals for LE 1M/1M and 200 ms otherwise,
+        allowing the full data train and continuing extended announcements.
+
     Test Steps:
         1. Set extended scan parameters with the selected primary Scanning_PHYs,
            passive Scan_Type 0, interval/window 0x0010, public own address and
@@ -6657,13 +6704,6 @@ async def extended_scanning_periodic_advertising_reception(
         14. Disable scanning with LE Set Extended Scan Enable; require successful
             Command Complete (see command Source Correction).
         15. Stop the Lower Tester periodic stream.
-
-    Test Case Configuration:
-        Table 4.2-61 lengths/Skip: round 1 is empty/0; rounds 2-5 are
-        31/191/382/Scan_Max_Data octets with Skip 0. Rounds 6/7/8 use
-        Scan_Max_Data with Skip 1/249/499; round 9 uses 31 octets with Skip 15.
-        Select 40-ms periodic intervals for LE 1M/1M and 200 ms otherwise,
-        allowing the full data train and continuing extended announcements.
 
     Expected Outcome:
         Pass verdict: synchronize successfully using CSA #2; report exact data in
@@ -7547,6 +7587,11 @@ async def extended_scanning_periodic_advertising_reception_reporting_initially_d
         to BV-61. Use a 100-ms periodic train, Skip 0 and data fitting one PDU.
         Sequence-tagged seeded payloads distinguish stale reports from new data.
 
+    Test Case Configuration:
+        LL/DDI/SCN/BV-38-C: LE 1M primary, LE 1M secondary.
+        LL/DDI/SCN/BV-60-C: LE 1M primary, LE 2M secondary.
+        LL/DDI/SCN/BV-61-C: LE Coded primary, LE Coded secondary.
+
     Test Steps:
         1. Set extended scan parameters with the assigned primary Scanning_PHYs,
            passive Scan_Type 0, interval/window 0x0010, public own address and
@@ -7992,6 +8037,9 @@ async def periodic_adi_duplicates_filtered(tester):
         Set Default Periodic Advertising Sync Transfer Parameters since its last
         reset.
 
+    Test Case Configuration:
+        The new random DID in step 12 differs from the previous one.
+
     Test Steps:
         1. Send HCI LE Set Extended Scan Parameters with Scanning_PHYs=0x01,
            Scan_Type[0]=0x00, Scan_Interval[0]=Scan_Window[0]=0x0010,
@@ -8024,9 +8072,6 @@ async def periodic_adi_duplicates_filtered(tester):
         15. The IUT receives AUX_SYNC_IND with the step 13 ADI DID and may send a
             report; the Lower Tester warns if it does.
         16. Repeat step 15 for nine periodic advertising intervals.
-
-    Test Case Configuration:
-        The new random DID in step 12 differs from the previous one.
 
     Observation Setup:
         Read the local features to establish the ADI initial condition. The
@@ -8089,6 +8134,11 @@ async def periodic_duplicate_filtering_enabled_after_sync(tester):
         Set Default Periodic Advertising Sync Transfer Parameters since its last
         reset.
 
+    Test Case Configuration:
+        Steps 11-13 cover the ten periodic events after Receive Enable 0x03,
+        with step 11 the first of them; steps 16-17 cover the ten events after
+        the first one with the step 14 DID.
+
     Test Steps:
         1. Send HCI LE Set Extended Scan Parameters with Scanning_PHYs=0x01,
            Scan_Type[0]=0x00, Scan_Interval[0]=Scan_Window[0]=0x0010,
@@ -8130,11 +8180,6 @@ async def periodic_duplicate_filtering_enabled_after_sync(tester):
         20. Receive HCI LE Periodic Advertising Report for each AUX_SYNC_IND.
         21. Repeat steps 19 and 20 for nine events.
         22. The Lower Tester stops advertising.
-
-    Test Case Configuration:
-        Steps 11-13 cover the ten periodic events after Receive Enable 0x03,
-        with step 11 the first of them; steps 16-17 cover the ten events after
-        the first one with the step 14 DID.
 
     Observation Setup:
         Read the local features to establish the ADI initial condition. The
@@ -9073,233 +9118,6 @@ async def pawr_trains_with_same_identity_do_not_synchronize(tester):
     await tester.command(hci.HCI_LE_Set_Extended_Scan_Enable_Command(0, 0, 0, 0))
 
 
-async def ignore_a_connection_request_periodic_advertising_with_responses_not_supported(
-    tester,
-):
-    """Ignore a Connection Request, Periodic Advertising with Responses Not Supported.
-
-    Initial Condition:
-        The IUT supports periodic synchronization but does not advertise the
-        PAwR Scanner feature. Confirm this with LE Read Local Supported
-        Features before applying the test.
-
-        Use passive LE 1M scanning with a public own address and accept-all
-        filtering. The independent Lower Tester uses a one-second periodic
-        interval with three subevents. Its Response Timing Information ACAD
-        specifies numSubevents 3, subeventInterval 0xF0 (300 ms),
-        responseSlotDelay 0x0A (12.5 ms), and responseSlotSpacing 0xFE
-        (31.75 ms). Extended announcements remain active throughout the test,
-        using the shared advertiser's 20.5-ms interval.
-
-    Test Steps:
-        1. Send HCI LE Set Extended Scan Parameters with Scanning_PHYs=0x01,
-           Scan_Type[0]=0x00, Scan_Interval[0]=Scan_Window[0]=0x0010,
-           Own_Address_Type=0x00 and Scanning_Filter_Policy=0x00. Receive
-           successful HCI Command Complete.
-        2. Enable extended scanning with Filter_Duplicates=Duration=Period=0;
-           receive successful Command Complete.
-        3. Begin LE 1M ADV_EXT_IND/AUX_ADV_IND announcements. AuxPtr points to
-           AUX_ADV_IND containing the public Lower Tester AdvA and SyncInfo
-           for AUX_SYNC_SUBEVENT_IND. Include Response Timing Information:
-           numSubevents=3, subeventInterval=0xF0 (300 ms),
-           responseSlotDelay=0x0A (12.5 ms), responseSlotSpacing=0xFE (31.75 ms).
-           Continue announcements throughout the procedure.
-        4. Generate three AUX_SYNC_SUBEVENT_IND subevents on independently
-           calculated CSA#2 channels with SyncInfo access address and CRC init.
-        5. Receive HCI LE Extended Advertising Report with nonzero periodic
-           interval; verify public identity, SID and PHYs.
-        6. Send HCI LE Periodic Advertising Create Sync with Options=0x00,
-           Advertising_SID from Step 5, Advertiser_Address_Type=0x00 and
-           Advertiser_Address=Lower Tester. Receive successful Command Status.
-           Select Skip=0, Sync_CTE_Type=0 and timeout=three periodic intervals.
-        7. Send preceding event subevent 1 with ten 0x01 AdvData octets.
-        8. Require no HCI LE Periodic Advertising Sync Established [v1].
-        9. Send preceding event subevent 2 with ten 0x02 AdvData octets.
-        10. Require no Sync Established [v1].
-        11. Send subevent 0 with ten 0x00 AdvData octets.
-        12. Receive successful Sync Established [v1] with fields matching the
-            advertisements, including identity, SID, PHY, interval and accuracy.
-        13. Receive HCI LE Periodic Advertising Report [v1] with ten 0x00 octets
-            on the established handle.
-        14. Send subevent 1 with ten 0x01 AdvData octets.
-        15. Require no Periodic Advertising Report [v1].
-        16. Send subevent 2 with ten 0x02 AdvData octets.
-        17. Require no Periodic Advertising Report [v1].
-        18. Send AUX_CONNECT_REQ in the next subevent 0, with the periodic
-            access address and CRC init.
-        19. Require no AUX_CONNECT_RSP in the response window.
-        20. Send subevent 1 with ten 0x01 AdvData octets.
-        21. Require no Periodic Advertising Report [v1].
-        22. Send subevent 2 with ten 0x02 AdvData octets.
-        23. Require no Periodic Advertising Report [v1].
-        24. Send following event subevent 0 with ten 0x00 AdvData octets.
-        25. Receive Periodic Advertising Report [v1] with ten 0x00 octets on
-            the original handle.
-
-    Additional Checks and Postamble:
-        Reject premature reports in Steps 8/10, invalid handle ranges, incomplete
-        data, unexpected CTE and invalid RSSI. Require no synchronization loss,
-        second establishment or connection event. Terminate synchronization
-        and disable extended scanning after Step 25.
-
-    Expected Outcome:
-        Pass verdict:
-            Only subevent 0 establishes synchronization and produces periodic
-            reports. Both source Steps 13 and 25 report exactly ten 0x00 octets;
-            subevents 1 and 2 produce no reports or premature establishment.
-            The connection request receives no response, and periodic reception
-            resumes on the original handle without creating a connection.
-
-    Reference:
-        LL.TS.p28.pdf, LL/DDI/SCN/BV-99-C, unnumbered procedure following
-        Section 4.2.4.26; PDF pages 423-426, printed pages 4.2-330 through
-        4.2-333, Figures 4.2-135/136. Steps 1-25 and Expected Outcome,
-        especially Steps 8/10/12/13/15/17/19/21/23/25;
-        source reference [23] 4.4.2.12.2.
-    """
-    features = await tester.command(hci.HCI_LE_Read_Local_Supported_Features_Command())
-    assert not (
-        int.from_bytes(features.le_features, 'little')
-        & hci.LeFeatureMask.PERIODIC_ADVERTISING_WITH_RESPONSES_SCANNER
-    ), 'this procedure requires a scanner without PAwR support'
-    await tester.command(
-        scan_parameters(
-            extended=True,
-            scan_types=[0],
-            scan_intervals=[SCANNING_SCAN_INTERVAL],
-            scan_windows=[SCANNING_SCAN_INTERVAL],
-        )
-    )
-    await tester.command(hci.HCI_LE_Set_Extended_Scan_Enable_Command(1, 0, 0, 0))
-    train = PeriodicTrain(tester.radio.now_us + 1000000, interval=800)
-    timing = bytes(
-        build_advertising_data(
-            [
-                (
-                    PERIODIC_RESPONSE_TIMING_INFORMATION,
-                    bytes([3, 240, 10, 254]),
-                )
-            ]
-        )
-    )
-    advertiser = PeriodicAdvertiser(
-        train,
-        tester.radio.now_us + REPORT_DELIVERY_US,
-        SYNCHRONIZATION_ADVERTISING_INTERVAL_US,
-        acad=timing,
-    )
-    for _ in range(20):
-        await advertiser.announce_until(
-            tester, advertiser.next_advertisement + advertiser.advertising_interval_us
-        )
-        if report := tester.take(lambda event: isinstance(event, ExtendedReport)):
-            break
-    else:
-        raise AssertionError('no PAwR announcement')
-    announcement = report.reports[0]
-    assert announcement.event_type == 0
-    assert announcement.periodic_advertising_interval == train.interval
-    assert announcement.advertising_sid == ADVERTISING_SID
-    assert announcement.address == LOWER_PERIPHERAL_PUBLIC_ADDRESS
-    assert announcement.address_type == hci.AddressType.PUBLIC_DEVICE
-    assert announcement.primary_phy == announcement.secondary_phy == Phy.LE_1M
-    await tester.command(
-        create_sync(
-            options=0,
-            advertising_sid=ADVERTISING_SID,
-            advertiser_address_type=hci.AddressType.PUBLIC_DEVICE,
-            advertiser_address=LOWER_PERIPHERAL_PUBLIC_ADDRESS,
-            skip=0,
-            sync_timeout=300,
-            sync_cte_type=0,
-        )
-    )
-    for _ in range(10):
-        await advertiser.announce_until(
-            tester, advertiser.next_advertisement + advertiser.advertising_interval_us
-        )
-        if tester.take(lambda event: isinstance(event, ExtendedReport)):
-            break
-    else:
-        raise AssertionError('no post-command PAwR SyncInfo')
-
-    async def other_subevents(anchor, counter):
-        channels = subevent_channels(counter, train.access_address)
-        for subevent in (1, 2):
-            await advertiser.announce_until(tester, anchor + subevent * 300000)
-            await tester.transmit(
-                channels[subevent],
-                ext_pdu(data=bytes([subevent]) * 10),
-                start_us=anchor + subevent * 300000,
-                **train.parameters,
-            )
-            assert not any(
-                isinstance(event, (PeriodicReport, SyncEstablished))
-                for event in tester.events
-            )
-
-    await other_subevents(
-        train.anchor - 1000000, train.counter - 1 & LL_EVENT_COUNTER_MASK
-    )
-    anchor, counter = (train.anchor, train.counter)
-    await advertiser.transmit(tester, bytes(10))
-    established = await tester.event(SyncEstablished)
-    assert established.status == ErrorCode.SUCCESS
-    handle = established.sync_handle
-    assert 0 <= handle <= SYNC_HANDLE_MAX
-    assert established.advertising_sid == ADVERTISING_SID
-    assert established.advertiser_address == LOWER_PERIPHERAL_PUBLIC_ADDRESS
-    assert established.advertiser_address_type == hci.AddressType.PUBLIC_DEVICE
-    assert established.advertiser_phy == Phy.LE_1M
-    assert established.periodic_advertising_interval == train.interval
-    assert established.advertiser_clock_accuracy == 0
-
-    async def check_report():
-        event = await tester.event(PeriodicReport)
-        assert event.sync_handle == handle and event.data == bytes(10)
-        assert event.data_status == Report.DATA_COMPLETE
-        assert event.cte_type == hci.HCI_LE_PERIODIC_REPORT_CTE_NONE
-        assert -127 <= event.rssi <= 20
-
-    await check_report()
-    await other_subevents(anchor, counter)
-    await advertiser.announce_until(tester, train.anchor)
-    await tester.transmit(
-        train.channel,
-        request_pdu(
-            AdvertisingPduType.CONNECT_IND,
-            advertiser=DUT_ADDRESS,
-            scanner=LOWER_PERIPHERAL_PUBLIC_ADDRESS,
-            data=LinkParameters().encode(),
-        ),
-        start_us=train.anchor,
-        **train.parameters,
-    )
-    assert (
-        await tester.receive(train.channel, duration_us=1000, **train.parameters)
-        is None
-    )
-    anchor, counter = (train.anchor, train.counter)
-    train.next_event()
-    await other_subevents(anchor, counter)
-    await advertiser.transmit(tester, bytes(10))
-    await check_report()
-    assert not any(
-        isinstance(
-            event,
-            (
-                SyncLost,
-                SyncEstablished,
-                hci.HCI_LE_Connection_Complete_Event,
-                hci.HCI_LE_Enhanced_Connection_Complete_Event,
-            ),
-        )
-        for event in tester.events
-    )
-    await tester.command(hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(handle))
-    await tester.command(hci.HCI_LE_Set_Extended_Scan_Enable_Command(0, 0, 0, 0))
-
-
 async def decision_based_advertisements_ignored_legacy_scanning(tester):
     """Decision-Based Advertisements Ignored, Legacy Scanning.
 
@@ -9592,15 +9410,22 @@ async def extended_scanning_active_duplicate_filtering(tester):
     await _duplicate_active_scanning(tester, extended=True)
 
 
-async def extended_scanning_passive_periodic_advertising_report_window_widening(tester):
+async def extended_scanning_passive_periodic_advertising_report_window_widening(
+    tester, *, v2=False
+):
     """Extended Scanning, Passive, Periodic Advertising Report, Window Widening.
 
     Initial Condition:
         The IUT supports passive extended scanning and periodic synchronization
-        with v1 periodic reports. Use public addresses, accept-all filtering,
+        with the selected report version. Use public addresses, accept-all filtering,
         and a continuous LE 1M scan window. The Lower Tester advertises a 500-ppm
         clock (CA=0, SCA=0). Scan_Max_Data is at least three octets, so source
         Steps 15 and 16 apply.
+
+    Test Case Configuration:
+        LL/DDI/SCN/BV-131-C: Periodic Advertising Report v1.
+        LL/DDI/SCN/BV-132-C: Periodic Advertising Report v2 for the same
+        AUX_SYNC_IND/AUX_CHAIN_IND train; PAwR is not required by this case.
 
     Test Steps:
         1. Send LE Set Extended Scan Parameters: Scanning_PHYs=0x01, passive
@@ -9645,7 +9470,8 @@ async def extended_scanning_passive_periodic_advertising_report_window_widening(
             0.5 us inside its late window. Separate them as far as practical
             within the 1-s interval; retain extended advertisements between
             them. Use widening 500/1000000 * AuxOffset + 16 us.
-        16. Require multiple v1 Periodic Advertising Reports on the same handle.
+        16. Require multiple selected-version Periodic Advertising Reports on
+            the same handle.
             All except the last must have Data_Status=0x01 (More); the last must
             have Data_Status=0x00 (Complete). Their concatenated data must equal
             the three transmitted octets, in order.
@@ -9680,12 +9506,23 @@ async def extended_scanning_passive_periodic_advertising_report_window_widening(
         only an independent source_conflict label permits a protocol-path skip.
 
     Reference:
-        LL.TS.p28.pdf, Section 4.2.4.31, LL/DDI/SCN/BV-131-C; PDF pages 468-473,
+        LL.TS.p28.pdf, Section 4.2.4.31, LL/DDI/SCN/BV-131-C/BV-132-C;
+        Table 4.2-99, PDF pages 468-473,
         printed pages 4.2-375 through 4.2-380. Steps 1-16 and Expected Outcome.
         Core Vol 6, Part B, Sections 4.2.4 (window widening), 4.4.3.4 and
         4.4.5.1 define the receive windows; Vol 4, Part E, Section 7.7.65.15
-        defines v1 periodic reports.
+        defines both periodic report versions.
     """
+    report_type = (
+        hci.HCI_LE_Periodic_Advertising_Report_V2_Event if v2 else PeriodicReport
+    )
+    if v2:
+        from tests.support import LE_EVENT_MASK_V1
+
+        await tester.masks(
+            le=LE_EVENT_MASK_V1
+            | 1 << (hci.HCI_LE_PERIODIC_ADVERTISING_REPORT_V2_EVENT - 1)
+        )
     await tester.command(
         scan_parameters(
             extended=True,
@@ -9804,9 +9641,7 @@ async def extended_scanning_passive_periodic_advertising_report_window_widening(
                 hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(handle)
             )
             tester.events[:] = [
-                event
-                for event in tester.events
-                if not isinstance(event, PeriodicReport)
+                event for event in tester.events if not isinstance(event, report_type)
             ]
             continue
         train.anchor = (
@@ -9839,8 +9674,10 @@ async def extended_scanning_passive_periodic_advertising_report_window_widening(
         await tester.transmit(0, last_pdu, start_us=second, **candidate.parameters)
         await tester.wait(1000)
         reports = []
-        while report := tester.take(lambda event: isinstance(event, PeriodicReport)):
-            assert report.sync_handle == handle
+        while report := tester.take(lambda event: isinstance(event, report_type)):
+            assert type(report) is report_type and report.sync_handle == handle
+            if v2:
+                assert report.subevent == 0xFF
             reports.append(report)
         assert len(reports) > 1
         assert b''.join(report.data for report in reports) == data
@@ -9883,6 +9720,24 @@ async def decision_advertising_data_updates(
 
     Initial Condition:
         Standby; select one primary channel and a supported public own address.
+
+    Test Case Configuration:
+        LL/DDI/ADV/BV-92-C: LE 1M, connectable, AdvA absent, ADI absent.
+        LL/DDI/ADV/BV-93-C: LE 1M, non-connectable/non-scannable, AdvA absent,
+            ADI absent.
+        LL/DDI/ADV/BV-94-C: LE 1M, scannable, AdvA absent, ADI absent.
+        LL/DDI/ADV/BV-95-C: LE Coded, connectable, AdvA absent, ADI absent.
+        LL/DDI/ADV/BV-96-C: LE Coded, non-connectable/non-scannable, AdvA
+            absent, ADI absent.
+        LL/DDI/ADV/BV-97-C: LE Coded, scannable, AdvA absent, ADI absent.
+        LL/DDI/ADV/BV-98-C: LE 1M, connectable, AdvA present, ADI absent.
+        LL/DDI/ADV/BV-99-C: LE 1M, non-connectable/non-scannable, AdvA present,
+            ADI absent.
+        LL/DDI/ADV/BV-100-C: LE 1M, scannable, AdvA present, ADI absent.
+        LL/DDI/ADV/BV-101-C: LE 1M, connectable, AdvA absent, ADI present.
+        LL/DDI/ADV/BV-102-C: LE 1M, non-connectable/non-scannable, AdvA absent,
+            ADI present.
+        LL/DDI/ADV/BV-103-C: LE 1M, scannable, AdvA absent, ADI present.
 
     Test Steps:
         Repeat steps 1-8 for all five Table 4.2-47 rounds:
@@ -10031,6 +9886,11 @@ async def privacy_passive_scanning(tester, *, identity_only=False, device=False)
         Standby IUT uses a private fallback, an entry with the peer IRK, and
         unfiltered passive scanning. Device mode is selected only for BV-28.
 
+    Test Case Configuration:
+        LL/DDI/SCN/BV-13-C: RPA advertiser, Network Privacy Mode.
+        LL/DDI/SCN/BV-26-C: identity-address advertiser, Network Privacy Mode.
+        LL/DDI/SCN/BV-28-C: identity-address advertiser, Device Privacy Mode.
+
     Test Steps:
         BV-13 (steps 1-11): add the identity/IRK and enable resolution, advertise
         an RPA for at least 20 advertising intervals, verify resolved reports,
@@ -10083,6 +9943,13 @@ async def privacy_active_scanning(tester, *, local_irk, peer_irk, renew=False):
 
     Initial Condition:
         Standby; configure a private fallback and the Lower Tester's resolving record.
+
+    Test Case Configuration:
+        LL/DDI/SCN/BV-15-C: zero Local IRK, zero Peer IRK.
+        LL/DDI/SCN/BV-16-C: nonzero Local IRK, zero Peer IRK, RPA timeout
+            variant.
+        LL/DDI/SCN/BV-17-C: zero Local IRK, nonzero Peer IRK.
+        LL/DDI/SCN/BV-18-C: nonzero Local IRK, nonzero Peer IRK.
 
     Test Steps:
         For BV-15/17/18, perform steps 1-8 of Section 4.2.4.3: configure the
@@ -10283,6 +10150,11 @@ async def decision_scanning_test_flags(tester, *, active=False, rpa=False):
     Initial Condition:
         The static peer identity is the sole Filter Accept List entry. For the
         RPA variant, install separate IRKs for public/random identities.
+
+    Test Case Configuration:
+        LL/DDI/SCN/BV-101-C: passive scanning, no RPA.
+        LL/DDI/SCN/BV-129-C: active scanning, no RPA.
+        LL/DDI/SCN/BV-130-C: passive scanning, RPA.
 
     Test Steps:
         1-2. Enable continuous extended scanning, interval/window 0x10, policy 4,
@@ -10752,6 +10624,10 @@ async def privacy_periodic_reception(tester, *, random_identity):
     Initial Condition:
         Passive extended scanning; the advertiser uses a peer-IRK-generated RPA.
 
+    Test Case Configuration:
+        LL/DDI/SCN/BV-72-C: public identity address.
+        LL/DDI/SCN/BV-73-C: random identity address.
+
     Test Steps:
         1-5. Populate resolver and accept list with the public/random identity,
              enable resolution and passive scanning with accept-list policy 1.
@@ -10821,6 +10697,1246 @@ async def privacy_periodic_reception(tester, *, random_identity):
         hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(event.sync_handle)
     )
     await privacy_peer.scan_enable(tester, False, extended=True)
+
+
+PAWR_CONNECTION_COMPLETE = hci.HCI_LE_Enhanced_Connection_Complete_V2_Event
+
+
+def _pawr_take_all(tester, kind):
+    result = []
+    while event := tester.take(lambda event: isinstance(event, kind)):
+        result.append(event)
+    return result
+
+
+async def _pawr_fill_requests(tester, selected, data, *, slot_start=0, slot_count=10):
+    """Publish requested instances only, with each HCI command within 255 octets."""
+    requests = _pawr_take_all(tester, pawr_peer.REQUEST)
+    published = 0
+    for event in requests[-1:]:
+        subevents = [
+            sub
+            for sub in selected
+            if event.subevent_start
+            <= sub
+            < event.subevent_start + event.subevent_data_count
+        ]
+        capacity = max(1, 253 // (4 + len(data)))
+        for start in range(0, len(subevents), capacity):
+            batch = subevents[start : start + capacity]
+            await tester.command(
+                pawr_peer.SET_DATA(
+                    0,
+                    batch,
+                    [slot_start] * len(batch),
+                    [slot_count] * len(batch),
+                    [data] * len(batch),
+                )
+            )
+            published += len(batch)
+    return published
+
+
+async def _pawr_response_packet(
+    tester, train, indication, subevent, slot, data, *, aa=None
+):
+    start = indication.start_us + train.pawr[2] * 1250 + slot * train.pawr[3] * 125
+    channel = csa2_channel(
+        train.counter ^ subevent, train.access_address, train.channel_map
+    )
+    await tester.transmit(
+        channel,
+        ext_pdu(data=data),
+        start_us=start,
+        access_address=train.rsp_aa if aa is None else aa,
+        crc_init=train.crc_init,
+        phy=train.phy,
+    )
+    return start
+
+
+async def pawr_advertising_responses(tester, *, wrong_slot=False):
+    """Transmit Periodic Advertising with Responses and filter response slots.
+
+    Initial Condition:
+        Standby; public non-connectable/non-scannable extended advertising.
+
+    Test Case Configuration:
+        LL/DDI/ADV/BV-88-C: responses in requested slots.
+        LL/DDI/ADV/BI-08-C: responses outside requested slots.
+
+    Test Steps:
+        1. For BV-88, execute all six Table 4.2-42 rounds, configuring ten
+           100-ms subevents, RSD 10 ms, each row's RSS and 25 slots.
+        2. Read SyncInfo and the independent response-timing ACAD from air.
+        3. For ten events with extended advertising on and ten with it off,
+           answer data requests for only the row's selected subevents.
+        4. Check every IND's channel, timing, addresses and exact payload.
+           Send 3-25 seeded random slot responses, including requested slots;
+           reassemble reports and check each ten-iteration success rate.
+        5. For BI-08, use ten 65-ms subevents and RSD 1.25 ms. Request only
+           slot 3; send in slot 2 first, then random slots except 3 for five
+           completed data-response iterations. Failure reports are optional.
+        6. Disable periodic advertising and clear the set.
+
+    Expected Outcome:
+        Requested data appears once per instance. At least 95% of requested
+        responses complete in each ten-iteration phase. Reports are emitted only
+        in requested slots, with exact payload and complete final fragments.
+        Wrong-slot data is never reported as received. Extended advertising
+        may stop while the periodic train and response reporting continue.
+
+    Source Correction:
+        BI-08 Expected Outcome copies timing values and responseDuration from
+        another procedure. Use its explicit Step 2 fields (SI 0x34, RSD 0x01,
+        RSS 0x0A) and the Core Periodic Advertising Response Timing Information
+        format. This local reading is not an adopted SIG erratum.
+
+    Reference:
+        LL.TS.p28, LL/DDI/ADV/BV-88-C, Table 4.2-42, Steps 1-16;
+        LL/DDI/ADV/BI-08-C, Steps 1-13. Core Vol 6, Part B, 4.4.2.12.2.
+    """
+    generator = random.Random(0)
+    rounds = (
+        [(10, (0,), 10)]
+        if wrong_slot
+        else [
+            (10, (0,), 1),
+            (10, (1, 3), 25),
+            (10, (3,), 50),
+            (15, (9,), 127),
+            (10, (3, 4, 5), 25),
+            (25, (0, 9), 249),
+        ]
+    )
+    for spacing, selected, size in rounds:
+        timing = (10, 52, 1, spacing) if wrong_slot else (10, 80, 8, spacing)
+        train, _ = await pawr_peer.advertiser(
+            tester, interval=520 if wrong_slot else 800, timing=timing
+        )
+        data = bytes(generator.randrange(1, 255) for _ in range(size))
+        first_slot = 3 if wrong_slot else generator.randrange(15)
+        allowed = {3} if wrong_slot else set(range(first_slot, first_slot + 10))
+        for phase, iterations in enumerate((5,) if wrong_slot else (10, 10)):
+            if phase:
+                await tester.command(
+                    hci.HCI_LE_Set_Extended_Advertising_Enable_Command(0, [], [], [])
+                )
+            observed = dict.fromkeys(selected, 0)
+            sent_total = received_total = 0
+            for _ in range(iterations + 2):
+                if min(observed.values()) >= iterations:
+                    break
+                for sub in range(train.pawr[0]):
+                    await _pawr_fill_requests(
+                        tester,
+                        selected,
+                        data,
+                        slot_start=first_slot,
+                        slot_count=1 if wrong_slot else 10,
+                    )
+                    packet = await pawr_peer.receive_indication(tester, train, sub)
+                    fields = decode_extended(packet.pdu)
+                    assert not any(
+                        name in fields for name in ('address', 'target', 'aux', 'sync')
+                    )
+                    if not fields['data']:
+                        continue
+                    assert sub in selected and fields['data'] == data
+                    observed[sub] += 1
+                    if wrong_slot:
+                        slots = (
+                            [2]
+                            if observed[sub] == 1
+                            else [
+                                generator.choice(
+                                    [slot for slot in range(20) if slot != 3]
+                                )
+                            ]
+                        )
+                    else:
+                        slots = generator.sample(range(25), generator.randint(3, 25))
+                        if not allowed.intersection(slots):
+                            slots[0] = generator.choice(sorted(allowed))
+                    sent = {}
+                    # Leave T_IFS before the following slot; ext_pdu has 88 us
+                    # of overhead on LE 1M when no optional fields are included.
+                    capacity = (spacing * 125 - 150 - 88) // 8
+                    for slot in sorted(slots):
+                        payload = bytes(
+                            generator.randrange(1, 255)
+                            for _ in range(generator.randint(1, min(249, capacity)))
+                        )
+                        await _pawr_response_packet(
+                            tester, train, packet, sub, slot, payload
+                        )
+                        if slot in allowed:
+                            sent[slot] = payload
+                    end = (
+                        packet.start_us
+                        + timing[2] * 1250
+                        + (max(max(slots), max(allowed)) + 1) * spacing * 125
+                    )
+                    await tester.wait(max(0, end - tester.radio.now_us))
+                    received = pawr_peer.response_data(
+                        _pawr_take_all(tester, pawr_peer.RESPONSES), sub, allowed
+                    )
+                    assert all(
+                        slot in sent and payload == sent[slot]
+                        for slot, payload in received.items()
+                    )
+                    if wrong_slot:
+                        assert not received
+                    else:
+                        sent_total += len(sent)
+                        received_total += len(received)
+                train.next_event()
+            assert min(observed.values()) >= iterations, (
+                'requested data was never exercised'
+            )
+            if not wrong_slot:
+                assert sent_total and received_total * 100 >= sent_total * 95
+        await pawr_peer.stop_advertising(tester)
+
+
+async def pawr_advertising_adi(tester):
+    """ADI in Periodic Advertising when supporting Periodic Advertising Filtering.
+
+    Initial Condition:
+        A public extended set and ten 100-ms PAwR subevents on LE 1M.
+
+    Test Steps:
+        1. Enable ADI and submit 100 random octets for each requested instance.
+        2. Observe ten periodic events and their subevents while extended
+           advertising remains enabled, following source alternative 10B.
+        3. Compare the periodic ADI with the superior AUX_ADV_IND ADI and the
+           preceding periodic indication whenever new Host data is sent.
+
+    Expected Outcome:
+        The SID matches the set. Every new payload has a different DID from
+        the advertising set and the preceding periodic indication. Data is
+        complete and no AuxPtr or address fields appear in a subevent.
+
+    Source Correction:
+        The Expected Outcome copies the no-response ACAD rule into the PAwR
+        case. Follow alternative 2B and Step 4, which require response timing
+        in AUX_ADV_IND. The Lower Tester verifies those timing fields.
+
+    Reference:
+        LL.TS.p28, 4.2.3.14, LL/DDI/ADV/BV-87-C, Table 4.2-35 alternative 2B.
+        Core Vol 6, Part B, 4.4.2.11.
+    """
+    data = bytes(random.Random(0).sample(range(1, 255), 100))
+    for retry in range(2):
+        train, announcement = await pawr_peer.advertiser(
+            tester, timing=(10, 80, 1, 10), slots=5, adi=True
+        )
+        superior = int.from_bytes(announcement['adi'], 'little')
+        previous = None
+        data_indications = 0
+        collision = False
+        for _ in range(10):
+            for sub in range(10):
+                await _pawr_fill_requests(tester, range(10), data, slot_count=0)
+                fields = decode_extended(
+                    (await pawr_peer.receive_indication(tester, train, sub)).pdu
+                )
+                assert not any(
+                    name in fields for name in ('address', 'target', 'aux', 'sync')
+                )
+                adi = int.from_bytes(fields['adi'], 'little')
+                assert adi >> 12 == superior >> 12
+                if adi == superior:
+                    collision = True
+                    break
+                if fields['data']:
+                    assert adi != previous and fields['data'] == data
+                    data_indications += 1
+                previous = adi
+            if collision:
+                break
+            train.next_event()
+        await pawr_peer.stop_advertising(tester)
+        if not collision:
+            assert data_indications, 'no Host data was verified'
+            return
+        assert retry == 0, 'periodic and extended DIDs collide after the allowed rerun'
+
+
+async def pawr_advertising_channel_map(tester):
+    """AUX_SYNC_SUBEVENT_IND PDU with Channel Map Update Indication.
+
+    Initial Condition:
+        A ten-subevent public PAwR advertiser using all 37 data channels.
+
+    Test Steps:
+        1. Start the train and read its SyncInfo and response timing.
+        2. Supply one data octet for subevent 0. Execute all four Table
+           4.2-44 maps: odd, even, odd and even channels. Retry rejected
+           classifications up to twenty times with five seconds between tries.
+        3. Receive subevents and decode ACAD type 0x28 independently.
+        4. Check that the first indication names an Instant at least six
+           events ahead. At that Instant switch the Lower Tester's CSA#2 map;
+           continue for two further periodic events.
+
+    Expected Outcome:
+        Each indication contains the requested map and an Instant at least
+        six events ahead. Before the Instant old-map channels are used;
+        thereafter the train remains receivable on the new map.
+
+    Reference:
+        LL.TS.p28, LL/DDI/ADV/BV-90-C, Table 4.2-44; Core 4.4.2.12.1.
+    """
+    train, _ = await pawr_peer.advertiser(tester, timing=(10, 80, 8, 10))
+    await _pawr_fill_requests(tester, [0], b'\x5a', slot_count=0)
+    odd = sum(1 << channel for channel in range(1, 37, 2))
+    even = sum(1 << channel for channel in range(0, 37, 2))
+    generator = random.Random(0)
+    for requested in (odd, even, odd, even):
+        channels = requested
+        for attempt in range(20):
+            result = await tester.command(
+                hci.HCI_LE_Set_Host_Channel_Classification_Command(
+                    channels.to_bytes(5, 'little')
+                ),
+                tuple(range(256)),
+            )
+            if result.status == 0:
+                break
+            await tester.wait(5_000_000)
+            while train.anchor <= tester.radio.now_us + 1000:
+                train.next_event()
+            enabled = [channel for channel in range(37) if requested >> channel & 1]
+            channels = sum(
+                1 << channel
+                for channel in generator.sample(
+                    enabled, generator.randint(2, len(enabled))
+                )
+            )
+        else:
+            pytest.skip('Inconclusive: twenty channel classifications rejected')
+        instant = None
+        after = 0
+        for _ in range(12):
+            if instant is not None and train.counter == instant:
+                train.channel_map = channels
+            for sub in range(10):
+                fields = decode_extended(
+                    (await pawr_peer.receive_indication(tester, train, sub)).pdu
+                )
+                acad = fields.get('acad', b'')
+                offset = 0
+                while offset < len(acad):
+                    size = acad[offset]
+                    assert size and offset + size < len(acad)
+                    if acad[offset + 1] == 0x28:
+                        value = acad[offset + 2 : offset + size + 1]
+                        assert len(value) == 7
+                        assert int.from_bytes(value[:5], 'little') == channels
+                        update = int.from_bytes(value[5:7], 'little')
+                        if instant is None:
+                            assert 6 <= (update - train.counter) & 0xFFFF < 0x8000
+                        else:
+                            assert update == instant
+                        instant = update
+                    offset += size + 1
+            if train.channel_map == channels:
+                after += 1
+                if after >= 2:
+                    train.next_event()
+                    break
+            train.next_event()
+        if instant is None:
+            pytest.skip('Inconclusive: no Channel Map Update Indication')
+        assert train.channel_map == channels and after >= 2
+    await tester.command(
+        hci.HCI_LE_Set_Extended_Advertising_Enable_Command(0, [], [], [])
+    )
+    await pawr_peer.stop_advertising(tester)
+
+
+async def pawr_advertising_request_window(tester):
+    """Periodic Advertising with Responses, Reject Subevent Data With Invalid Subevent.
+
+    Initial Condition:
+        128 subevents at 200 ms, PAI 25.6 s, RSD 10 ms and one response slot.
+
+    Test Steps:
+        1. Enable periodic/extended advertising and receive its SyncInfo.
+        2. Disable extended advertising and observe consecutive data requests.
+        3. After a new window overrides the old one, send the old window's
+           first and last subevent numbers; then submit the current first one.
+        4. Receive its IND on the independently calculated channel.
+
+    Expected Outcome:
+        Old-window data returns 0x0C. Current-window data succeeds and only
+        that payload is transmitted. Every request count is below 128.
+
+    Reference:
+        LL.TS.p28, LL/DDI/ADV/BI-11-C, Steps 1-15; Core 7.7.65.36.
+    """
+    train, _ = await pawr_peer.advertiser(
+        tester, interval=0x5000, timing=(128, 160, 8, 10), slots=1
+    )
+    await tester.command(
+        hci.HCI_LE_Set_Extended_Advertising_Enable_Command(0, [], [], [])
+    )
+    first = await pawr_peer.next_request(tester, limit_us=120_000_000)
+    second = await pawr_peer.next_request(tester, limit_us=120_000_000)
+    assert first.subevent_data_count < 128
+    for sub in (
+        first.subevent_start,
+        first.subevent_start + first.subevent_data_count - 1,
+    ):
+        await tester.command(pawr_peer.SET_DATA(0, [sub], [0], [0], [b'old']), 0x0C)
+    await tester.command(
+        pawr_peer.SET_DATA(0, [second.subevent_start], [0], [0], [b'current'])
+    )
+    # The replacement window may span into the next periodic event.
+    sub = second.subevent_start
+    while train.anchor + sub * 200_000 <= tester.radio.now_us:
+        train.next_event()
+    packet = await pawr_peer.receive_indication(tester, train, sub)
+    assert decode_extended(packet.pdu)['data'] == b'current'
+    await pawr_peer.stop_advertising(tester)
+
+
+async def pawr_advertising_future_response(tester):
+    """Receive Subevent Response Data in Future Subevent, Advertiser.
+
+    Initial Condition:
+        Five subevents, SI 318.75 ms, RSD 317.5 ms, RSS 250 us and four slots.
+
+    Test Steps:
+        1. Select subevent 2 and the table's response subevent (4 or 1).
+        2. Submit data only for subevent 2 but request four response slots
+           for both; send one-octet responses in the future selected subevent.
+        3. Exercise current-event subevent 4 and next-event subevent 1.
+        4. Repeat after disabling extended advertising.
+
+    Expected Outcome:
+        Response Report uses the actual response subevent and slot, carries
+        the exact response payload and a complete final Data_Status.
+
+    Reference:
+        LL.TS.p28, LL/DDI/ADV/BV-91-C, Table 4.2-45; Core 4.4.2.12.2.
+    """
+    generator = random.Random(0)
+    for target in (4, 1):
+        data = bytes(generator.randint(1, 254) for _ in range(3))
+        data_seen = 0
+        train, _ = await pawr_peer.advertiser(
+            tester, interval=1275, timing=(5, 255, 254, 2), slots=4
+        )
+        for event in range(3):
+            if event == 1:
+                await tester.command(
+                    hci.HCI_LE_Set_Extended_Advertising_Enable_Command(0, [], [], [])
+                )
+            for sub in range(5):
+                for req in _pawr_take_all(tester, pawr_peer.REQUEST)[-1:]:
+                    for selected in (2, target):
+                        if (
+                            req.subevent_start
+                            <= selected
+                            < req.subevent_start + req.subevent_data_count
+                        ):
+                            await tester.command(
+                                pawr_peer.SET_DATA(
+                                    0,
+                                    [selected],
+                                    [0],
+                                    [4],
+                                    [data if selected == 2 else b''],
+                                )
+                            )
+                packet = await pawr_peer.receive_indication(tester, train, sub)
+                fields = decode_extended(packet.pdu)
+                if fields['data']:
+                    assert sub == 2 and fields['data'] == data
+                    data_seen += 1
+                if sub == target and event:
+                    slots = generator.sample(range(4), generator.randint(1, 4))
+                    sent = {}
+                    for slot in sorted(slots):
+                        sent[slot] = bytes([generator.randint(1, 254)])
+                        await _pawr_response_packet(
+                            tester, train, packet, sub, slot, sent[slot]
+                        )
+                    # Wait for all four configured response windows to close.
+                    end = packet.start_us + 317_500 + 4 * 250
+                    await tester.wait(max(0, end - tester.radio.now_us))
+                    reports = _pawr_take_all(tester, pawr_peer.RESPONSES)
+                    for report in reports:
+                        assert report.advertising_handle == 0
+                        assert report.subevent in (2, target)
+                        if report.subevent != target:
+                            assert all(
+                                entry.data_status == 0xFF and not entry.data
+                                for entry in report.responses
+                            )
+                    received = pawr_peer.response_data(
+                        [report for report in reports if report.subevent == sub],
+                        sub,
+                        set(range(4)),
+                    )
+                    assert received == sent
+            train.next_event()
+        assert data_seen, 'subevent-2 Host data was never verified'
+        await pawr_peer.stop_advertising(tester)
+
+
+async def pawr_scanner_assigned_subevents(tester):
+    """Sync with a Periodic Advertiser and Listen for the Assigned Subevent.
+
+    Initial Condition:
+        Five subevents at 15 ms and RSD 1.25 ms; LE 1M scanning.
+
+    Test Steps:
+        1. For Table 4.2-83, establish the train with RSS 1.25 or 0.375 ms.
+        2. Select the assigned subevent (1 or 3); transmit ten-octet data and
+           verify the v2 report's event counter and subevent.
+        3. Submit two response octets for the table's response slot and
+           receive the PDU at RSD + slot * RSS on RspAA.
+        4. In round 3 select subevent 4, require no report for 3, then stop
+           transmitting and require a failed-reception report for 4.
+
+    Expected Outcome:
+        Only selected subevents report. Response data, CRC, channel and timing
+        match the independent peer. A missed selected subevent reports 0xFF.
+
+    Reference:
+        LL.TS.p28, LL/DDI/SCN/BV-94-C, Table 4.2-83, Steps 1-16.
+    """
+    for spacing, selected, slot in ((10, 1, 0), (3, 3, 2), (3, 3, 1)):
+        train, handle = await pawr_peer.scanner(tester, timing=(5, 12, 1, spacing))
+        await tester.command(pawr_peer.SET_SUBEVENTS(handle, 0, [selected]))
+        # Selection can take effect in the next periodic event.
+        train.next_event()
+        start, channel = await pawr_peer.transmit_indication(
+            tester, train, selected, b'0123456789'
+        )
+        report = await tester.event(pawr_peer.REPORT)
+        assert (report.subevent, report.periodic_event_counter, report.data) == (
+            selected,
+            train.counter,
+            b'0123456789',
+        )
+        await tester.command(
+            pawr_peer.SET_RESPONSE(
+                handle, train.counter, selected, selected, slot, b'OK'
+            )
+        )
+        target = start + 1250 + slot * spacing * 125
+        packet = await tester.receive(
+            channel,
+            start_us=target - 2,
+            duration_us=target - tester.radio.now_us + 100,
+            access_address=train.rsp_aa,
+            crc_init=train.crc_init,
+        )
+        assert packet is not None and packet.valid_crc
+        assert abs(packet.start_us - target) <= 2
+        assert decode_extended(packet.pdu)['data'] == b'OK'
+        if selected == 3 and slot == 1:
+            await tester.command(pawr_peer.SET_SUBEVENTS(handle, 0, [4]))
+            train.next_event()
+            await pawr_peer.transmit_indication(tester, train, 3, b'not selected')
+            await pawr_peer.transmit_indication(tester, train, 4, b'selected')
+            reports = _pawr_take_all(tester, pawr_peer.REPORT)
+            assert reports and all(r.subevent == 4 for r in reports)
+            await tester.wait(train.interval * 1250 + 1000)
+            assert any(
+                r.subevent == 4 and r.data_status == 255
+                for r in _pawr_take_all(tester, pawr_peer.REPORT)
+            )
+        await tester.command(
+            hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(handle)
+        )
+        await tester.command(hci.HCI_LE_Set_Extended_Scan_Enable_Command(0, 0, 0, 0))
+
+
+async def pawr_scanner_failure(tester):
+    """Transition to Standby State, no AUX_SYNC_SUBEVENT_IND.
+
+    Initial Condition:
+        LE 1M passive scanning; valid PAwR announcements with SI 15 ms.
+
+    Test Steps:
+        1. Announce SyncInfo and response timing, then start acquisition.
+        2. Withhold every periodic indication for six advertising events.
+        3. Observe Sync Established v2 and verify no periodic report.
+
+    Expected Outcome:
+        Synchronization fails with 0x3E after six expected events; no live
+        synchronization handle or successful data report is published.
+
+    Reference:
+        LL.TS.p28, LL/DDI/SCN/BI-07-C, Steps 1-7; Core 4.4.5.1.2.
+    """
+    train, _ = await pawr_peer.scanner(tester, timing=(5, 12, 1, 10), acquire=False)
+    await tester.wait(7 * train.interval * 1250)
+    event = await tester.event(pawr_peer.ESTABLISHED)
+    assert event.status == 0x3E and event.sync_handle == 0
+    assert not _pawr_take_all(tester, pawr_peer.REPORT)
+
+
+async def pawr_invalid_transfer_timing(tester):
+    """Periodic Advertising with Responses, Invalid Parameters.
+
+    Initial Condition:
+        An extended ACL connection to the Lower Tester on LE 1M; PAST enabled.
+
+    Test Steps:
+        1. Advertise ten 15-ms subevents with RSD 1.25 ms and RSS 1.25 ms,
+           receive an extended report, enable transfer reception and wait
+           ten seconds while maintaining the ACL and advertisements.
+        2. Send each Table 4.2-84 WR_IND timing combination: delay beyond SI,
+           SI below 7.5 ms, zero delay and zero response spacing.
+        3. Follow source alternatives 8A/8B/8C: validate a successful event,
+           accept an unsuccessful event, or check LL_UNKNOWN_RSP identifies
+           WR_IND. Terminate a successful synchronization before the next row.
+        4. Send valid timing and require synchronization and a successful event.
+
+    Expected Outcome:
+        Each invalid timing row takes one of the three source outcomes.
+        A subsequent valid transfer establishes synchronization with the
+        original ten-subevent timing.
+
+    Reference:
+        LL.TS.p28, LL/DDI/SCN/BI-08-C, Table 4.2-84, Steps 1-10.
+    """
+    link = await _link(tester, central=True, interval=240, pawr=True)
+    await exchange_features(link, PEER_FEATURES)
+    train = lower_train(link, interval=480, pawr=True)
+    train.pawr = (10, 12, 1, 10)
+    session = TransferSession(tester, link, train)
+    session.data = lambda counter: bytes(range(1, 101))
+    session.announce = dict(address=LOWER_PERIPHERAL_PUBLIC_ADDRESS, sid=5)
+    await session.command(
+        scan_parameters(
+            extended=True,
+            scan_types=[0],
+            scan_intervals=[16],
+            scan_windows=[16],
+        )
+    )
+    await session.command(hci.HCI_LE_Set_Extended_Scan_Enable_Command(1, 0, 0, 0))
+    announced = None
+    for _ in range(64):
+        session.announce['primary_channel'] = 37 + link.counter % 3
+        await session.step()
+        announced = tester.take(
+            lambda event: isinstance(
+                event, hci.HCI_LE_Extended_Advertising_Report_Event
+            )
+        )
+        if announced is not None:
+            break
+    assert announced is not None and any(
+        r.periodic_advertising_interval == train.interval for r in announced.reports
+    )
+    await _transfer_mode(session, 2)
+    await session.run_for(10_000_000)
+    unknown = []
+
+    def receive(packet):
+        if packet.pdu[0] & 3 == 3 and packet.pdu[2:4] == bytes([7, 0x2A]):
+            unknown.append(packet)
+
+    link.on_receive = receive
+
+    def next_indication():
+        session.catch_up()
+        periods = max(0, (link.anchor - train.anchor) // (train.interval * 1250) + 1)
+        return session.indication(
+            address=LOWER_PERIPHERAL_PUBLIC_ADDRESS,
+            counter=train.counter + periods,
+        )
+
+    for si, delay, spacing in ((6, 13, 5), (5, 1, 5), (6, 0, 5), (6, 1, 0)):
+        unknown.clear()
+        indication = SyncIndication.decode(next_indication())
+        await session.send_control(
+            replace(indication, pawr=(10, si, delay, spacing)).encode()
+        )
+        outcome = None
+        for _ in range(32):
+            outcome = tester.take(
+                lambda event: isinstance(
+                    event,
+                    hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_V2_Event,
+                )
+            )
+            if outcome is not None or unknown:
+                break
+            await session.step()
+        assert outcome is not None or unknown, (
+            'none of source alternatives 8A/8B/8C occurred'
+        )
+        if outcome is not None and outcome.status == 0:
+            assert (
+                outcome.subevent_interval,
+                outcome.response_slot_delay,
+                outcome.response_slot_spacing,
+            ) == (si, delay, spacing)
+            await session.command(
+                hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(
+                    outcome.sync_handle
+                )
+            )
+    await session.send_control(next_indication())
+    event = await _received(session, sid=5, address=LOWER_PERIPHERAL_PUBLIC_ADDRESS)
+    assert (
+        event.num_subevents,
+        event.subevent_interval,
+        event.response_slot_delay,
+        event.response_slot_spacing,
+    ) == (10, 12, 1, 10)
+    await session.command(
+        hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(event.sync_handle)
+    )
+    session.mode, session.announce = 'off', None
+    await session.command(hci.HCI_LE_Set_Extended_Scan_Enable_Command(0, 0, 0, 0))
+    await _disconnect(tester, link)
+
+
+async def pawr_scanner_same_identity(tester):
+    """PAwR Trains, Do Not Synchronize with Same Address, Address Type and SID.
+
+    Initial Condition:
+        The IUT has synchronized to the Lower Tester's PAwR train.
+
+    Test Steps:
+        1. Continue periodic indications for ten intervals.
+        2. Request a second sync for the same address, address type and SID.
+        3. Observe the asynchronous command response and continue the train.
+
+    Expected Outcome:
+        The second request returns Command Disallowed, without replacing the
+        original handle or emitting another successful establishment event.
+
+    Reference:
+        LL.TS.p28, 4.2.4.25, LL/DDI/SCN/BV-97-C, alternative 9A.
+    """
+    train, handle = await pawr_peer.scanner(
+        tester, timing=(2, 12, 1, 10), observe_us=10_000_000
+    )
+    for _ in range(10):
+        train.next_event()
+        await pawr_peer.transmit_indication(tester, train)
+    await tester.command(
+        create_sync(
+            advertising_sid=3,
+            advertiser_address_type=LOWER_PERIPHERAL_PUBLIC_ADDRESS.address_type,
+            advertiser_address=LOWER_PERIPHERAL_PUBLIC_ADDRESS,
+        ),
+        0x0B,
+    )
+    assert not _pawr_take_all(tester, pawr_peer.ESTABLISHED)
+    train.next_event()
+    await pawr_peer.transmit_indication(tester, train, data=b'original sync')
+    report = await tester.expect(
+        lambda event: isinstance(event, pawr_peer.REPORT)
+        and event.sync_handle == handle
+        and event.data == b'original sync'
+    )
+    assert report.data_status == 0 and report.periodic_event_counter == train.counter
+    await tester.command(hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(handle))
+
+
+async def pawr_scanner_future_response(tester):
+    """Sync with a Periodic Advertiser, Send Response Data in Future Subevent.
+
+    Initial Condition:
+        Five subevents, SI 318.75 ms, RSD 317.5 ms and RSS 250 us on LE 1M.
+
+    Test Steps:
+        1. Acquire the train and select subevents 1, 2 and 4.
+        2. Receive data in subevent 2; submit a response in current subevent 4
+           or next-event subevent 1 as specified in Table 4.2-86.
+        3. Receive the target indication and verify a response in slot 3.
+        4. For round 3, wait until subevent 2 in the next periodic event has
+           passed before requesting a response to the old event; require
+           Too Late and observe the target slot to prove no transmission.
+
+    Expected Outcome:
+        The first two responses use the requested slot and exact payload
+        within one PAI of the request. The late request produces no response.
+
+    Source Conflict:
+        Step 12A.2 requires AdvA, but Core Vol 6, Part B, 2.3.1.10 makes that
+        field optional. Check its value when present; timing, CRC, RspAA and
+        exact response data are required in either format. The Controller
+        omits AdvA, so this does not satisfy that explicit TS address check.
+        Retain source_conflict and a PARTIAL protocol verdict; no SIG erratum
+        is claimed.
+
+    Reference:
+        LL.TS.p28, LL/DDI/SCN/BV-98-C, Table 4.2-86, Steps 1-14.
+    """
+    generator = random.Random(0)
+    train, handle = await pawr_peer.scanner(
+        tester, timing=(5, 255, 254, 2), interval=1275
+    )
+    await tester.command(pawr_peer.SET_SUBEVENTS(handle, 0, [1, 2, 4]))
+    for target in (4, 1, 2):
+        train.next_event()
+        await pawr_peer.transmit_indication(tester, train, 1, b'')
+        data = bytes(generator.randint(1, 254) for _ in range(10))
+        await pawr_peer.transmit_indication(tester, train, 2, data)
+        report = await tester.expect(
+            lambda event: isinstance(event, pawr_peer.REPORT)
+            and event.subevent == 2
+            and event.data == data
+        )
+        assert (
+            report.data_status == 0 and report.periodic_event_counter == train.counter
+        )
+        counter, request_start = train.counter, train.anchor + 2 * 318_750
+        if target == 2:
+            # Table 4.2-86 round 3 issues the command in the next event,
+            # after subevent 2 (and the one-interval response deadline).
+            await pawr_peer.transmit_indication(tester, train, 4, b'')
+            train.next_event()
+            await pawr_peer.transmit_indication(tester, train, 1, b'')
+            await pawr_peer.transmit_indication(tester, train, 2, b'')
+            await tester.command(
+                pawr_peer.SET_RESPONSE(handle, counter, 2, 2, 3, b'x'), 0x46
+            )
+            due = train.anchor + 2 * 318_750 + 317_500 + 3 * 250
+            channel = csa2_channel(
+                train.counter ^ 2, train.access_address, train.channel_map
+            )
+            packet = await tester.receive(
+                channel,
+                duration_us=due - tester.radio.now_us + 250,
+                access_address=train.rsp_aa,
+                crc_init=train.crc_init,
+            )
+            assert packet is None, 'Too Late command still produced a response'
+            await pawr_peer.transmit_indication(tester, train, 4, b'')
+            continue
+        payload = bytes([generator.randint(1, 254)])
+        await tester.command(
+            pawr_peer.SET_RESPONSE(handle, counter, 2, target, 3, payload)
+        )
+        if target == 1:
+            await pawr_peer.transmit_indication(tester, train, 4, b'')
+            train.next_event()
+        start, channel = await pawr_peer.transmit_indication(tester, train, target, b'')
+        due = start + 317_500 + 3 * 250
+        packet = await tester.receive(
+            channel,
+            start_us=due - 2,
+            duration_us=due - tester.radio.now_us + 100,
+            access_address=train.rsp_aa,
+            crc_init=train.crc_init,
+        )
+        assert packet is not None and packet.valid_crc
+        assert abs(packet.start_us - due) <= 2
+        assert packet.start_us - request_start < train.interval * 1250
+        fields = decode_extended(packet.pdu)
+        assert fields['data'] == payload
+        if 'address' in fields:
+            assert fields['address'] == bytes(DUT_ADDRESS)
+    await tester.command(hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(handle))
+    await tester.command(hci.HCI_LE_Set_Extended_Scan_Enable_Command(0, 0, 0, 0))
+
+
+def _pawr_initiate_command(*, peer=PEER_ADDRESS, own_type=0, subevent=5, phys=1):
+    return hci.HCI_LE_Extended_Create_Connection_V2_Command(
+        0,
+        subevent,
+        0,
+        own_type,
+        peer.address_type,
+        peer,
+        phys,
+        [0x1111],
+        [0x1111],
+        [24],
+        [24],
+        [0],
+        [100],
+        [0],
+        [0],
+    )
+
+
+async def _pawr_accept_request(tester, train, packet, *, own_address=DUT_ADDRESS):
+    """Answer a PAwR AUX_CONNECT_REQ and serve the first ACL event."""
+    pdu = packet.pdu
+    assert pdu[0] & 15 == 5 and pdu[8:14] == bytes(PEER_ADDRESS)
+    init = hci.Address(
+        pdu[2:8],
+        hci.AddressType.RANDOM_DEVICE if pdu[0] & 64 else hci.AddressType.PUBLIC_DEVICE,
+    )
+    await tester.transmit(
+        csa2_channel(train.counter ^ 5, train.access_address, train.channel_map),
+        ext_pdu(kind=8, address=PEER_ADDRESS, target=init),
+        start_us=packet.end_us + 150,
+        **train.parameters,
+    )
+    parameters = LinkParameters.decode(pdu[14:])
+    link = PeerLink(tester, parameters, packet.end_us + 1250, central=True, csa2=True)
+    await link.exchange()
+    event = await tester.event(PAWR_CONNECTION_COMPLETE)
+    assert (
+        event.status == 0
+        and event.advertising_handle == 0
+        and event.sync_handle == 0xFFFF
+    )
+    link.handle = event.connection_handle
+    return link
+
+
+async def pawr_advertiser_connection(tester, *, random_address=False):
+    """Reconnect with a Synchronized Device using PAwR, Public or Random Address.
+
+    Initial Condition:
+        A ten-subevent PAwR advertiser on LE 1M with SI 65 ms. The random
+        variant uses distinct Set Random Address (ADDR1) and set address (ADDR2).
+
+    Test Case Configuration:
+        LL/DDI/ADV/BV-89-C: public address.
+        LL/DDI/ADV/BV-110-C: random initiator and advertising addresses.
+
+    Test Steps:
+        1. Enable the train, read its announcements, and observe ten seconds.
+        2. Request connection in subevent 5 but withhold AUX_CONNECT_RSP;
+           require Enhanced Connection Complete v2 with status 0x3E.
+        3. Repeat, answer at T_IFS and maintain the first ACL events.
+        4. Disconnect, publish subevent data, and repeat successful initiation;
+           the connect request must take precedence over queued data.
+        5. While the first successful ACL is active, receive extended and
+           periodic advertising and complete the Host-requested Feature
+           Exchange. Then disconnect before testing the data variant.
+
+    Expected Outcome:
+        Connection requests use the train's AA/CRC and the chosen subevent.
+        The random variant advertises ADDR2 but initiates with ADDR1.
+        Successful v2 completion carries Advertising_Handle 0 and Sync_Handle
+        0xFFFF; the advertiser remains active.
+
+    Reference:
+        LL.TS.p28, 4.2.3.18, LL/DDI/ADV/BV-89-C and BV-110-C,
+        Table 4.2-43, Steps 1-34; Core 4.4.2.12.2.
+    """
+    addr1 = hci.Address('C0:11:22:33:44:01', hci.AddressType.RANDOM_DEVICE)
+    addr2 = hci.Address('C0:11:22:33:44:02', hci.AddressType.RANDOM_DEVICE)
+    if random_address:
+        await tester.command(hci.HCI_LE_Set_Random_Address_Command(addr1))
+    train, fields = await pawr_peer.advertiser(
+        tester,
+        interval=520,
+        timing=(10, 52, 1, 10),
+        own_type=int(random_address),
+        random_address=addr2 if random_address else None,
+    )
+    if random_address:
+        assert fields['address'] == bytes(addr2)
+    await tester.wait(10_000_000)
+    for attempt, success in enumerate((False, True, True)):
+        while train.anchor + 5 * 65_000 <= tester.radio.now_us + 5000:
+            train.next_event()
+        if attempt == 2:
+            # Source Steps 27-28 require a request covering subevent 5 and an
+            # accepted data command before asking to replace it by CONNECT_REQ.
+            _pawr_take_all(tester, pawr_peer.REQUEST)
+            for _ in range(20):
+                request = await pawr_peer.next_request(tester)
+                if (
+                    request.subevent_start
+                    <= 5
+                    < (request.subevent_start + request.subevent_data_count)
+                ):
+                    await tester.command(
+                        pawr_peer.SET_DATA(0, [5], [0], [0], [b'\x5a'])
+                    )
+                    break
+            else:
+                raise AssertionError('no request covered the queued-data subevent')
+            while train.anchor + 5 * 65_000 <= tester.radio.now_us + 5000:
+                train.next_event()
+        await tester.command(_pawr_initiate_command(own_type=int(random_address)))
+        packet = await pawr_peer.receive_indication(tester, train, 5)
+        assert packet.pdu[0] & 15 == 5
+        assert packet.pdu[2:8] == bytes(addr1 if random_address else DUT_ADDRESS)
+        if not success:
+            await tester.wait(10 * 24 * 1250)
+            event = await tester.event(PAWR_CONNECTION_COMPLETE)
+            assert event.status == 0x3E
+        else:
+            link = await _pawr_accept_request(tester, train, packet)
+            for _ in range(5):
+                await link.exchange()
+            if attempt == 1:
+                session = TransferSession(tester, link, train, mode='receive')
+                _, fields = await pawr_peer.connected_advertiser(session)
+                assert fields['address'] == bytes(
+                    addr2 if random_address else DUT_ADDRESS
+                )
+                await session.run_for(2 * train.interval * 1250)
+                assert session.received, 'periodic advertising stopped while connected'
+                await _iut_features(tester, link)
+            await link.disconnect(local=True)
+        train.next_event()
+        while train.anchor <= tester.radio.now_us + 1000:
+            train.next_event()
+        assert (await pawr_peer.receive_indication(tester, train, 0)).pdu[0] & 15 == 7
+    await pawr_peer.stop_advertising(tester)
+
+
+async def pawr_advertiser_existing_connection(tester):
+    """Reject Connection Request When Connected to a Peer, PAwR advertiser.
+
+    Initial Condition:
+        The IUT and Lower Tester have an existing extended ACL connection.
+
+    Test Steps:
+        1. Enable a ten-subevent PAwR train while maintaining the ACL link.
+        2. After ten seconds, request another connection to the same peer
+           through subevent 5 with the source's selected initiating PHY.
+        3. Observe the asynchronous command's error and maintain the ACL link.
+
+    Expected Outcome:
+        Source alternative 11B returns a nonzero Command Status. No second
+        connection replaces or disconnects the existing peer.
+
+    Reference:
+        LL.TS.p28, LL/DDI/ADV/BI-09-C, Steps 1-11; Core 7.8.66.
+    """
+    link = await establish(tester, central=True, extended=True)
+    await pawr_peer.configure(tester, timing=(10, 52, 1, 10), interval=520)
+    session = TransferSession(tester, link, mode='off')
+    await session.run_for(10_000_000)
+    await session.command(_pawr_initiate_command(phys=2), status=(0x0B, 0x12))
+    for _ in range(5):
+        await session.step()
+    await pawr_peer.stop_advertising(tester)
+    await link.disconnect(local=True)
+
+
+async def pawr_scanner_connection(tester):
+    """Synchronized Device Reconnects with an Advertiser using PAwR.
+
+    Initial Condition:
+        Synchronize to a ten-subevent LE 1M train with SI 15 ms.
+
+    Test Steps:
+        1. Select subevent 5 and receive 100 octets there.
+        2. Send AUX_CONNECT_REQ in unselected subevent 6; require silence.
+        3. In the next selected subevent 5, send a valid AUX_CONNECT_REQ,
+           receive AUX_CONNECT_RSP at T_IFS and serve the first ACL event.
+        4. Continue periodic reception and check its counter, handle and data.
+        5. Complete LL_FEATURE_REQ/RSP on the ACL, then disconnect and
+           disable scanning, following source Steps 18-23.
+
+    Expected Outcome:
+        Only a selected subevent accepts the request. AUX_CONNECT_RSP uses
+        the train AA/CRC; completion v2 has the original Sync_Handle and
+        Advertising_Handle 0xFF. Synchronization continues beside the ACL.
+
+    Reference:
+        LL.TS.p28, LL/DDI/SCN/BV-95-C, Steps 1-23; Core 4.4.2.12.2.
+    """
+    train, handle = await pawr_peer.scanner(
+        tester, timing=(10, 12, 1, 10), interval=160, observe_us=10_000_000
+    )
+    await tester.command(pawr_peer.SET_SUBEVENTS(handle, 0, [5]))
+    train.next_event()
+    data = random.Random(0).randbytes(100)
+    await pawr_peer.transmit_indication(tester, train, 5, data)
+    report = await tester.event(pawr_peer.REPORT)
+    assert report.subevent == 5 and report.data == data
+    parameters = LinkParameters(interval=80, timeout=400)
+    request = request_pdu(
+        5,
+        advertiser=DUT_ADDRESS,
+        scanner=LOWER_PERIPHERAL_PUBLIC_ADDRESS,
+        data=parameters.encode(),
+    )
+    for sub, answer in ((6, False), (5, True)):
+        if sub == 5:
+            train.next_event()
+        start = train.anchor + sub * 15_000
+        channel = csa2_channel(
+            train.counter ^ sub, train.access_address, train.channel_map
+        )
+        end = await tester.transmit(
+            channel, request, start_us=start, **train.parameters
+        )
+        packet = await tester.receive(
+            channel, start_us=end + 148, duration_us=150 + 100, **train.parameters
+        )
+        if not answer:
+            assert packet is None
+            continue
+        assert packet is not None and packet.valid_crc
+        assert packet.start_us == end + 150
+        fields = decode_extended(packet.pdu)
+        assert fields['address'] == bytes(DUT_ADDRESS) and fields['target'] == bytes(
+            LOWER_PERIPHERAL_PUBLIC_ADDRESS
+        )
+        link = PeerLink(tester, parameters, end + 1250, central=False, csa2=True)
+        await link.exchange()
+        event = await tester.event(PAWR_CONNECTION_COMPLETE)
+        assert (
+            event.status == 0
+            and event.sync_handle == handle
+            and event.advertising_handle == 255
+        )
+        link.handle = event.connection_handle
+        for _ in range(2):
+            train.next_event()
+            target = train.anchor + 5 * 15_000
+            while link.anchor < target:
+                await link.exchange()
+            await pawr_peer.transmit_indication(tester, train, 5, b'continued')
+            await link.exchange()
+            report = await tester.expect(
+                lambda event: isinstance(event, pawr_peer.REPORT)
+                and event.sync_handle == handle
+                and event.data == b'continued'
+            )
+            assert (
+                report.subevent == 5 and report.periodic_event_counter == train.counter
+            )
+            assert report.data_status == 0
+        await exchange_features(link, PEER_FEATURES)
+        await link.disconnect(local=False)
+    await tester.command(hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(handle))
+    await tester.command(hci.HCI_LE_Set_Extended_Scan_Enable_Command(0, 0, 0, 0))
+
+
+async def pawr_scanner_existing_connection(tester, *, central):
+    """Reject Connection Request When Connected to a Peer, PAwR synchronizer.
+
+    Initial Condition:
+        The IUT has an ACL link in the selected role and an established PAwR
+        sync acquired from advertisements by the same Lower Tester.
+
+    Test Case Configuration:
+        LL/DDI/SCN/BI-09-C: Central IUT.
+        LL/DDI/SCN/BI-10-C: Peripheral IUT.
+
+    Test Steps:
+        1. Scan the independent ten-subevent train for ten seconds. Acquire
+           with reporting initially disabled, select subevent 0, enable
+           reporting and check its 100-octet data.
+        2. Replace an indication in that selected subevent with AUX_CONNECT_REQ
+           whose InitA names the already connected Lower Tester.
+        3. Listen at T_IFS, then continue serving the original ACL link.
+
+    Expected Outcome:
+        No AUX_CONNECT_RSP or second Connection Complete is emitted. The
+        original ACL remains alive in both Central and Peripheral variants.
+
+    Reference:
+        LL.TS.p28, 4.2.4.26, LL/DDI/SCN/BI-09-C and BI-10-C,
+        Table 4.2-87; Core 4.4.2.12.2.
+    """
+    link = await _link(tester, central=central, interval=240, pawr=True)
+    await tester.masks(le=(1 << 64) - 1)
+    peer = LOWER_PERIPHERAL_PUBLIC_ADDRESS if central else LOWER_CENTRAL_PUBLIC_ADDRESS
+    train = lower_train(link, interval=480, pawr=True)
+    train.pawr = (10, 12, 1, 10)
+    session = TransferSession(tester, link, train)
+    session.announce = dict(address=peer, sid=3)
+
+    async def scan_step():
+        # A 300-ms ACL interval is a multiple of the 10-ms scan window.
+        # Rotate primary channels to avoid testing only one fixed scan phase.
+        session.announce['primary_channel'] = 37 + link.counter % 3
+        await session.step()
+
+    async def scanning_until(predicate, *, events=64):
+        for _ in range(events):
+            if (result := tester.take(predicate)) is not None:
+                return result
+            await scan_step()
+        return tester.take(predicate)
+
+    await session.command(
+        scan_parameters(
+            extended=True,
+            scan_types=[0],
+            scan_intervals=[16],
+            scan_windows=[16],
+        )
+    )
+    await session.command(hci.HCI_LE_Set_Extended_Scan_Enable_Command(1, 0, 0, 0))
+    announcement = await scanning_until(
+        lambda event: isinstance(event, hci.HCI_LE_Extended_Advertising_Report_Event)
+        and any(
+            r.address == peer and r.periodic_advertising_interval == train.interval
+            for r in event.reports
+        ),
+        events=64,
+    )
+    assert announcement is not None
+    deadline = tester.radio.now_us + 10_000_000
+    while link.anchor < deadline:
+        await scan_step()
+    await session.command(
+        create_sync(
+            options=2,
+            advertising_sid=3,
+            advertiser_address_type=peer.address_type,
+            advertiser_address=peer,
+            sync_timeout=300,
+        )
+    )
+    event = await scanning_until(
+        lambda event: isinstance(event, pawr_peer.ESTABLISHED), events=64
+    )
+    assert event is not None and event.status == 0 and event.num_subevents == 10
+    assert event.advertiser_address == peer and not session.reports()
+    await session.command(pawr_peer.SET_SUBEVENTS(event.sync_handle, 0, [0]))
+    await session.command(
+        hci.HCI_LE_Set_Periodic_Advertising_Receive_Enable_Command(event.sync_handle, 1)
+    )
+    data = bytes(random.Random(0).sample(range(1, 255), 100))
+    session.data = lambda counter: data
+    report = await scanning_until(
+        lambda event: isinstance(event, pawr_peer.REPORT) and event.data == data,
+        events=64,
+    )
+    assert (
+        report is not None
+        and report.subevent == 0
+        and report.sync_handle == event.sync_handle
+    )
+    assert report.data_status == 0
+    session.mode, session.announce = 'off', None
+    while train.anchor <= tester.radio.now_us + 2000:
+        train.next_event()
+    while link.anchor < train.anchor:
+        await session.step()
+    channel = train.channel
+    request = request_pdu(
+        5, advertiser=DUT_ADDRESS, scanner=peer, data=LinkParameters().encode()
+    )
+    end = await tester.transmit(
+        channel, request, start_us=train.anchor, **train.parameters
+    )
+    packet = await tester.receive(
+        channel, start_us=end + 148, duration_us=250, **train.parameters
+    )
+    assert packet is None
+    await session.run(5)
+    complete = (
+        hci.HCI_LE_Connection_Complete_Event,
+        hci.HCI_LE_Enhanced_Connection_Complete_Event,
+        PAWR_CONNECTION_COMPLETE,
+    )
+    assert not _pawr_take_all(tester, complete)
+    await session.command(
+        hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(event.sync_handle)
+    )
+    await session.command(hci.HCI_LE_Set_Extended_Scan_Enable_Command(0, 0, 0, 0))
+    await _disconnect(tester, link)
 
 
 PROCEDURES: ProcedureMap = {}
@@ -11838,22 +12954,6 @@ PROCEDURES |= procedure_cases(
     },
 )
 
-# Verify that a scanner without Periodic Advertising with Responses (PAwR) support
-# ignores an advertiser's connection request while continuing to receive the train as
-# ordinary periodic advertising.
-PROCEDURES |= procedure_cases(
-    ignore_a_connection_request_periodic_advertising_with_responses_not_supported,
-    {
-        'LL/DDI/SCN/BV-99-C': (
-            (
-                'Ignore a Connection Request, Periodic Advertising with '
-                'Responses Not Supported'
-            ),
-            {},
-        ),
-    },
-)
-
 # Verify that a legacy passive scanner without Decision-Based Advertising Filtering
 # support ignores Decision PDUs rather than reporting them as legacy advertisements.
 PROCEDURES |= procedure_cases(
@@ -11900,6 +13000,12 @@ PROCEDURES |= procedure_cases(
             marks=[
                 pytest.mark.limited,
             ],
+        ),
+        'LL/DDI/SCN/BV-132-C': pytest.param(
+            'Extended Scanning, Passive, Periodic Advertising Report, '
+            'Window Widening, LE Periodic Advertising Report [v2]',
+            {'v2': True},
+            marks=[pytest.mark.limited],
         ),
     },
 )
@@ -12152,6 +13258,193 @@ PROCEDURES |= procedure_cases(
             'Extended Scanning, Periodic Advertising Reception – '
             'Random Identity Address',
             {'random_identity': True},
+        ),
+    },
+)
+
+
+# Verify PAwR subevent data, SID/DID changes, and the absence of address and AuxPtr
+# fields in AUX_SYNC_SUBEVENT_IND.
+PROCEDURES |= procedure_cases(
+    pawr_advertising_adi,
+    {
+        'LL/DDI/ADV/BV-87-C': (
+            'ADI in Periodic Advertising when supporting Periodic '
+            'Advertising Filtering.',
+            {},
+        ),
+    },
+)
+
+# Verify requested PAwR subevent data and response reports in assigned slots, rejecting
+# wrong-slot responses and continuing periodic advertising after extended advertising
+# is disabled.
+PROCEDURES |= procedure_cases(
+    pawr_advertising_responses,
+    {
+        'LL/DDI/ADV/BV-88-C': (
+            'Transmit Periodic Advertising with Responses and filter response slots.',
+            {},
+        ),
+        'LL/DDI/ADV/BI-08-C': (
+            'Transmit Periodic Advertising with Responses and filter response slots.',
+            {'wrong_slot': True},
+        ),
+    },
+)
+
+# Verify PAwR connection initiation in the selected subevent with public and random
+# addresses, failed and successful attempts, and continued periodic advertising.
+PROCEDURES |= procedure_cases(
+    pawr_advertiser_connection,
+    {
+        'LL/DDI/ADV/BV-89-C': (
+            'Reconnect with a Synchronized Device using PAwR, Public or '
+            'Random Address.',
+            {},
+        ),
+        'LL/DDI/ADV/BV-110-C': (
+            'Reconnect with a Synchronized Device using PAwR, Public or '
+            'Random Address.',
+            {'random_address': True},
+        ),
+    },
+)
+
+# Verify that a PAwR advertiser rejects another connection to an already connected
+# peer while preserving the existing ACL connection.
+PROCEDURES |= procedure_cases(
+    pawr_advertiser_existing_connection,
+    {
+        'LL/DDI/ADV/BI-09-C': (
+            'Reject Connection Request When Connected to a Peer, PAwR advertiser.',
+            {},
+        ),
+    },
+)
+
+# Verify the PAwR channel map update indication, its future Instant, and use of the
+# old map before the Instant and the new map afterwards.
+PROCEDURES |= procedure_cases(
+    pawr_advertising_channel_map,
+    {
+        'LL/DDI/ADV/BV-90-C': (
+            'AUX_SYNC_SUBEVENT_IND PDU with Channel Map Update Indication.',
+            {},
+        ),
+    },
+)
+
+# Verify reception of a response in a future PAwR subevent, including the reported
+# subevent, response slot, exact payload and complete final data status.
+PROCEDURES |= procedure_cases(
+    pawr_advertising_future_response,
+    {
+        'LL/DDI/ADV/BV-91-C': (
+            'Receive Subevent Response Data in Future Subevent, Advertiser.',
+            {},
+        ),
+    },
+)
+
+# Verify rejection of subevent data outside the current request window and
+# transmission of data accepted for the current window.
+PROCEDURES |= procedure_cases(
+    pawr_advertising_request_window,
+    {
+        'LL/DDI/ADV/BI-11-C': (
+            'Periodic Advertising with Responses, Reject Subevent Data '
+            'With Invalid Subevent.',
+            {},
+        ),
+    },
+)
+
+# Verify reception only in selected PAwR subevents, correctly timed responses in
+# assigned slots, and failure reports for missed selected subevents.
+PROCEDURES |= procedure_cases(
+    pawr_scanner_assigned_subevents,
+    {
+        'LL/DDI/SCN/BV-94-C': (
+            'Sync with a Periodic Advertiser and Listen for the Assigned Subevent.',
+            {},
+        ),
+    },
+)
+
+# Verify that only a selected PAwR subevent accepts AUX_CONNECT_REQ, that connection
+# completion identifies the original sync, and that synchronization continues.
+PROCEDURES |= procedure_cases(
+    pawr_scanner_connection,
+    {
+        'LL/DDI/SCN/BV-95-C': (
+            'Synchronized Device Reconnects with an Advertiser using PAwR.',
+            {},
+        ),
+    },
+)
+
+# Verify failed PAwR synchronization after six expected events without indications,
+# with no live synchronization handle or successful data report.
+PROCEDURES |= procedure_cases(
+    pawr_scanner_failure,
+    {
+        'LL/DDI/SCN/BI-07-C': (
+            'Transition to Standby State, no AUX_SYNC_SUBEVENT_IND.',
+            {},
+        ),
+    },
+)
+
+# Verify rejection of invalid WR_IND timing without allocating a synchronization
+# handle, followed by successful synchronization from a valid transfer.
+PROCEDURES |= procedure_cases(
+    pawr_invalid_transfer_timing,
+    {
+        'LL/DDI/SCN/BI-08-C': (
+            'Periodic Advertising with Responses, Invalid Parameters.',
+            {},
+        ),
+    },
+)
+
+# Verify rejection of a second PAwR synchronization with the same address, address
+# type and SID, preserving the original synchronization handle.
+PROCEDURES |= procedure_cases(
+    pawr_scanner_same_identity,
+    {
+        'LL/DDI/SCN/BV-97-C': (
+            'PAwR Trains, Do Not Synchronize with Same Address, Address Type and SID.',
+            {},
+        ),
+    },
+)
+
+# Verify responses queued for a future subevent use the requested slot and exact
+# payload, while a late response request produces no transmission.
+PROCEDURES |= procedure_cases(
+    pawr_scanner_future_response,
+    {
+        'LL/DDI/SCN/BV-98-C': pytest.param(
+            'Sync with a Periodic Advertiser, Send Response Data in Future Subevent.',
+            {},
+            marks=pytest.mark.source_conflict,
+        ),
+    },
+)
+
+# Verify that a PAwR synchronizer ignores connection requests from an already
+# connected peer, preserving the original ACL connection in both roles.
+PROCEDURES |= procedure_cases(
+    pawr_scanner_existing_connection,
+    {
+        'LL/DDI/SCN/BI-09-C': (
+            'Reject Connection Request When Connected to a Peer, PAwR synchronizer.',
+            {'central': True},
+        ),
+        'LL/DDI/SCN/BI-10-C': (
+            'Reject Connection Request When Connected to a Peer, PAwR synchronizer.',
+            {'central': False},
         ),
     },
 )

@@ -6,7 +6,7 @@ These tests run the [Bumble](https://github.com/google/bumble) Python Host insid
 
 | Host | Upstream | Version |
 |---|---|---|
-| Bumble | [google/bumble](https://github.com/google/bumble) | `bumble==0.0.235`, pinned in [pyproject.toml](../../../pyproject.toml) |
+| Bumble | [google/bumble](https://github.com/google/bumble) | `bumble==0.0.236`, pinned in [pyproject.toml](../../../pyproject.toml) |
 
 ## Prepare the Environment
 
@@ -44,7 +44,7 @@ async with AsyncExitStack() as stack:
     await observer.start_scanning()
 ```
 
-For standard two-device scenarios, use the `bumble_pair` fixture from [conftest.py](conftest.py). It creates the Controllers, configures 45 dB attenuation, starts the topology and opens both Hosts. `open_bumble_device()` only opens the HCI connection and initializes Bumble; it does not configure or start the topology. HCI captures are under `bumble/<role>/`; see [artifacts](../../../docs/artifacts.md) for the rest.
+For standard two-device scenarios, use the `bumble_pair` fixture from [conftest.py](conftest.py). It creates the Controllers, configures 45 dB attenuation, starts the topology and opens both Hosts. `open_bumble_device()` uses upstream Bumble transport and Device APIs to own the connection and powered Host; it does not configure or start the topology. Broadcast tests use the advertising-set context in [common/](common/). HCI captures are under `bumble/<role>/`; see [artifacts](../../../docs/artifacts.md) for the rest.
 
 ## License
 

@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING, Protocol
 from bscontroller.address import Address, AddressType
 from bscontroller.linklayer import (
     LL_CONN_INTERVAL_UNIT_US,
-    LL_DATA_CHANNEL_MAP_ALL,
     LL_EVENT_COUNTER_MASK,
     LL_PERIODIC_INTERVAL_UNIT_US,
     LL_PERIODIC_SYNC_CONN_EVENT_SPAN,
@@ -30,9 +29,11 @@ from bscontroller.linklayer import (
     PDU_ADV_SYNC_INFO_SIZE,
     PDU_ADV_SYNC_OFFSET_ADJUST_US,
     PDU_CONTROL_PERIODIC_SYNC_SIZE,
+    PDU_CONTROL_PERIODIC_SYNC_WR_SIZE,
     ControlOpcode,
 )
 from bscontroller.linklayer.advertising import SyncInfo
+from bscontroller.linklayer.pawr import PawrTiming
 from bscontroller.linklayer.timing import LL_CLOCK_JITTER_US, window_widening
 from bscontroller.radio.base import Phy
 
@@ -63,7 +64,11 @@ def signed_counter(value: int) -> int:
 
 @dataclass(frozen=True)
 class PeriodicSyncIndication:
-    """The fields of an LL_PERIODIC_SYNC_IND PDU; SyncInfo stays raw octets."""
+    """The fields of an LL_PERIODIC_SYNC_IND PDU; SyncInfo stays raw octets.
+
+    With PAwR timing it is an LL_PERIODIC_SYNC_WR_IND, which adds RspAA and the
+    train's subevent timing (Core Vol 6, Part B, 2.4.2.40).
+    """
 
     identifier: int
     sync_info: bytes
@@ -75,30 +80,47 @@ class PeriodicSyncIndication:
     phy: int
     address: bytes
     sync_conn_event_count: int
+    pawr: PawrTiming | None = None
+    rsp_aa: int = 0
 
     def encode(self) -> bytes:
-        return bytes([ControlOpcode.LL_PERIODIC_SYNC_IND]) + PERIODIC_SYNC_FORMAT.pack(
-            self.identifier,
-            self.sync_info,
-            self.conn_event_count,
-            self.last_counter,
-            self.sid
-            | int(self.random_address) << PERIODIC_SYNC_ATYPE_SHIFT
-            | self.sca << PERIODIC_SYNC_SCA_SHIFT,
-            self.phy,
-            self.address,
-            self.sync_conn_event_count,
+        opcode = (
+            ControlOpcode.LL_PERIODIC_SYNC_IND
+            if self.pawr is None
+            else ControlOpcode.LL_PERIODIC_SYNC_WR_IND
+        )
+        return (
+            bytes([opcode])
+            + PERIODIC_SYNC_FORMAT.pack(
+                self.identifier,
+                self.sync_info,
+                self.conn_event_count,
+                self.last_counter,
+                self.sid
+                | int(self.random_address) << PERIODIC_SYNC_ATYPE_SHIFT
+                | self.sca << PERIODIC_SYNC_SCA_SHIFT,
+                self.phy,
+                self.address,
+                self.sync_conn_event_count,
+            )
+            + (self.pawr.encode(self.rsp_aa) if self.pawr is not None else b'')
         )
 
     @classmethod
     def decode(cls, payload: bytes) -> PeriodicSyncIndication:
-        if (
-            len(payload) != PDU_CONTROL_PERIODIC_SYNC_SIZE
-            or payload[0] != ControlOpcode.LL_PERIODIC_SYNC_IND
-        ):
+        size = {
+            ControlOpcode.LL_PERIODIC_SYNC_IND: PDU_CONTROL_PERIODIC_SYNC_SIZE,
+            ControlOpcode.LL_PERIODIC_SYNC_WR_IND: PDU_CONTROL_PERIODIC_SYNC_WR_SIZE,
+        }.get(payload[0] if payload else None)
+        if size is None or len(payload) != size:
             raise ValueError('invalid LL_PERIODIC_SYNC_IND')
         identifier, info, event, last, flags, phy, address, sync_event = (
-            PERIODIC_SYNC_FORMAT.unpack(payload[1:])
+            PERIODIC_SYNC_FORMAT.unpack(payload[1:PDU_CONTROL_PERIODIC_SYNC_SIZE])
+        )
+        rsp_aa, pawr = (
+            PawrTiming.decode(payload[PDU_CONTROL_PERIODIC_SYNC_SIZE:])
+            if size == PDU_CONTROL_PERIODIC_SYNC_WR_SIZE
+            else (0, None)
         )
         return cls(
             identifier,
@@ -111,6 +133,8 @@ class PeriodicSyncIndication:
             phy,
             address,
             sync_event,
+            pawr,
+            rsp_aa,
         )
 
     @property
@@ -149,6 +173,9 @@ class TrainReference:
     sid: int
     address: Address
     phy: Phy
+    # PAwR timing and RspAA, for an LL_PERIODIC_SYNC_WR_IND (2.4.2.40).
+    pawr: PawrTiming | None = None
+    rsp_aa: int = 0
 
     def anchor_of(self, counter: int) -> int:
         return (
@@ -192,7 +219,8 @@ class AdvertisingSource:
         """The next scheduled event, once the train has transmitted one.
 
         lastPaEventCounter must name a transmitted AUX_SYNC_IND (2.4.2.27). The
-        advertiser's own clock times both events.
+        advertiser's own clock times both events. A PAwR train's events start
+        with subevent 0 (2.4.2.40).
         """
         item = self.item
         last = item.periodic_last_counter
@@ -203,13 +231,15 @@ class AdvertisingSource:
             item.periodic_counter,
             last,
             item.periodic_interval,
-            LL_DATA_CHANNEL_MAP_ALL,
+            item.periodic_channel_map,
             item.periodic_aa,
             item.periodic_crc,
             LL_LOCAL_SCA,
             item.sid,
             item.address,
             item.secondary_phy,
+            item.pawr,
+            item.pawr_state.rsp_aa if item.pawr_state is not None else 0,
         )
 
 
@@ -225,12 +255,16 @@ class SynchronizationSource:
         return self.syncs.get(self.sync.handle) is not self.sync
 
     def reference(self) -> TrainReference:
-        """The last AUX_SYNC_IND received from the advertiser."""
+        """The last AUX_SYNC_IND received from the advertiser, or the start of
+        the PAwR event of the last AUX_SYNC_SUBEVENT_IND.
+        """
         sync = self.sync
         info = sync.info
         assert info is not None
+        pawr = sync.pawr
         return TrainReference(
-            sync.last_rx_us,
+            sync.last_rx_us
+            - (pawr.timing.subevent_offset_us(pawr.last_subevent) if pawr else 0),
             sync.last_counter,
             sync.last_counter,
             info.interval,
@@ -241,6 +275,8 @@ class SynchronizationSource:
             sync.sid,
             sync.advertiser_address or sync.address,
             sync.phy,
+            pawr.timing if pawr else None,
+            pawr.rsp_aa if pawr else 0,
         )
 
 
@@ -305,6 +341,8 @@ def transfer_indication(
         1 << (train.phy - 1),
         bytes(train.address),
         connection.sync_event_counter,
+        train.pawr,
+        train.rsp_aa,
     ).encode()
 
 

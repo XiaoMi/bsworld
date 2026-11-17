@@ -31,7 +31,13 @@ class PhyProcess:
     """
 
     def __init__(
-        self, sim_id: str, device_count: int, *, directory=None, log_dir: Path
+        self,
+        sim_id: str,
+        device_count: int,
+        *,
+        directory=None,
+        log_dir: Path,
+        dump: bool = False,
     ):
         if device_count < 1:
             raise ValueError('device_count must be positive')
@@ -39,6 +45,8 @@ class PhyProcess:
         self.device_count = device_count
         self.binary = find_phy(directory)
         self.log_dir = Path(log_dir)
+        self.dump = dump
+        self.results_dir = self.binary.parent.parent / 'results' / sim_id
         self.state_dir = simulation_directory(sim_id)
         self.process: subprocess.Popen | None = None
         self._output = None
@@ -58,7 +66,7 @@ class PhyProcess:
                     '-argschannel',
                     '-at=45',
                     '-argsmain',
-                    '-nodump',
+                    *(['-dump', '-dump_imm'] if self.dump else ['-nodump']),
                 ],
                 cwd=self.binary.parent,
                 stdout=self._output,

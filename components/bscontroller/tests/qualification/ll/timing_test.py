@@ -315,6 +315,10 @@ async def earliest_latest_transmission_to_advertiser(tester, *, offset):
         name length. Select public addressing, all supported primary channels,
         minimum advertising interval, name data and one scan-response octet.
 
+    Test Case Configuration:
+        LL/TIM/ADV/BV-01-C: earliest SCAN_REQ timing, Alternative 3A.
+        LL/TIM/ADV/BV-02-C: latest SCAN_REQ timing, Alternative 3B.
+
     Test Steps:
         1. Configure the Lower Tester for active scanning.
         2. Enable undirected IUT advertising on all supported advertising channels.
@@ -367,6 +371,11 @@ async def extended_advertising_secondary_channel_earliest_transmission_to_advert
         no connection is established in this procedure. Select public IUT and
         tester addresses and the PHY pair from Table 4.4-2: BV-03 uses 1M/1M,
         BV-05 uses 1M/2M, and BV-06 uses Coded/Coded.
+
+    Test Case Configuration:
+        LL/TIM/ADV/BV-03-C: LE 1M primary / LE 1M secondary.
+        LL/TIM/ADV/BV-05-C: LE 1M primary / LE 2M secondary.
+        LL/TIM/ADV/BV-06-C: LE Coded primary / LE Coded secondary.
 
     Test Steps:
         1. Send HCI LE Set Extended Advertising Parameters using all supported
@@ -423,6 +432,11 @@ async def extended_advertising_secondary_channel_latest_transmission_to_advertis
         common timeout; the procedure does not establish a connection. Select
         public addresses and Table 4.4-3 PHYs: BV-04 uses 1M/1M, BV-07 uses
         1M/2M, and BV-08 uses Coded/Coded.
+
+    Test Case Configuration:
+        LL/TIM/ADV/BV-04-C: LE 1M primary / LE 1M secondary.
+        LL/TIM/ADV/BV-07-C: LE 1M primary / LE 2M secondary.
+        LL/TIM/ADV/BV-08-C: LE Coded primary / LE Coded secondary.
 
     Test Steps:
         1. Send HCI LE Set Extended Advertising Parameters using all supported

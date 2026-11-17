@@ -7,6 +7,8 @@ import struct
 from collections import deque
 from dataclasses import replace
 
+import pytest
+
 from bscontroller import hci
 from bscontroller.linklayer import (
     LL_ADV_PRIMARY_CHANNEL_MAP_ALL,
@@ -17,6 +19,7 @@ from bscontroller.linklayer import (
     LL_DATA_CHANNEL_COUNT,
     LL_EVENT_COUNTER_MASK,
     LL_IFS_US,
+    LL_INSTANT_MIN_LISTENING_EVENTS,
     PDU_ADV_ADDRESS_SIZE,
     PDU_ADV_ADDRESSES_END,
     PDU_ADV_CHSEL_MASK,
@@ -25,9 +28,12 @@ from bscontroller.linklayer import (
     PDU_CONTROL_FEATURE_SET_SIZE,
     PDU_CONTROL_INSTANT_SIZE,
     PDU_CONTROL_OPCODE_SIZE,
+    PDU_CONTROL_PHY_REQ_SIZE,
+    PDU_CONTROL_PHY_UPDATE_SIZE,
     PDU_DATA_LLID_MASK,
     PDU_DATA_NESN_MASK,
     PDU_DATA_PAYLOAD_SIZE_MIN,
+    PDU_DATA_PAYLOAD_TIME_MIN_US,
     PDU_DATA_SN_MASK,
     PDU_HEADER_SIZE,
     AdvertisingPduType,
@@ -52,6 +58,32 @@ from tests.qualification.tester import (
 AdvType = hci.HCI_LE_Set_Advertising_Parameters_Command.AdvertisingType
 Opcode = ControlOpcode
 ErrorCode = hci.HCI_ErrorCode
+
+# Optional Lower Tester procedures (LL.TS 4.1.6.7.3).
+PEER_FEATURES = (
+    hci.LeFeatureMask.LE_ENCRYPTION
+    | hci.LeFeatureMask.EXTENDED_REJECT_INDICATION
+    | hci.LeFeatureMask.PERIPHERAL_INITIATED_FEATURE_EXCHANGE
+    | hci.LeFeatureMask.LE_DATA_PACKET_LENGTH_EXTENSION
+    | hci.LeFeatureMask.LE_2M_PHY
+    | hci.LeFeatureMask.LE_CODED_PHY
+    | hci.LeFeatureMask.LE_EXTENDED_ADVERTISING
+    | hci.LeFeatureMask.LE_PERIODIC_ADVERTISING
+    | hci.LeFeatureMask.CHANNEL_SELECTION_ALGORITHM_2
+    | hci.LeFeatureMask.PERIODIC_ADVERTISING_SYNC_TRANSFER_SENDER
+    | hci.LeFeatureMask.PERIODIC_ADVERTISING_SYNC_TRANSFER_RECIPIENT
+    | hci.LeFeatureMask.PERIODIC_ADVERTISING_ADI_SUPPORT
+)
+
+LONG_CONTROL_FEATURES = (
+    hci.LeFeatureMask.LE_DATA_PACKET_LENGTH_EXTENSION
+    | hci.LeFeatureMask.LE_2M_PHY
+    | hci.LeFeatureMask.LE_CODED_PHY
+    | hci.LeFeatureMask.PERIPHERAL_INITIATED_FEATURE_EXCHANGE
+    | hci.LeFeatureMask.PERIODIC_ADVERTISING_SYNC_TRANSFER_RECIPIENT
+    | hci.LeFeatureMask.PERIODIC_ADVERTISING_WITH_RESPONSES_SCANNER
+)
+
 Properties = (
     hci.HCI_LE_Set_Extended_Advertising_Parameters_Command.AdvertisingProperties
 )
@@ -434,6 +466,76 @@ class PeerLink:
         )
 
 
+class LongControlPeer(PeerLink):
+    """Lower Tester for long control PDUs (LL.TS 4.3.7.11-4.3.7.15).
+
+    Observe packets from the first connection event, answer autonomous DLU
+    with the current peer limits, and apply the selected Feature Exchange rule.
+    """
+
+    def __init__(
+        self,
+        *args,
+        features=LONG_CONTROL_FEATURES,
+        lengths=(PDU_DATA_PAYLOAD_SIZE_MIN, PDU_DATA_PAYLOAD_TIME_MIN_US) * 2,
+        reject=False,
+        feature_delay_us=0,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.features = features
+        self.lengths = lengths
+        self.reject = reject
+        self.feature_delay_us = feature_delay_us
+        self.feature_request = None
+
+    def _accept(self, packet):
+        super()._accept(packet)
+        assert packet.valid_crc and packet.phy == self.rx_phy
+        if packet.pdu[0] & PDU_DATA_LLID_MASK != LlId.CONTROL:
+            return
+        payload = packet.pdu[PDU_HEADER_SIZE:]
+        if self.reject:
+            # Core 4.5.11 counts CtrData only; the opcode is additional.
+            assert len(payload) - 1 <= 26, (
+                'long LL Control PDU sent without peer support'
+            )
+        if payload[0] == Opcode.LL_LENGTH_REQ:
+            response = bytes([Opcode.LL_LENGTH_RSP]) + struct.pack(
+                '<HHHH', *self.lengths
+            )
+        elif payload[0] in (Opcode.LL_FEATURE_REQ, Opcode.LL_PERIPHERAL_FEATURE_REQ):
+            if self.features is None and self.central:
+                self.feature_request = packet.start_us
+                return
+            response = (
+                bytes([Opcode.LL_UNKNOWN_RSP, payload[0]])
+                if self.features is None
+                else bytes([Opcode.LL_FEATURE_RSP])
+                + int(self.features).to_bytes(8, 'little')
+            )
+        else:
+            return
+        self.control_responses.append(response)
+
+    async def exchange(self, *args, **kwargs):
+        packet = await super().exchange(*args, **kwargs)
+        if self.feature_request is not None:
+            # LL.TS 4.3.7.12 requires a one-second delay before completing
+            # the autonomous Central exchange and ending Inconclusive.
+            deadline = self.feature_request + self.feature_delay_us
+            while self.anchor < deadline:
+                await super().exchange()
+            await super().exchange(
+                bytes([Opcode.LL_FEATURE_RSP])
+                + int(LONG_CONTROL_FEATURES).to_bytes(8, 'little'),
+                llid=LlId.CONTROL,
+            )
+            await super().exchange()
+            pytest.skip('Inconclusive: autonomous Central Feature Exchange')
+        return packet
+
+
 async def establish(
     tester,
     *,
@@ -455,6 +557,7 @@ async def establish(
     connection_parameters=None,
     connection_complete_event=None,
     air_address=None,
+    peer_factory=PeerLink,
 ):
     """Establish through HCI and raw connection PDUs, then check the completion
     event.
@@ -526,7 +629,7 @@ async def establish(
             address
         ) + bytes(air_address)
         parameters = LinkParameters.decode(request.pdu[PDU_ADV_ADDRESSES_END:])
-        link = PeerLink(tester, parameters, request.end_us, central=True, csa2=csa2)
+        link = peer_factory(tester, parameters, request.end_us, central=True, csa2=csa2)
     else:
         if extended:
             properties = Properties.CONNECTABLE_ADVERTISING
@@ -614,7 +717,7 @@ async def establish(
             channel, request, start_us=advertisement.end_us + LL_IFS_US, phy=phy
         )
         end = tester.radio.now_us + 1
-        link = PeerLink(tester, parameters, end, csa2=csa2, phy=phy)
+        link = peer_factory(tester, parameters, end, csa2=csa2, phy=phy)
         if kind == AdvertisingPduType.ADV_EXT_IND:
             response = await tester.expect_pdu(channel, duration_us=1000, phy=phy)
             assert response.start_us == end + LL_IFS_US
@@ -641,3 +744,168 @@ async def establish(
     assert event.supervision_timeout == link.parameters.timeout
     link.handle = event.connection_handle
     return link
+
+
+def phy_bit(phy):
+    return 1 << phy - 1
+
+
+def phy_request(packet):
+    if packet.pdu[0] & PDU_DATA_LLID_MASK == LlId.CONTROL and packet.pdu[
+        PDU_HEADER_SIZE : PDU_HEADER_SIZE + 1
+    ] == bytes([Opcode.LL_PHY_REQ]):
+        request = packet.pdu[PDU_HEADER_SIZE:]
+        assert len(request) == PDU_CONTROL_PHY_REQ_SIZE
+        supported = sum(phy_bit(phy) for phy in Phy)
+        assert request[1] and request[2] and not (request[1] | request[2]) & ~supported
+        return request
+    return None
+
+
+async def settle_autonomous_phy(link):
+    """Answer an autonomous Central request with current-PHY-only preferences."""
+    response = bytes([Opcode.LL_PHY_RSP, phy_bit(link.tx_phy), phy_bit(link.rx_phy)])
+    update = await link.control(Opcode.LL_PHY_UPDATE_IND, response, check_ack=True)
+    assert update == bytes([Opcode.LL_PHY_UPDATE_IND, 0, 0, 0, 0])
+    assert not any(
+        isinstance(event, hci.HCI_LE_PHY_Update_Complete_Event)
+        for event in link.tester.events
+    ), 'autonomous no-change procedure notified the Host'
+
+
+def check_phy_choice(update, allowed, current, *, constrained_zero=False):
+    """Validate directional choices independently of the Controller selection."""
+    assert len(update) == PDU_CONTROL_PHY_UPDATE_SIZE
+    assert update[0] == Opcode.LL_PHY_UPDATE_IND
+    choices = update[1:3]
+    for selected, common, old in zip(choices, allowed, current):
+        assert selected in (0, *(phy_bit(phy) for phy in Phy))
+        assert not selected or selected & common
+        assert not selected or selected != phy_bit(old), 'unchanged PHY must use zero'
+        if constrained_zero and any(choices) and not selected:
+            assert not common or common & phy_bit(old), (
+                'illegal one-direction no-change'
+            )
+    return any(choices)
+
+
+async def finish_phy_update(
+    tester,
+    link,
+    update,
+    *,
+    event_required,
+    allowed,
+    constrained_zero=False,
+    allow_autonomous=False,
+):
+    current = (link.rx_phy, link.tx_phy) if link.central else (link.tx_phy, link.rx_phy)
+    changed = check_phy_choice(
+        update, allowed, current, constrained_zero=constrained_zero
+    )
+    instant = int.from_bytes(update[-PDU_CONTROL_INSTANT_SIZE:], 'little')
+    pending = None
+    if changed:
+        assert (
+            0
+            <= (instant - link.counter & LL_EVENT_COUNTER_MASK)
+            < LL_EVENT_COUNTER_MASK // 2
+        )
+        options = (
+            {'forbidden_opcodes': (Opcode.LL_PHY_REQ,)} if allow_autonomous else {}
+        )
+        await link.apply_update(update, check_event_timing=True, **options)
+        if allow_autonomous:
+            pending = phy_request(link.last_received)
+    else:
+        assert instant == 0
+    for _ in range(2):
+        packet = await link.exchange()
+        if allow_autonomous:
+            request = phy_request(packet)
+            if request is not None:
+                assert pending is None or pending == request
+                pending = request
+    if event_required or changed:
+        event = await tester.event(hci.HCI_LE_PHY_Update_Complete_Event)
+        assert (event.status, event.connection_handle, event.tx_phy, event.rx_phy) == (
+            ErrorCode.SUCCESS,
+            link.handle,
+            link.rx_phy,
+            link.tx_phy,
+        )
+    assert not any(
+        isinstance(event, hci.HCI_LE_PHY_Update_Complete_Event)
+        for event in tester.events
+    ), 'unexpected or duplicate PHY completion'
+    if pending is not None:
+        await settle_autonomous_phy(link)
+    return changed
+
+
+def phy_update_pdu(link, central, peripheral):
+    instant = (
+        link.counter + LL_INSTANT_MIN_LISTENING_EVENTS + 1 & LL_EVENT_COUNTER_MASK
+        if central or peripheral
+        else 0
+    )
+    return bytes([Opcode.LL_PHY_UPDATE_IND, central, peripheral]) + instant.to_bytes(
+        PDU_CONTROL_INSTANT_SIZE, 'little'
+    )
+
+
+async def change_phy(tester, link, phy, *, local):
+    mask = 1 << phy - 1
+    if local:
+        await tester.command(hci.HCI_LE_Set_PHY_Command(link.handle, 0, mask, mask, 0))
+        response = await link.control(Opcode.LL_PHY_REQ)
+        assert len(response) == PDU_CONTROL_PHY_REQ_SIZE and response[1] and response[2]
+        if not response[1] & response[2] & mask:
+            pytest.skip(
+                'Inconclusive: PHY setup request cannot select the required PHY'
+            )
+        if link.central:
+            await link.exchange(
+                bytes([Opcode.LL_PHY_RSP, mask, mask]), llid=LlId.CONTROL
+            )
+    else:
+        response = await link.control(
+            Opcode.LL_PHY_RSP, bytes([Opcode.LL_PHY_REQ, mask, mask])
+        )
+        assert len(response) == PDU_CONTROL_PHY_REQ_SIZE and response[1] and response[2]
+        if not response[1] & response[2] & mask:
+            pytest.skip(
+                'Inconclusive: PHY setup response cannot select the required PHY'
+            )
+    if link.central:
+        update = await link.control(Opcode.LL_PHY_UPDATE_IND)
+        assert len(update) == PDU_CONTROL_PHY_UPDATE_SIZE
+        allowed = {0, *(phy_bit(supported) for supported in Phy)}
+        assert all(value in allowed for value in update[1:3])
+        current = (link.rx_phy, link.tx_phy)
+        if any(
+            (Phy(value.bit_length()) if value else previous) != phy
+            for value, previous in zip(update[1:3], current)
+        ):
+            pytest.skip('Inconclusive: PHY setup did not select the required PHY')
+    else:
+        update = phy_update_pdu(link, mask, mask)
+        await link.exchange(update, llid=LlId.CONTROL)
+    await finish_phy_update(
+        tester, link, update, event_required=local, allowed=(mask, mask)
+    )
+
+
+async def exchange_iut_features(tester, link, features=PEER_FEATURES):
+    """LL.TS 4.1.6.7.3: CEN IUT initiates Feature Exchange; PER Lower Tester."""
+    if not link.central:
+        await exchange_features(link, features)
+        return
+    await tester.command(hci.HCI_LE_Read_Remote_Features_Command(link.handle))
+    await link.control(Opcode.LL_FEATURE_REQ)
+    await link.exchange(
+        bytes([Opcode.LL_FEATURE_RSP]) + int(features).to_bytes(8, 'little'),
+        llid=LlId.CONTROL,
+    )
+    event = await tester.event(hci.HCI_LE_Read_Remote_Features_Complete_Event)
+    assert event.status == ErrorCode.SUCCESS

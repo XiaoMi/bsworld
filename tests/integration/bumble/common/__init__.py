@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 
 import pytest
@@ -42,7 +42,7 @@ except ModuleNotFoundError as exc:
     if exc.name != "bumble":
         raise
     pytest.skip(
-        "Bumble is not installed; run: python -m pip install -e .",
+        "Bumble is not installed; run: python -m pip install -e '.[bumble]'",
         allow_module_level=True,
     )
 
@@ -66,6 +66,7 @@ __all__ = [
     "PeriodicAdvertisingParameters",
     "PeriodicAdvertisingSync",
     "add_bumble_controller",
+    "advertising",
     "advertising_data",
     "open_bumble_device",
     "wait_for_advertisement",
@@ -77,13 +78,54 @@ def advertising_data(name: str) -> bytes:
         AdvertisingData(
             [
                 data_types.Flags(
-                    AdvertisingData.LE_GENERAL_DISCOVERABLE_MODE_FLAG
-                    | AdvertisingData.BR_EDR_NOT_SUPPORTED_FLAG
+                    AdvertisingData.Flags.LE_GENERAL_DISCOVERABLE_MODE
+                    | AdvertisingData.Flags.BR_EDR_NOT_SUPPORTED
                 ),
                 data_types.CompleteLocalName(name),
             ]
         )
     )
+
+
+@asynccontextmanager
+async def advertising(
+    device: Device,
+    *,
+    data: bytes,
+    connectable: bool = True,
+    scan_response_data: bytes = b"",
+    interval_min: float | None = None,
+    interval_max: float | None = None,
+):
+    """Own an upstream Bumble advertising set for a legacy advertising scenario."""
+    advertiser = await device.create_advertising_set(
+        advertising_parameters=AdvertisingParameters(
+            advertising_event_properties=AdvertisingEventProperties(
+                is_connectable=connectable,
+                is_scannable=connectable or bool(scan_response_data),
+                is_legacy=True,
+            ),
+            own_address_type=OwnAddressType.PUBLIC,
+            primary_advertising_interval_min=(
+                device.advertising_interval_min
+                if interval_min is None
+                else interval_min
+            ),
+            primary_advertising_interval_max=(
+                device.advertising_interval_max
+                if interval_max is None
+                else interval_max
+            ),
+        ),
+        advertising_data=data,
+        scan_response_data=scan_response_data,
+    )
+    try:
+        yield advertiser
+    finally:
+        if advertiser.enabled:
+            await advertiser.stop()
+        await advertiser.remove()
 
 
 async def open_bumble_device(
@@ -96,6 +138,7 @@ async def open_bumble_device(
         await open_transport(f"unix:{hci_socket}")
     )
     device = Device.with_hci(name, Address(address), transport.source, transport.sink)
+    stack.push_async_callback(device.power_off)
     await device.power_on()
     return device
 
@@ -111,7 +154,7 @@ async def wait_for_advertisement(
     def on_advertisement(advertisement) -> None:  # noqa: ANN001
         if (
             not found.done()
-            and advertisement.data.get(AdvertisingData.COMPLETE_LOCAL_NAME) == name
+            and advertisement.data.get(AdvertisingData.Type.COMPLETE_LOCAL_NAME) == name
         ):
             found.set_result(advertisement)
 

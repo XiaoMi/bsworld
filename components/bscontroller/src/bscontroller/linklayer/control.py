@@ -33,6 +33,7 @@ from bscontroller.linklayer import (
     PDU_CONTROL_MIN_USED_CHANNELS_SIZE,
     PDU_CONTROL_OPCODE_SIZE,
     PDU_CONTROL_PERIODIC_SYNC_SIZE,
+    PDU_CONTROL_PERIODIC_SYNC_WR_SIZE,
     PDU_CONTROL_REJECT_EXT_SIZE,
     PDU_CONTROL_REJECT_SIZE,
     PDU_CONTROL_UNKNOWN_RSP_SIZE,
@@ -339,7 +340,10 @@ class ControlProcedures:
         and preserve the recommended Instant lead (Core 6.3, Vol 6, Part B,
         2.4.2.27 and 5.5).
         """
-        if payload[0] == Opcode.LL_PERIODIC_SYNC_IND and self.released:
+        if (
+            payload[0] in (Opcode.LL_PERIODIC_SYNC_IND, Opcode.LL_PERIODIC_SYNC_WR_IND)
+            and self.released
+        ):
             source, service_data = self.released.popleft()
             train = source.reference()
             if train is not None:
@@ -537,6 +541,11 @@ class ControlProcedures:
             and len(payload) == PDU_CONTROL_PERIODIC_SYNC_SIZE
             and connection.link.features
             & LeFeatureMask.PERIODIC_ADVERTISING_SYNC_TRANSFER_RECIPIENT
+        ) or (
+            opcode == Opcode.LL_PERIODIC_SYNC_WR_IND
+            and len(payload) == PDU_CONTROL_PERIODIC_SYNC_WR_SIZE
+            and connection.link.features
+            & LeFeatureMask.PERIODIC_ADVERTISING_WITH_RESPONSES_SCANNER
         ):
             connection.link.roles.synchronization.transfer_received(
                 connection, PeriodicSyncIndication.decode(payload)

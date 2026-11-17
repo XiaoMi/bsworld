@@ -99,7 +99,7 @@ with asyncio.Runner(loop_factory=RadioEventLoop) as runner:
     runner.run(main())
 ```
 
-[examples/advertise_scan.py](examples/advertise_scan.py) 是基于这些接口的完整程序：用 `PhyProcess` 启动 PHY，在一个 `RadioSession` 中运行一个广播 Controller 和一个扫描 Controller，模拟 Host 通过扫描端的 socket 完成扫描。运行 `python examples/advertise_scan.py`，详见 [examples/README.zh-CN.md](examples/README.zh-CN.md)。
+[Bumble Host 示例](samples/README.zh-CN.md) 覆盖广播、扫描、GATT、多连接、周期同步及角色共存。在此目录运行 `python -m pip install -e '.[bumble]'` 后，执行 `python -m samples.advertise_scan`。每个设备通过 H4 使用独立的 Bumble Host 和 Controller；`bscontroller.hosts.bumble` 提供共用的 Host 与广播集上下文。
 
 Host 有两种接入方式：
 
@@ -204,7 +204,7 @@ other = RadioController("x", "F0:F1:F2:F3:F4:03", config=ControllerConfig(max_co
 | 5.3 | Periodic Advertising ADI Support | * |
 | 5.3 | LE Channel Classification |  |
 | 5.3 | Connection Subrating |  |
-| 5.4 | Periodic Advertising with Responses |  |
+| 5.4 | Periodic Advertising with Responses | * |
 | 6.0 | Channel Sounding |  |
 | 6.0 | Decision-Based Advertising Filtering | * |
 | 6.0 | Monitoring Advertisers |  |
@@ -236,7 +236,7 @@ other = RadioController("x", "F0:F1:F2:F3:F4:03", config=ControllerConfig(max_co
 ```text
 .
 ├── src/bscontroller/     # 包：HCI、Link Layer、射频、运行时、配置
-├── examples/             # 可直接运行的双 Controller 示例，带模拟 Host
+├── samples/              # Bumble Host 示例，包含多角色共存
 └── tests/
     ├── unit/             # 快速测试，不需要 PHY
     └── qualification/    # HCI/LL 协议用例；射频用例需要 BabbleSim
@@ -249,6 +249,6 @@ python -m pytest tests/qualification -n auto -v -rs     # 几分钟，需要 BSI
 python -m build                                         # 在 dist/ 生成 sdist 和 wheel
 ```
 
-qualification 测试从蓝牙测试规范中选取了 679 个 HCI 和 Link Layer 用例，由独立实现的 Lower Tester 执行。通过这些用例不代表 BSController 已通过蓝牙认证。测试范围见 [tests/README.zh-CN.md](tests/README.zh-CN.md)。
+qualification 测试从蓝牙测试规范中选取了 754 个 HCI 和 Link Layer 用例，由独立实现的 Lower Tester 执行。通过这些用例不代表 BSController 已通过蓝牙认证。测试范围见 [tests/README.zh-CN.md](tests/README.zh-CN.md)。
 
 许可证和第三方声明见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。

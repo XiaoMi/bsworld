@@ -6,7 +6,6 @@
 import pytest
 
 from bscontroller import hci
-from bscontroller.hci import HCI_LE_PERIODIC_SYNC_TIMEOUT_MIN
 from bscontroller.linklayer import (
     LL_EVENT_COUNTER_MASK,
     LL_PERIODIC_INTERVAL_UNIT_US,
@@ -19,6 +18,7 @@ from bscontroller.linklayer import (
     LlId,
 )
 from bscontroller.radio.base import Phy
+from tests.qualification import pawr as pawr_peer
 from tests.qualification import privacy as privacy_peer
 from tests.qualification.cases import (
     ProcedureMap,
@@ -26,8 +26,9 @@ from tests.qualification.cases import (
     procedure_cases,
     verify_case,
 )
-from tests.qualification.ll.connection_test import _change_phy
-from tests.qualification.peer import establish, exchange_features
+from tests.qualification.peer import PEER_FEATURES, establish
+from tests.qualification.peer import change_phy as _change_phy
+from tests.qualification.peer import exchange_iut_features as _iut_features
 from tests.qualification.periodic import PeriodicTrain
 from tests.qualification.tester import (
     DUT_ADDRESS,
@@ -40,20 +41,25 @@ from tests.qualification.tester import (
     scan_parameters,
 )
 from tests.qualification.transfer import (
+    ADVERTISER,
     COUNTER_SPAN_US,
     PREPARATION_US,
-    RECEIVED,
+    RESPONSE_EVENTS,
     SERVICE_DATA,
     TRANSFER_OFFSET_MAX_US,
     SyncIndication,
     TransferSession,
-    check_received,
     lower_train,
     phy_bit,
     signed,
     train_anchor,
     transferred_anchor,
 )
+from tests.qualification.transfer import disconnect as _disconnect
+from tests.qualification.transfer import receive_transfer as _received
+from tests.qualification.transfer import set_transfer_mode as _transfer_mode
+from tests.qualification.transfer import sync_timeout as _timeout
+from tests.qualification.transfer import transfer_link as _link
 
 Opcode = ControlOpcode
 ErrorCode = hci.HCI_ErrorCode
@@ -63,8 +69,6 @@ TransferParameters = (
 DefaultParameters = (
     hci.HCI_LE_Set_Default_Periodic_Advertising_Sync_Transfer_Parameters_Command
 )
-# The Lower Tester's periodic advertiser, distinct from its ACL addresses.
-ADVERTISER = hci.Address('00:5A:A5:00:5A:A5', hci.AddressType.PUBLIC_DEVICE)
 # The advertiser's public identity in the IUT resolving list, and its IRKs.
 IDENTITY = hci.Address('00:A5:5A:00:A5:5A', hci.AddressType.PUBLIC_DEVICE)
 PEER_IRK = privacy_peer.PEER_IRK
@@ -75,99 +79,8 @@ UNKNOWN_IRK = bytes.fromhex('a0a1a2a3a4a5a6a7a8a9aaabacadaeaf')
 STATIC_ADVERTISER = hci.Address('C3:5A:A5:C3:5A:A5', hci.AddressType.RANDOM_DEVICE)
 # The Lower Tester's random static identity in LL.TS 4.3.7.48.
 STATIC_IDENTITY = hci.Address('D5:A5:5A:D5:A5:5A', hci.AddressType.RANDOM_DEVICE)
-# Optional procedures of the independent Lower Tester (LL.TS 4.1.6.7.3).
-PEER_FEATURES = (
-    hci.LeFeatureMask.LE_ENCRYPTION
-    | hci.LeFeatureMask.EXTENDED_REJECT_INDICATION
-    | hci.LeFeatureMask.PERIPHERAL_INITIATED_FEATURE_EXCHANGE
-    | hci.LeFeatureMask.LE_DATA_PACKET_LENGTH_EXTENSION
-    | hci.LeFeatureMask.LE_2M_PHY
-    | hci.LeFeatureMask.LE_CODED_PHY
-    | hci.LeFeatureMask.LE_EXTENDED_ADVERTISING
-    | hci.LeFeatureMask.LE_PERIODIC_ADVERTISING
-    | hci.LeFeatureMask.CHANNEL_SELECTION_ALGORITHM_2
-    | hci.LeFeatureMask.PERIODIC_ADVERTISING_SYNC_TRANSFER_SENDER
-    | hci.LeFeatureMask.PERIODIC_ADVERTISING_SYNC_TRANSFER_RECIPIENT
-    | hci.LeFeatureMask.PERIODIC_ADVERTISING_ADI_SUPPORT
-)
 # Selected observation lengths: the source's report counts, in train events.
 REPORTS = 10
-# A selected bound on connection events before an expected event or PDU.
-RESPONSE_EVENTS = 64
-
-
-def _timeout(interval, factor):
-    """Sync_Timeout of ``factor`` periodic intervals, in 10-ms units.
-
-    A selected floor applies the HCI minimum of 100 ms to short trains
-    (Core Vol 4, Part E, 7.8.91).
-    """
-    return max(
-        HCI_LE_PERIODIC_SYNC_TIMEOUT_MIN,
-        -(-factor * interval * LL_PERIODIC_INTERVAL_UNIT_US // 10_000),
-    )
-
-
-async def _link(tester, *, central, phy=Phy.LE_1M, interval=24, timeout=100):
-    """Initial Condition: connected on the selected PHY, LE 1M establishment.
-
-    Extended commands establish the link: after a legacy advertising command,
-    the transfer-mode commands are Command Disallowed (Core Vol 4, Part E,
-    3.1.1).
-    """
-    link = await establish(
-        tester,
-        central=central,
-        extended=True,
-        interval=interval,
-        timeout=timeout,
-        peer_address=(
-            LOWER_PERIPHERAL_PUBLIC_ADDRESS if central else LOWER_CENTRAL_PUBLIC_ADDRESS
-        ),
-    )
-    if phy != Phy.LE_1M:
-        await exchange_features(link, PEER_FEATURES)
-        # A Central IUT answers LL_PHY_REQ with LL_PHY_UPDATE_IND, not a response
-        # the remote form expects; its Host starts the procedure instead.
-        await _change_phy(tester, link, phy, local=central)
-    return link
-
-
-async def _disconnect(tester, link):
-    """The Lower Tester terminates; the IUT acknowledges and reports it.
-
-    The termination is served on the connection grid, so a long connection
-    interval cannot delay the acknowledgement past the HCI observation.
-    """
-    reason = ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR
-    session = TransferSession(tester, link)
-    await session.send_control(bytes([Opcode.LL_TERMINATE_IND, reason]))
-    event = await tester.event(hci.HCI_Disconnection_Complete_Event)
-    assert (event.connection_handle, event.reason) == (link.handle, reason)
-
-
-async def _transfer_mode(session, mode, *, skip=0, timeout=None):
-    train = session.train
-    await session.command(
-        TransferParameters(
-            session.link.handle,
-            mode,
-            skip,
-            _timeout(train.interval, 3) if timeout is None else timeout,
-            0,
-        )
-    )
-
-
-async def _received(session, *, sid, address=ADVERTISER, **expected):
-    event = await session.until(
-        lambda item: isinstance(item, RECEIVED), events=RESPONSE_EVENTS
-    )
-    assert event is not None, 'no Periodic Advertising Sync Transfer Received'
-    check_received(
-        event, session.link, session.train, sid=sid, address=address, **expected
-    )
-    return event
 
 
 async def _reports(session, handle, count=REPORTS, *, events=None):
@@ -194,7 +107,14 @@ async def _no_reports(session, intervals=REPORTS):
 
 
 async def accepting_different_phys(
-    tester, *, central, connection_phy, primary_phy, secondary_phy, advertiser_list
+    tester,
+    *,
+    central,
+    connection_phy,
+    primary_phy,
+    secondary_phy,
+    advertiser_list,
+    pawr=False,
 ):
     """Periodic Advertising Sync Transfer Procedure, Accepting – Different PHYs.
 
@@ -205,6 +125,11 @@ async def accepting_different_phys(
     Test Case Configuration:
         Public advertiser address, 30-ms connection interval and a 120-ms
         periodic interval; the train lies between connection events.
+
+        For the PAwR row of the same source table, the Lower Tester uses
+        LL_PERIODIC_SYNC_WR_IND and two subevents, and the Upper Tester
+        enables the v2 sync/report events and selects subevent 1. The
+        same role, transfer-mode, timing and payload assertions apply.
 
     Test Steps:
         1. Connect on LE 1M; for an LE 2M or LE Coded connection PHY, complete
@@ -230,13 +155,14 @@ async def accepting_different_phys(
     Expected Outcome:
         Pass verdict:
             CEN/PER: In each case, the IUT accepts the transfer, synchronizes on
-            the periodic PHY and reports. No v2 event is generated.
+            the periodic PHY and reports. No v2 event is generated for a train
+            without responses.
 
     Reference:
         LL.TS.p28.pdf, 4.3.7.4, Table 4.3-75, Steps 1-12; PDF 908-911,
         printed 4.3-435..438. Source [13] 4.6.24.
     """
-    link = await _link(tester, central=central, phy=connection_phy)
+    link = await _link(tester, central=central, phy=connection_phy, pawr=pawr)
     del primary_phy
     rounds = (False, True) if advertiser_list else (False,)
     for listed in rounds:
@@ -246,7 +172,9 @@ async def accepting_different_phys(
                     hci.AddressType.PUBLIC_DEVICE, LOWER_PERIPHERAL_PUBLIC_ADDRESS, 5
                 )
             )
-        session = TransferSession(tester, link, lower_train(link, phy=secondary_phy))
+        session = TransferSession(
+            tester, link, lower_train(link, phy=secondary_phy, pawr=pawr)
+        )
         await _transfer_mode(session, 0x02)
         await session.send_control(session.indication(address=ADVERTISER))
         event = await _received(session, sid=5)
@@ -294,7 +222,7 @@ def _check_spacing(counters, step, sets, *, omissions=2):
     assert counters[-1] - counters[0] >= (sets - 1) * step, counters
 
 
-async def accepting_skipping_events(tester, *, central):
+async def accepting_skipping_events(tester, *, central, pawr=False):
     """Periodic Advertising Sync Transfer Procedure, Accepting – Skipping Events.
 
     Initial Condition:
@@ -304,6 +232,11 @@ async def accepting_skipping_events(tester, *, central):
         Each round connects on LE 1M with a 500-ms interval and 6-s
         supervision timeout. The 6-s periodic interval exceeds the 4.9149-s
         largest SyncInfo offset plus two connection intervals.
+
+        For the PAwR row of the same source table, the Lower Tester uses
+        LL_PERIODIC_SYNC_WR_IND and two subevents, and the Upper Tester
+        enables the v2 sync/report events and selects subevent 1. The
+        same role, transfer-mode, timing and payload assertions apply.
 
     Test Steps:
         1. Connect on LE 1M. Repeat Steps 2-8 for the rounds of Table 4.3-77:
@@ -329,8 +262,12 @@ async def accepting_skipping_events(tester, *, central):
         printed 4.3-438..441. Source [13] 4.6.24.
     """
     for skip, sets in ((0x0000, 30), (0x0001, 30), (0x0013, 3)):
-        link = await _link(tester, central=central, interval=400, timeout=600)
-        session = TransferSession(tester, link, lower_train(link, interval=4800))
+        link = await _link(
+            tester, central=central, interval=400, timeout=600, pawr=pawr
+        )
+        session = TransferSession(
+            tester, link, lower_train(link, interval=4800, pawr=pawr)
+        )
         await _transfer_mode(session, 0x02, skip=skip, timeout=_timeout(4800, skip + 3))
         offset = _nearest_event(session)
         await session.send_control(
@@ -355,12 +292,18 @@ async def accepting_skipping_events(tester, *, central):
         await _disconnect(tester, link)
 
 
-async def accepting_already_synchronized(tester, *, central):
+async def accepting_already_synchronized(tester, *, central, pawr=False):
     """Periodic Advertising Sync Transfer Procedure, Accepting – Already
     Synchronized.
 
     Initial Condition:
         CEN/PER: The IUT is not scanning, synchronized or connected.
+
+    Test Case Configuration:
+        For the PAwR row of the same source table, the Lower Tester uses
+        LL_PERIODIC_SYNC_WR_IND and two subevents, and the Upper Tester
+        enables the v2 sync/report events and selects subevent 1. The
+        same role, transfer-mode, timing and payload assertions apply.
 
     Test Steps:
         1. Connect on LE 1M with a 30-ms interval.
@@ -389,8 +332,8 @@ async def accepting_already_synchronized(tester, *, central):
         printed 4.3-441..445. Source [13] 4.6.24; Core Vol 4, Part E,
         7.7.65.24 Note.
     """
-    link = await _link(tester, central=central)
-    session = TransferSession(tester, link, lower_train(link))
+    link = await _link(tester, central=central, pawr=pawr)
+    session = TransferSession(tester, link, lower_train(link, pawr=pawr))
     await _transfer_mode(session, 0x02)
     await session.send_control(session.indication(address=ADVERTISER))
     event = await _received(session, sid=5)
@@ -452,7 +395,7 @@ async def _extreme_round(session, distance):
     return events, counter, last
 
 
-async def accepting_extreme_timings(tester, *, central):
+async def accepting_extreme_timings(tester, *, central, pawr=False):
     """Periodic Advertising Sync Transfer Procedure, Accepting – Extreme Timings.
 
     Initial Condition:
@@ -463,6 +406,11 @@ async def accepting_extreme_timings(tester, *, central):
         interval, above the 4.9149-s largest offset plus two connection
         intervals. Rounds 5-6 use a 30-ms connection interval and a 7.5-ms
         periodic interval, below half the connection interval.
+
+        For the PAwR row of the same source table, the Lower Tester uses
+        LL_PERIODIC_SYNC_WR_IND and two subevents, and the Upper Tester
+        enables the v2 sync/report events and selects subevent 1. The
+        same role, transfer-mode, timing and payload assertions apply.
 
     Test Steps:
         1. Connect on LE 1M. Repeat Steps 2-8 for each round of Table 4.3-80.
@@ -495,12 +443,16 @@ async def accepting_extreme_timings(tester, *, central):
         (400, 4800, 'future-maximum'),
         (400, 4800, 'past-minimum'),
         (400, 4800, 'past-maximum'),
-        (24, 6, 'past-maximum'),
-        (24, 6, 'future-minimum'),
+        (48 if pawr else 24, 16 if pawr else 6, 'past-maximum'),
+        (48 if pawr else 24, 16 if pawr else 6, 'future-minimum'),
     ):
         tester.output.write(f'ROUND interval={interval} period={period} {distance}\n')
-        link = await _link(tester, central=central, interval=interval, timeout=600)
-        session = TransferSession(tester, link, lower_train(link, interval=period))
+        link = await _link(
+            tester, central=central, interval=interval, timeout=600, pawr=pawr
+        )
+        session = TransferSession(
+            tester, link, lower_train(link, interval=period, pawr=pawr)
+        )
         await _transfer_mode(session, 0x02)
         events, counter, last = await _extreme_round(session, distance)
         await session.send_control(
@@ -517,12 +469,18 @@ async def accepting_extreme_timings(tester, *, central):
         await _disconnect(tester, link)
 
 
-async def accepting_synchronization_failure(tester, *, central):
+async def accepting_synchronization_failure(tester, *, central, pawr=False):
     """Periodic Advertising Sync Transfer Procedure, Accepting – Synchronization
     Failure.
 
     Initial Condition:
         CEN/PER: The IUT is not scanning, synchronized or connected.
+
+    Test Case Configuration:
+        For the PAwR row of the same source table, the Lower Tester uses
+        LL_PERIODIC_SYNC_WR_IND and two subevents, and the Upper Tester
+        enables the v2 sync/report events and selects subevent 1. The
+        same role, transfer-mode, timing and payload assertions apply.
 
     Test Steps:
         1. Connect on LE 1M with a 30-ms interval; the periodic interval is
@@ -549,9 +507,9 @@ async def accepting_synchronization_failure(tester, *, central):
         LL.TS.p28.pdf, 4.3.7.8, Table 4.3-81, Steps 1-5; PDF 921-923,
         printed 4.3-448..450. Source [13] 4.6.24; Core Vol 6, Part B, 4.4.5.1.
     """
-    link = await _link(tester, central=central)
+    link = await _link(tester, central=central, pawr=pawr)
     session = TransferSession(
-        tester, link, lower_train(link, interval=72), mode='silent'
+        tester, link, lower_train(link, interval=72, pawr=pawr), mode='silent'
     )
     await _transfer_mode(session, 0x02, timeout=_timeout(72, 12))
     await session.send_control(session.indication(address=ADVERTISER))
@@ -573,12 +531,18 @@ async def accepting_synchronization_failure(tester, *, central):
     await _disconnect(tester, link)
 
 
-async def accepting_mode_change(tester, *, central):
+async def accepting_mode_change(tester, *, central, pawr=False):
     """Periodic Advertising Sync Transfer Procedure, Accepting, Changing Transfer
     Mode During Synchronization.
 
     Initial Condition:
         CEN/PER: The IUT is not scanning, synchronized or connected.
+
+    Test Case Configuration:
+        For the PAwR row of the same source table, the Lower Tester uses
+        LL_PERIODIC_SYNC_WR_IND and two subevents, and the Upper Tester
+        enables the v2 sync/report events and selects subevent 1. The
+        same role, transfer-mode, timing and payload assertions apply.
 
     Test Steps:
         1. Start a 600-ms periodic train on LE 1M.
@@ -604,8 +568,8 @@ async def accepting_mode_change(tester, *, central):
         LL.TS.p28.pdf, 4.3.7.10, Table 4.3-84, Steps 1-7; PDF 931-933,
         printed 4.3-458..460. Source [13] 4.6.24; Core Vol 4, Part E, 7.8.91.
     """
-    link = await _link(tester, central=central)
-    session = TransferSession(tester, link, lower_train(link, interval=480))
+    link = await _link(tester, central=central, pawr=pawr)
+    session = TransferSession(tester, link, lower_train(link, interval=480, pawr=pawr))
     await _transfer_mode(session, 0x01)
     period = 480 * LL_PERIODIC_INTERVAL_UNIT_US
     await _wait_until(
@@ -637,7 +601,7 @@ async def _toggle_reports(session, handle):
         await _reports(session, handle)
 
 
-async def accepting_modes_and_addresses(tester, *, central):
+async def accepting_modes_and_addresses(tester, *, central, pawr=False):
     """Periodic Advertising Sync Transfer Procedure, Accepting – Different Modes
     and Addresses.
 
@@ -645,6 +609,12 @@ async def accepting_modes_and_addresses(tester, *, central):
         CEN/PER: The IUT is not scanning, synchronized or connected. Its
         resolving list holds the IRK of a public identity for the advertiser's
         RPA. The default transfer parameters have not been set since reset.
+
+    Test Case Configuration:
+        For the PAwR row of the same source table, the Lower Tester uses
+        LL_PERIODIC_SYNC_WR_IND and two subevents, and the Upper Tester
+        enables the v2 sync/report events and selects subevent 1. The
+        same role, transfer-mode, timing and payload assertions apply.
 
     Test Steps:
         1. Connect on LE 1M. Repeat Steps 2-22 for each round of Table 4.3-83.
@@ -701,7 +671,7 @@ async def accepting_modes_and_addresses(tester, *, central):
     await privacy_peer.add_peer(
         tester, identity=IDENTITY, peer_irk=PEER_IRK, local_irk=bytes(16)
     )
-    link = await _link(tester, central=central)
+    link = await _link(tester, central=central, pawr=pawr)
     rounds = (
         (None, False, None, 0x00),
         (0x02, False, None, 0x00),
@@ -716,8 +686,8 @@ async def accepting_modes_and_addresses(tester, *, central):
             await tester.command(DefaultParameters(default, 0, timeout, 0))
         if new:
             await _disconnect(tester, link)
-            link = await _link(tester, central=central)
-        session = TransferSession(tester, link, lower_train(link))
+            link = await _link(tester, central=central, pawr=pawr)
+        session = TransferSession(tester, link, lower_train(link, pawr=pawr))
         if specific is not None:
             await session.command(
                 TransferParameters(link.handle, specific, 0, timeout, 0)
@@ -749,7 +719,7 @@ async def accepting_modes_and_addresses(tester, *, central):
         (8, privacy_peer.private_address(OTHER_IRK), None, 0x01),
     ):
         tester.output.write(f'ROUND privacy sid={sid}\n')
-        session = TransferSession(tester, link, lower_train(link))
+        session = TransferSession(tester, link, lower_train(link, pawr=pawr))
         await session.send_control(session.indication(sid=sid, address=address))
         event = await _received(
             session, sid=sid, address=expected or address, address_type=kind
@@ -781,13 +751,19 @@ async def _single_report(session, handle, *, warn):
     assert warn or not extra, f'{extra} duplicate periodic reports'
 
 
-async def accepting_duplicate_filter(tester, *, central):
+async def accepting_duplicate_filter(tester, *, central, pawr=False):
     """Periodic Advertising Sync Transfer Procedure, Accepting, Enabling
     Duplicate Filter when already synchronized.
 
     Initial Condition:
         The IUT is not scanning, synchronized or connected; the default
         transfer parameters have not been set since reset.
+
+    Test Case Configuration:
+        For the PAwR row of the same source table, the Lower Tester uses
+        LL_PERIODIC_SYNC_WR_IND and two subevents, and the Upper Tester
+        enables the v2 sync/report events and selects subevent 1. The
+        same role, transfer-mode, timing and payload assertions apply.
 
     Test Steps:
         1. Connect on LE 1M.
@@ -817,8 +793,10 @@ async def accepting_duplicate_filter(tester, *, central):
         LL.TS.p28.pdf, 4.3.7.38, Table 4.3-120, Steps 1-17; PDF 987-992,
         printed 4.3-514..519. Source [13] 4.4.5.1; Core Vol 4, Part E, 7.8.91.
     """
-    link = await _link(tester, central=central)
-    session = _did_session(TransferSession(tester, link, lower_train(link)), 5)
+    link = await _link(tester, central=central, pawr=pawr)
+    session = _did_session(
+        TransferSession(tester, link, lower_train(link, pawr=pawr)), 5
+    )
     await _transfer_mode(session, 0x02)
     await session.send_control(session.indication(address=ADVERTISER))
     event = await _received(session, sid=5)
@@ -841,13 +819,19 @@ async def accepting_duplicate_filter(tester, *, central):
     await _disconnect(tester, link)
 
 
-async def accepting_default_duplicate_filter(tester, *, central):
+async def accepting_default_duplicate_filter(tester, *, central, pawr=False):
     """Periodic Advertising Sync Transfer Procedure, Accepting, Enabling Default
     Duplicate Filter.
 
     Initial Condition:
         The IUT is not scanning, synchronized or connected; the default
         transfer parameters have not been set since reset.
+
+    Test Case Configuration:
+        For the PAwR row of the same source table, the Lower Tester uses
+        LL_PERIODIC_SYNC_WR_IND and one subevent, and the Upper Tester
+        enables the v2 sync/report events and selects subevent 0. The
+        same role, transfer-mode, timing and payload assertions apply.
 
     Test Steps:
         1. Set the default transfer parameters: Mode 0x03.
@@ -877,8 +861,12 @@ async def accepting_default_duplicate_filter(tester, *, central):
         printed 4.3-519..523. Source [13] 4.4.5.1; Core Vol 4, Part E, 7.8.92.
     """
     await tester.command(DefaultParameters(0x03, 0, _timeout(96, 3), 0))
-    link = await _link(tester, central=central)
-    session = _did_session(TransferSession(tester, link, lower_train(link)), 5)
+    link = await _link(tester, central=central, pawr=pawr)
+    session = _did_session(
+        TransferSession(tester, link, lower_train(link, pawr=pawr)), 5
+    )
+    if pawr:
+        session.train.pawr = (1, 6, 1, 10)
     await session.send_control(session.indication(address=ADVERTISER))
     event = await _received(session, sid=5)
     await _single_report(session, event.sync_handle, warn=False)
@@ -888,22 +876,9 @@ async def accepting_default_duplicate_filter(tester, *, central):
     await _disconnect(tester, link)
 
 
-async def _iut_features(tester, link):
-    """LL.TS 4.1.6.7.3: CEN IUT initiates Feature Exchange; PER Lower Tester."""
-    if not link.central:
-        await exchange_features(link, PEER_FEATURES)
-        return
-    await tester.command(hci.HCI_LE_Read_Remote_Features_Command(link.handle))
-    await link.control(Opcode.LL_FEATURE_REQ)
-    await link.exchange(
-        bytes([Opcode.LL_FEATURE_RSP]) + int(PEER_FEATURES).to_bytes(8, 'little'),
-        llid=LlId.CONTROL,
-    )
-    event = await tester.event(hci.HCI_LE_Read_Remote_Features_Complete_Event)
-    assert event.status == ErrorCode.SUCCESS
-
-
-async def _sender_link(tester, *, central, phy, peer=None, air_address=None):
+async def _sender_link(
+    tester, *, central, phy, peer=None, air_address=None, features=PEER_FEATURES
+):
     """Connect, complete the role's Feature Exchange, then select the PHY."""
     peer = peer or (
         LOWER_PERIPHERAL_PUBLIC_ADDRESS if central else LOWER_CENTRAL_PUBLIC_ADDRESS
@@ -915,7 +890,7 @@ async def _sender_link(tester, *, central, phy, peer=None, air_address=None):
         peer_address=peer,
         air_address=air_address,
     )
-    await _iut_features(tester, link)
+    await _iut_features(tester, link, features)
     if phy != Phy.LE_1M:
         await _change_phy(tester, link, phy, local=central)
     return link
@@ -1334,6 +1309,10 @@ async def multiple_resolvable_private_addresses(tester, *, central):
         CEN/PER: The Lower Tester connects with its public identity. The IUT
         holds the peer IRK of its random static identity.
 
+    Test Case Configuration:
+        LL/CON/PER/BV-152-C: Peripheral IUT.
+        LL/CON/CEN/BV-152-C: Central IUT.
+
     Test Steps:
         1. Enable address resolution.
         2. Set extended scan parameters: policy 0x00, LE 1M, passive.
@@ -1416,6 +1395,14 @@ async def invalid_or_unsupported_phy(tester, *, central, phy):
         The IUT is not scanning, synchronized or connected; it has the role of
         Table 4.3-128.
 
+    Test Case Configuration:
+        LL/CON/PER/BI-22-C: Peripheral IUT, PHY field 0x00.
+        LL/CON/CEN/BI-15-C: Central IUT, PHY field 0x00.
+        LL/CON/PER/BI-25-C: Peripheral IUT, PHY field 0x06.
+        LL/CON/CEN/BI-18-C: Central IUT, PHY field 0x06.
+        LL/CON/PER/BI-26-C: Peripheral IUT, PHY field 0x80.
+        LL/CON/CEN/BI-19-C: Central IUT, PHY field 0x80.
+
     Test Steps:
         1. Connect on LE 1M.
         2. Start a 120-ms periodic train.
@@ -1448,6 +1435,105 @@ async def invalid_or_unsupported_phy(tester, *, central, phy):
     await session.send_control(session.indication(address=ADVERTISER))
     await _received(session, sid=5)
     session.mode = 'off'
+    await _disconnect(tester, link)
+
+
+async def pawr_advertising_sync_transfer(tester, *, central):
+    """PAST Procedure, Advertising IUT Initiated, Periodic Advertising with Responses.
+
+    Initial Condition:
+        LE 1M ACL connection in the selected role; peer supports PAST Recipient
+        and PAwR Scanner. No advertising set is enabled yet.
+
+    Test Case Configuration:
+        LL/CON/CEN/BV-160-C: Central IUT.
+        LL/CON/PER/BV-161-C: Peripheral IUT.
+
+    Test Steps:
+        1. Complete Feature Exchange and enable ten PAwR subevents at 65 ms.
+        2. Read SyncInfo and ACAD from actual announcements between ACL
+           events, supply subevent data, and receive the described train
+           before requesting transfer.
+        3. Send Set Info Transfer with nonzero Service_Data; receive WR_IND.
+        4. Decode SyncInfo and WR timing independently, then derive the
+           advertised anchor from connEventCount and its connection anchor.
+        5. Continue the ACL and periodic train after the transfer.
+
+    Expected Outcome:
+        WR_IND contains the configured timing, a distinct RspAA, correct
+        advertiser identity and ID. The transferred anchor agrees with the
+        train's next subevent-0 anchor within SyncInfo quantization.
+
+    Source Correction:
+        Source Step 11 names Set Sync Transfer Parameters with fields that
+        belong to Set Info Transfer. Use HCI LE Periodic Advertising Set Info
+        Transfer (Core Vol 4, Part E, 7.8.90), preserving the stated handle and
+        Service_Data. This is a local command-name correction, not SIG errata.
+
+    Reference:
+        LL.TS.p28, 4.3.7.49, LL/CON/CEN/BV-160-C and PER/BV-161-C,
+        Table 4.3-132; Core 5.1.13.1 and 2.4.2.40.
+    """
+
+    link = await _sender_link(
+        tester,
+        central=central,
+        phy=Phy.LE_1M,
+        features=PEER_FEATURES
+        | hci.LeFeatureMask.PERIODIC_ADVERTISING_WITH_RESPONSES_SCANNER,
+    )
+    await pawr_peer.configure(tester, interval=520, timing=(10, 52, 1, 10))
+    session = TransferSession(tester, link, mode='off')
+    source, announcement = await pawr_peer.connected_advertiser(session)
+    assert source.pawr == (10, 52, 1, 10) and source.interval == 520
+    assert announcement['address'] == bytes(DUT_ADDRESS)
+    # Supply the first subevent in a current Host request window (source Step 7).
+    for _ in range(64):
+        requests = session.take_all(pawr_peer.REQUEST)
+        if requests:
+            request = requests[-1]
+            result = await session.command(
+                pawr_peer.SET_DATA(0, [request.subevent_start], [0], [1], [b'\x5a']),
+                status=(0, 0x46),
+            )
+            if result.status == 0:
+                break
+        await session.step()
+    else:
+        raise AssertionError('no PAwR data request accepted before transfer')
+    session.train, session.mode = source, 'receive'
+    await session.run_for(2 * source.interval * 1250)
+    assert session.received, 'source train was not observed before the transfer'
+    session.mode = 'off'
+    await session.command(
+        hci.HCI_LE_Periodic_Advertising_Set_Info_Transfer_Command(
+            link.handle, SERVICE_DATA, 0
+        )
+    )
+    payload, counter, anchor = await session.expect_control(0x2A)
+    indication = SyncIndication.decode(payload)
+    assert indication.identifier == SERVICE_DATA and indication.pawr == (10, 52, 1, 10)
+    assert indication.rsp_aa == source.rsp_aa
+    assert indication.sid == int.from_bytes(announcement['adi'], 'little') >> 12
+    assert not indication.random and indication.phy == 1
+    target, info = transferred_anchor(indication, counter, anchor, session.interval_us)
+    assert info.interval == 520 and info.access_address != indication.rsp_aa
+    assert (
+        abs(
+            (target - anchor)
+            - (indication.event - counter) * session.interval_us
+            - info.delay_us
+        )
+        < 2
+    )
+    assert indication.address == bytes(DUT_ADDRESS)
+    _check_train(indication, target, info, source, phy=Phy.LE_1M)
+    session.mode = 'receive'
+    await session.run_for(info.interval * 1250 * 3)
+    assert session.received, 'transferred subevent-0 anchor was not received'
+    _check_train(indication, target, info, session.train, phy=Phy.LE_1M)
+    session.mode = 'off'
+    await pawr_peer.stop_advertising(tester)
     await _disconnect(tester, link)
 
 
@@ -1670,6 +1756,61 @@ def _register():
 # connEventCount distances, establishment failure, the transfer mode in force at
 # reception, and ignoring unusable PHY fields.
 PROCEDURES |= _register()
+
+
+# WR_IND alternatives of the same source procedures, including selection of
+# subevent 1 after transfer. The independent peer transmits both subevents.
+for procedure, peripheral, central in (
+    (accepting_different_phys, 171, 167),
+    (accepting_skipping_events, 172, 168),
+    (accepting_already_synchronized, 173, 169),
+    (accepting_extreme_timings, 174, 170),
+    (accepting_synchronization_failure, 175, 171),
+    (accepting_modes_and_addresses, 176, 172),
+    (accepting_mode_change, 177, 173),
+    (accepting_duplicate_filter, 159, 158),
+    (accepting_default_duplicate_filter, 160, 159),
+):
+    parameters = {'pawr': True}
+    if procedure is accepting_different_phys:
+        parameters |= dict(
+            connection_phy=Phy.LE_1M,
+            primary_phy=Phy.LE_1M,
+            secondary_phy=Phy.LE_1M,
+            advertiser_list=True,
+        )
+    variants = _roles(
+        {
+            (f'LL/CON/PER/BV-{peripheral}-C', f'LL/CON/CEN/BV-{central}-C'): (
+                procedure.__doc__.split('\n\n')[0].strip() + ' (PAwR)',
+                parameters,
+            )
+        }
+    )
+    if procedure in (accepting_already_synchronized, accepting_modes_and_addresses):
+        variants = {
+            key: pytest.param(*value, marks=pytest.mark.source_conflict)
+            for key, value in variants.items()
+        }
+    PROCEDURES |= procedure_cases(procedure, variants)
+
+
+# Verify PAST Procedure, Advertising IUT Initiated, Periodic Advertising with Responses.
+PROCEDURES |= procedure_cases(
+    pawr_advertising_sync_transfer,
+    {
+        'LL/CON/CEN/BV-160-C': (
+            'PAST Procedure, Advertising IUT Initiated, Periodic '
+            'Advertising with Responses.',
+            {'central': True},
+        ),
+        'LL/CON/PER/BV-161-C': (
+            'PAST Procedure, Advertising IUT Initiated, Periodic '
+            'Advertising with Responses.',
+            {'central': False},
+        ),
+    },
+)
 
 
 @pytest.mark.asyncio

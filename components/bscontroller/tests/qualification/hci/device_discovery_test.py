@@ -19,6 +19,7 @@ from bscontroller.linklayer import (
     AdvertisingPduType,
 )
 from bscontroller.radio.base import Phy
+from tests.qualification import pawr as pawr_peer
 from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
@@ -821,6 +822,11 @@ async def incompatible_parameters_during_periodic_advertising(tester, *, propert
         An advertising set exists with at most 31 data octets. Use handle zero
         with initially compatible extended properties and one periodic data octet.
 
+    Test Case Configuration:
+        Table 4.16 selects BI-15 through BI-25 in this mask order: 0x20, 0x24,
+        0x13, 0x15, 0x1D, 0x12, 0x10, 0x01, 0x05, 0x02, 0x06. The registered
+        case's properties parameter selects one row, not multiple procedures.
+
     Test Steps:
         1. Send LE Set Extended Advertising Parameters with a valid handle and
            Advertising_Event_Properties = 0x00.
@@ -835,11 +841,6 @@ async def incompatible_parameters_during_periodic_advertising(tester, *, propert
         9. Send LE Set Extended Advertising Parameters with the same handle and
            the advertising properties selected by Table 4.16.
         10. Require Command Complete with Invalid HCI Command Parameters (0x12).
-
-    Test Case Configuration:
-        Table 4.16 selects BI-15 through BI-25 in this mask order: 0x20, 0x24,
-        0x13, 0x15, 0x1D, 0x12, 0x10, 0x01, 0x05, 0x02, 0x06. The registered
-        case's properties parameter selects one row, not multiple procedures.
 
     Expected Outcome:
         Pass verdict: the final command returns status 0x12 for each selected
@@ -865,17 +866,17 @@ async def incompatible_periodic_parameters(tester, *, properties):
         An advertising set with no more than 31 data octets exists where the
         selected advertising type requires one. Advertising remains disabled.
 
+    Test Case Configuration:
+        Table 4.17 selects BI-26 through BI-36 in this mask order: 0x20, 0x24,
+        0x13, 0x15, 0x1D, 0x12, 0x10, 0x01, 0x05, 0x02, 0x06. The initial
+        advertising data is empty, satisfying the at-most-31-octet condition.
+
     Test Steps:
         1. Set Extended Advertising Parameters with the Table 4.17 property mask
            selected by the case, using the specified advertising set if required.
         2. Require successful Command Complete.
         3. Send Set Periodic Advertising Parameters with the handle from step 1.
         4. Require Command Complete with Invalid HCI Command Parameters (0x12).
-
-    Test Case Configuration:
-        Table 4.17 selects BI-26 through BI-36 in this mask order: 0x20, 0x24,
-        0x13, 0x15, 0x1D, 0x12, 0x10, 0x01, 0x05, 0x02, 0x06. The initial
-        advertising data is empty, satisfying the at-most-31-octet condition.
 
     Expected Outcome:
         Pass verdict: each Table 4.17 row is rejected with status 0x12, matching
@@ -900,6 +901,11 @@ async def incompatible_periodic_enable(tester, *, properties):
         An advertising set exists with no more than 31 data octets where needed;
         both associated advertising and periodic advertising are disabled.
 
+    Test Case Configuration:
+        Table 4.18 selects BI-37 through BI-47 in this mask order: 0x20, 0x24,
+        0x13, 0x15, 0x1D, 0x12, 0x10, 0x01, 0x05, 0x02, 0x06. The initial
+        advertising data is empty, satisfying the at-most-31-octet condition.
+
     Test Steps:
         1. Send LE Set Extended Advertising Parameters with a valid handle and
            Advertising_Event_Properties = 0x00.
@@ -912,11 +918,6 @@ async def incompatible_periodic_enable(tester, *, properties):
         7. Send LE Set Periodic Advertising Enable with the handle from step 5
            and Enable = 1.
         8. Require Command Complete with Command Disallowed (0x0C).
-
-    Test Case Configuration:
-        Table 4.18 selects BI-37 through BI-47 in this mask order: 0x20, 0x24,
-        0x13, 0x15, 0x1D, 0x12, 0x10, 0x01, 0x05, 0x02, 0x06. The initial
-        advertising data is empty, satisfying the at-most-31-octet condition.
 
     Expected Outcome:
         Pass verdict: each Table 4.18 row returns status 0x0C for periodic enable,
@@ -1043,6 +1044,11 @@ async def create_sync_reporting_disabled(tester):
         IUT scans for extended advertising. The IUT supports Periodic Advertising
         ADI.
 
+    Test Case Configuration:
+        Table 4.19 rounds use Options 0x02, 0x03, 0x06 and 0x07: reporting is
+        disabled in every round, with and without the list and duplicate
+        filtering.
+
     Test Steps:
         1. The IUT receives AUX_ADV_IND from the Lower Tester and sends LE
            Extended Advertising Report with its Advertising SID, address type and
@@ -1060,11 +1066,6 @@ async def create_sync_reporting_disabled(tester):
         7. If the round uses the list, send LE Clear Periodic Advertiser List;
            require successful Command Complete.
         8. Repeat steps 1-7 for each round.
-
-    Test Case Configuration:
-        Table 4.19 rounds use Options 0x02, 0x03, 0x06 and 0x07: reporting is
-        disabled in every round, with and without the list and duplicate
-        filtering.
 
     Observation Setup:
         Read the local features to establish the ADI initial condition. The
@@ -1257,6 +1258,10 @@ async def interval_too_short(tester, *, phy=Phy.LE_1M):
     Initial Condition:
         Standby; minimum supported periodic interval is 7.5 ms. Storage below 755 octets
         on 1M or 500 octets on Coded makes the source Inconclusive.
+
+    Test Case Configuration:
+        HCI/DDI/BI-50-C: LE 1M.
+        HCI/DDI/BI-51-C: LE Coded.
 
     Test Steps:
         1. Send LE Read Maximum Advertising Data Length.
@@ -1452,6 +1457,11 @@ async def incompatible_periodic_enable_with_advertising(tester, *, properties):
         The IUT is in standby. Use one valid handle and seeded random one-octet
         data for the periodic payload and, when needed, the scan response.
 
+    Test Case Configuration:
+        Table 4.21 selects BI-53 through BI-61 in this mask order: 0x20, 0x24,
+        0x13, 0x12, 0x10, 0x01, 0x05, 0x02, 0x06. One method receives the
+        registered row's properties parameter; it retains one handle throughout.
+
     Test Steps:
         1. Send Extended Advertising Parameters with a valid handle and
            Properties = 0 (nonconnectable/nonscannable extended advertising);
@@ -1469,11 +1479,6 @@ async def incompatible_periodic_enable_with_advertising(tester, *, properties):
            Command Complete.
         7. Send Set Periodic Advertising Enable with Enable = 0x01.
         8. Require Command Complete with Command Disallowed (0x0C).
-
-    Test Case Configuration:
-        Table 4.21 selects BI-53 through BI-61 in this mask order: 0x20, 0x24,
-        0x13, 0x12, 0x10, 0x01, 0x05, 0x02, 0x06. One method receives the
-        registered row's properties parameter; it retains one handle throughout.
 
     Expected Outcome:
         Pass verdict: step 8 returns status 0x0C, matching opcode and a credit.
@@ -1571,6 +1576,12 @@ async def oversized_data(tester, *, response=False, phy=hci.Phy.LE_1M):
         Standby. Table 4.22 selects advertising data (properties zero) for BI-63/64
         or scan-response data (Scannable property) for BI-65/66; primary PHY
         is LE 1M for BI-63/65 and Coded for BI-64/66.
+
+    Test Case Configuration:
+        HCI/DDI/BI-63-C: extended advertising data, LE 1M.
+        HCI/DDI/BI-64-C: extended advertising data, LE Coded.
+        HCI/DDI/BI-65-C: extended scan response data, LE 1M.
+        HCI/DDI/BI-66-C: extended scan response data, LE Coded.
 
     Test Steps:
         1. Send LE Read Maximum Advertising Data Length.
@@ -1774,6 +1785,13 @@ async def enable_without_random_address(tester, *, operation, own_types):
     Initial Condition:
         Reset standby IUT; its LE Random Device Address has not been set.
 
+    Test Case Configuration:
+        HCI/DDI/BI-06-C: legacy advertising, Own_Address_Type 0x03.
+        HCI/DDI/BI-07-C: legacy scanning, Own_Address_Type 0x01 and 0x03.
+        HCI/DDI/BI-08-C: extended advertising, Own_Address_Type 0x01.
+        HCI/DDI/BI-09-C: extended advertising, Own_Address_Type 0x03.
+        HCI/DDI/BI-11-C: extended scanning, Own_Address_Type 0x01 and 0x03.
+
     Test Steps:
         For each own-address type specified in Table 4.14:
         1-2. Configure legacy/extended advertising or scanning and receive Success.
@@ -1805,6 +1823,97 @@ async def enable_without_random_address(tester, *, operation, own_types):
             )
         await tester.command(configure)
         await tester.command(enable, ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR)
+
+
+async def pawr_data_without_periodic_configuration(tester):
+    """Reject Subevent Data on a set not configured for periodic advertising.
+
+    Initial Condition:
+        Standby with no periodic parameters configured.
+
+    Test Steps:
+        1. Create a non-connectable, non-scannable extended advertising set.
+        2. Send one octet of subevent data for its handle.
+
+    Expected Outcome:
+        Command Complete returns Command Disallowed (0x0C).
+
+    Reference:
+        HCI.TS.p39, 4.7.8 alternative 3B, HCI/DDI/BI-71-C, Table 4.23.
+    """
+    await tester.command(extended_parameters())
+    await tester.command(pawr_peer.SET_DATA(0, [0], [0], [1], [b'x']), 0x0C)
+
+
+async def pawr_indication_too_long(tester):
+    """Reject subevent data whose encoded duration exceeds the response delay.
+
+    Initial Condition:
+        PAwR set on LE 1M: one subevent, RSD 1.25 ms and RSS 1.25 ms.
+
+    Test Steps:
+        1. Enable periodic/extended advertising and receive a request for 0.
+        2. Submit 127 octets with response-slot counts 1 and 0.
+        3. Submit 126 octets on a fresh requested instance.
+
+    Expected Outcome:
+        Both 127-octet commands return 0x45. The 126-octet command succeeds.
+        Slot_Count zero does not remove the train's configured response delay.
+
+    Reference:
+        HCI.TS.p39, HCI/DDI/BI-72-C; Core 7.8.125.
+    """
+    await pawr_peer.configure(tester, interval=16, timing=(1, 16, 1, 10), slots=3)
+    generator = random.Random(0)
+    for count in (1, 0):
+        await pawr_peer.next_request(tester)
+        await tester.command(
+            pawr_peer.SET_DATA(0, [0], [0], [count], [generator.randbytes(127)]), 0x45
+        )
+    await pawr_peer.next_request(tester)
+    await tester.command(
+        pawr_peer.SET_DATA(0, [0], [0], [1], [generator.randbytes(126)])
+    )
+    await pawr_peer.stop_advertising(tester)
+
+
+async def pawr_response_too_long(tester):
+    """Reject response data whose encoded duration exceeds its response slot.
+
+    Initial Condition:
+        Synchronize to a PAwR train with RSS 1.25 ms on LE 1M.
+
+    Test Steps:
+        1. Receive subevent 0 and its v2 report.
+        2. Submit 127 response octets, then 126 octets for that event and slot.
+        3. Observe the response at RSD after the indication on RspAA.
+
+    Expected Outcome:
+        The 127-octet command returns 0x45; 126 octets succeed and appear
+        unchanged in AUX_SYNC_SUBEVENT_RSP with a valid CRC.
+
+    Reference:
+        HCI.TS.p39, HCI/DDI/BI-73-C; Core 7.8.126.
+    """
+    train, handle = await pawr_peer.scanner(tester)
+    data = random.Random(0).randbytes(127)
+    await tester.command(pawr_peer.SET_RESPONSE(handle, 0, 0, 0, 0, data), 0x45)
+    await tester.command(pawr_peer.SET_RESPONSE(handle, 0, 0, 0, 0, data[:126]))
+    # Commands are processed in 1-ms grants; the peer's receive must already
+    # be active before the Controller starts its response.
+    start = train.anchor + train.pawr[2] * 1250
+    packet = await tester.receive(
+        train.channel,
+        start_us=start - 2,
+        duration_us=start - tester.radio.now_us + 100,
+        access_address=train.rsp_aa,
+        crc_init=train.crc_init,
+    )
+    assert packet is not None and packet.valid_crc
+    from tests.qualification.tester import decode_extended
+
+    assert decode_extended(packet.pdu)['data'] == data[:126]
+    await tester.command(hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(handle))
 
 
 PROCEDURES: ProcedureMap = {}
@@ -2556,7 +2665,43 @@ RADIO_CASES = [
     "HCI/DDI/BI-04-C",
     "HCI/DDI/BI-50-C",
     "HCI/DDI/BI-51-C",
+    'HCI/DDI/BI-72-C',
+    'HCI/DDI/BI-73-C',
 ]
+
+
+# Verify rejection of Subevent Data on a set not configured for periodic advertising.
+PROCEDURES |= procedure_cases(
+    pawr_data_without_periodic_configuration,
+    {
+        'HCI/DDI/BI-71-C': (
+            'Reject Subevent Data on a set not configured for periodic advertising.',
+            {},
+        ),
+    },
+)
+
+# Verify rejection of subevent data whose encoded duration exceeds the response delay.
+PROCEDURES |= procedure_cases(
+    pawr_indication_too_long,
+    {
+        'HCI/DDI/BI-72-C': (
+            'Reject subevent data whose encoded duration exceeds the response delay.',
+            {},
+        ),
+    },
+)
+
+# Verify rejection of response data whose encoded duration exceeds its response slot.
+PROCEDURES |= procedure_cases(
+    pawr_response_too_long,
+    {
+        'HCI/DDI/BI-73-C': (
+            'Reject response data whose encoded duration exceeds its response slot.',
+            {},
+        ),
+    },
+)
 
 
 @pytest.mark.asyncio

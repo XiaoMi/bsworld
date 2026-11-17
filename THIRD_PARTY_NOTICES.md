@@ -39,7 +39,7 @@ The upstream stack and applications are used without modification as external Ca
 ## Bumble
 
 - Source: https://github.com/google/bumble
-- Usage: Python Bluetooth Host stack for [Bumble tests](tests/integration/bumble/README.md)
+- Usage: Python Bluetooth Host stack for [Bumble tests](tests/integration/bumble/README.md) and [BSController samples](components/bscontroller/samples/README.md)
 - License: Apache License 2.0
 
 BSWorld uses the public Python and HCI transport APIs without modifying the Bumble Host stack.

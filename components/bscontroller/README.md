@@ -99,7 +99,7 @@ with asyncio.Runner(loop_factory=RadioEventLoop) as runner:
     runner.run(main())
 ```
 
-[examples/advertise_scan.py](examples/advertise_scan.py) is a complete program built on these APIs: it starts the PHY with `PhyProcess`, runs an advertising and a scanning Controller in one `RadioSession`, and a mock Host scans over the scanner's socket. Run it with `python examples/advertise_scan.py`; see [examples/README.md](examples/README.md).
+The [Bumble Host samples](samples/README.md) run advertising, scanning, GATT, multiple connections, periodic synchronization and simultaneous roles. Install `python -m pip install -e '.[bumble]'` and run `python -m samples.advertise_scan` from this directory. Each device uses its own Bumble Host and Controller over H4; `bscontroller.hosts.bumble` provides the shared Host and advertising-set contexts.
 
 There are two ways to connect a Host:
 
@@ -204,7 +204,7 @@ These are the Link Layer features of the Bluetooth Core specification, listed by
 | 5.3 | Periodic Advertising ADI Support | * |
 | 5.3 | LE Channel Classification |  |
 | 5.3 | Connection Subrating |  |
-| 5.4 | Periodic Advertising with Responses |  |
+| 5.4 | Periodic Advertising with Responses | * |
 | 6.0 | Channel Sounding |  |
 | 6.0 | Decision-Based Advertising Filtering | * |
 | 6.0 | Monitoring Advertisers |  |
@@ -236,7 +236,7 @@ Inside one Controller, the Link Layer keeps a manager for each role (advertising
 ```text
 .
 ├── src/bscontroller/     # Package: HCI, Link Layer, radio, runtime, config
-├── examples/             # Runnable two-Controller example with a mock Host
+├── samples/              # Bumble Host scenarios, including concurrent roles
 └── tests/
     ├── unit/             # Fast tests, no PHY needed
     └── qualification/    # HCI/LL protocol cases; radio cases need BabbleSim
@@ -249,6 +249,6 @@ python -m pytest tests/qualification -n auto -v -rs     # a few minutes, needs B
 python -m build                                         # sdist and wheel in dist/
 ```
 
-The qualification suite runs 679 selected HCI and Link Layer test cases from the Bluetooth test specifications against independent lower testers. Passing them does not make BSController Bluetooth-qualified. See [tests/README.md](tests/README.md) for the test scope.
+The qualification suite runs 754 selected HCI and Link Layer test cases from the Bluetooth test specifications against independent lower testers. Passing them does not make BSController Bluetooth-qualified. See [tests/README.md](tests/README.md) for the test scope.
 
 Licensing and third-party notices are in [LICENSE](LICENSE) and [NOTICE](NOTICE).

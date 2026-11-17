@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Iterable
 from dataclasses import replace
 
 from bscontroller.address import Address
@@ -82,6 +83,10 @@ class RadioLink:
         self.sync_transfer = SyncTransferConfig()
         self.default_tx_octets = PDU_DATA_PAYLOAD_SIZE_MIN
         self.default_tx_time = PDU_DATA_PAYLOAD_TIME_MIN_US
+        # The device addresses an AUX_CONNECT_REQ on a synchronized PAwR train
+        # may name (Core Vol 6, Part B, 4.4.2.12.2); set by the service.
+        self.public_address: Address | None = None
+        self.random_address: Address | None = None
 
     # Internal LL views; managers retain ownership of active contexts.
     @property
@@ -127,16 +132,17 @@ class RadioLink:
     def now_us(self) -> int:
         return self.radio.now_us
 
-    def new_access_address(self) -> int:
+    def new_access_address(self, *, exclude: Iterable[int] = ()) -> int:
         used = {
             connection.parameters.access_address
             for connection in self.connections.values()
         }
-        used.update(
-            item.periodic_aa
-            for item in self.advertisers.values()
-            if item.periodic_enabled
-        )
+        used.update(exclude)
+        for item in self.advertisers.values():
+            if item.periodic_enabled:
+                used.add(item.periodic_aa)
+                if item.pawr_state is not None:
+                    used.add(item.pawr_state.rsp_aa)
         return generate_access_address(self.random, used)
 
     def connection_parameters(
@@ -184,6 +190,7 @@ class RadioLink:
         phy: Phy = Phy.LE_1M,
         *,
         deadline_us: int | None = None,
+        **parameters,
     ) -> Received | None:
         """Limit address detection, not the length of an acquired response."""
         response_start = transmit_end_us + LL_IFS_US
@@ -195,6 +202,7 @@ class RadioLink:
             until_us,
             start_us=response_start - LL_RESPONSE_START_TOLERANCE_US,
             phy=phy,
+            **parameters,
         )
 
     def _pending_operations(self, target_us: int):

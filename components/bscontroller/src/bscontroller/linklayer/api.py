@@ -21,6 +21,7 @@ from bscontroller.linklayer import (
 )
 from bscontroller.linklayer.data_length import DataLengths
 from bscontroller.linklayer.parameters import Parameters
+from bscontroller.linklayer.pawr import PawrTiming
 from bscontroller.linklayer.timing import LL_DEFAULT_ADV_INTERVAL_US
 from bscontroller.radio.base import Phy
 
@@ -137,6 +138,8 @@ class ConnectionSnapshot:
     csa2: bool
     peer_rpa: AddressSnapshot | None = None
     local_rpa: AddressSnapshot | None = None
+    pawr_advertising_handle: int | None = None
+    pawr_sync_handle: int | None = None
 
 
 def connection_snapshot(connection: Connection) -> ConnectionSnapshot:
@@ -159,6 +162,8 @@ def connection_snapshot(connection: Connection) -> ConnectionSnapshot:
         connection.csa2,
         address_snapshot(connection.peer_rpa),
         address_snapshot(connection.local_rpa),
+        connection.pawr_advertising_handle,
+        connection.pawr_sync_handle,
     )
 
 
@@ -173,6 +178,8 @@ class PeriodicSyncSnapshot:
     # The delivering connection and Service_Data of a transferred sync.
     connection_handle: int = 0
     service_data: int = 0
+    # PAwR timing; None for a train without responses.
+    pawr: PawrTiming | None = None
 
 
 @dataclass(frozen=True)
@@ -231,6 +238,9 @@ class InitiatingConfig:
     phy_parameters: tuple[tuple[Phy, Parameters], ...]
     filter_policy: int = 0
     own_address_type: int = OwnAddressType.PUBLIC
+    # Connect on a local PAwR train's subevent (Vol 4, Part E, 7.8.66 [v2]).
+    pawr_advertising_handle: int | None = None
+    pawr_subevent: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, 'address', AddressSnapshot(self.address))
@@ -261,4 +271,5 @@ def synchronization_snapshot(sync: PeriodicSync) -> PeriodicSyncSnapshot:
         sync.info.sca if sync.info else 0,
         sync.transfer.connection_handle if sync.transfer else 0,
         sync.transfer.service_data if sync.transfer else 0,
+        sync.pawr.timing if sync.pawr else None,
     )

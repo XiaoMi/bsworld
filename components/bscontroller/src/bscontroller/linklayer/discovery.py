@@ -17,6 +17,7 @@ from bscontroller.address import Address, OwnAddressType
 from bscontroller.linklayer import (
     LL_ADV_PRIMARY_CHANNEL_MAP_ALL,
     LL_CHANNEL_MAP_SIZE,
+    LL_DATA_CHANNEL_MAP_ALL,
     LL_EVENT_COUNTER_MASK,
     LL_SCAN_BACKOFF_COUNT_MAX,
     LL_SCAN_BACKOFF_COUNT_MIN,
@@ -30,6 +31,12 @@ from bscontroller.linklayer import (
 )
 from bscontroller.linklayer.advertising import SyncInfo
 from bscontroller.linklayer.parameters import Parameters, valid_channel_map
+from bscontroller.linklayer.pawr import (
+    PawrAdvertiser,
+    PawrSync,
+    PawrTiming,
+    acad_structures,
+)
 from bscontroller.linklayer.timing import (
     LL_DEFAULT_ADV_INTERVAL_US,
     LL_INSTANT_PAST_THRESHOLD,
@@ -71,6 +78,14 @@ class Advertising:
     # paEventCounter of the last AUX_SYNC_IND actually transmitted, if any.
     # A sync transfer names it as lastPaEventCounter (Core Vol 6, Part B, 2.4.2.27).
     periodic_last_counter: int | None = None
+    # The train's data channels, and a pending Channel Map Update Indication:
+    # (Instant, ChM) (Core Vol 6, Part B, 2.3.4.8 and 4.4.2.12).
+    periodic_channel_map: int = LL_DATA_CHANNEL_MAP_ALL
+    periodic_channel_update: tuple[int, int] | None = None
+    # PAwR configuration, and its live state while the train is enabled.
+    pawr: PawrTiming | None = None
+    pawr_response_slots: int = 0
+    pawr_state: PawrAdvertiser | None = None
     events: int = 0
     target: Address | None = None
     high_duty: bool = False
@@ -207,6 +222,10 @@ class Initiating:
     identity_address: Address | None = None
     local_rpa: Address | None = None
     backoff: ScanBackoff = field(default_factory=ScanBackoff)
+    # Connect through a local PAwR train's subevent instead of scanning (Core
+    # Vol 6, Part B, 4.4.2.12.2; Vol 4, Part E, 7.8.66).
+    pawr_advertising: Advertising | None = None
+    pawr_subevent: int = 0
 
 
 @dataclass(frozen=True)
@@ -253,6 +272,8 @@ class PeriodicSync:
     # CTE_Type: CTEs, or their absence, that fail synchronization at the first
     # AUX_SYNC_IND; ignored once synchronized (Core Vol 6, Part B, 4.4.3.4).
     cte_type: int = 0
+    # Set for a PAwR train (Core Vol 6, Part B, 4.4.5.1.2).
+    pawr: PawrSync | None = None
 
     def excludes(self, cte_info: int | None) -> bool:
         """CTE_Type excludes a packet with this CTEInfo, or without one."""
@@ -267,18 +288,15 @@ class PeriodicSync:
         """Keep the last valid future ChM/Instant update; malformed AD structures end
         parsing.
         """
-        structures = []
-        offset = 0
-        while offset < len(acad):
-            length = acad[offset]
-            end = offset + length + 1
-            if length == 0 or end > len(acad):
-                return
-            if acad[offset + 1] == AD_TYPE_CHANNEL_MAP_UPDATE_INDICATION:
-                structures.append(acad[offset + 2 : end])
-            offset = end
-        for value in structures:
-            if len(value) != LL_CHANNEL_MAP_SIZE + PDU_CONTROL_INSTANT_SIZE:
+        try:
+            structures = acad_structures(acad)
+        except ValueError:
+            return
+        for ad_type, value in structures:
+            if (
+                ad_type != AD_TYPE_CHANNEL_MAP_UPDATE_INDICATION
+                or len(value) != LL_CHANNEL_MAP_SIZE + PDU_CONTROL_INSTANT_SIZE
+            ):
                 continue
             channels = int.from_bytes(value[:LL_CHANNEL_MAP_SIZE], 'little')
             instant = int.from_bytes(value[LL_CHANNEL_MAP_SIZE:], 'little')

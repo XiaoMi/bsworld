@@ -92,6 +92,10 @@ class Connection:
         self.closed: bool = False
         self.advertising_handle: int | None = None
         self.advertising_events = 0
+        # The PAwR train the connection came from: the local set for a Central,
+        # the synchronized train for a Peripheral (Vol 4, Part E, 7.7.65.10).
+        self.pawr_advertising_handle: int | None = None
+        self.pawr_sync_handle: int | None = None
         self.tx_phy: Phy = phy
         self.rx_phy: Phy = phy
         self.peer_features: int | None = None

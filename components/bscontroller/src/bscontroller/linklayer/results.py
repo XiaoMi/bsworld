@@ -38,6 +38,10 @@ class ConnectionAccepted:
     phy: Phy = Phy.LE_1M
     initiator: Initiating | None = None
     local_rpa: Address | None = None
+    # The PAwR train an AUX_CONNECT_REQ was sent on (Central) or received on
+    # (Peripheral) (Core Vol 6, Part B, 4.4.2.12.2).
+    pawr_advertiser: Advertising | None = None
+    pawr_sync: PeriodicSync | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +52,8 @@ class SyncInfoReceived:
     packet: Received
     # The AdvA as received, before address resolution.
     advertiser: Address | None = None
+    # The AUX_ADV_IND ACAD: PAwR timing information, if any (2.3.4.8).
+    acad: bytes = b''
 
 
 @dataclass(frozen=True)
@@ -55,6 +61,9 @@ class PeriodicPacketReceived:
     sync: PeriodicSync
     packet: Received
     pdu: ExtendedPdu
+    # The PAwR subevent and channel the packet was received on.
+    subevent: int = 0
+    channel: int = 0
 
 
 @dataclass(frozen=True)
