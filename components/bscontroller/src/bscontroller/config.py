@@ -62,6 +62,12 @@ class ControllerConfig:
     # Concurrency limits; 5.3.1 bounds them by the 0x0000-0x0EFF handle space.
     max_connections: int = _option(64, 1, 0x0EFF)
     max_periodic_syncs: int = _option(16, 1, 0x0EFF)
+    # 7.8.2 LE Read Buffer Size v2; separate ISO flow-control credits.
+    iso_packet_count: int = _option(16, 1, 0xFF)
+    iso_packet_length: int = _option(251, 5, 0x3FFF)
+    # 7.8.103 / 7.8.106 BIG resources; each BIG contains 1–31 BISes.
+    max_bigs: int = _option(4, 1, 0xF0)
+    max_bis: int = _option(16, 1, 0x0EFF)
 
     def __post_init__(self) -> None:
         for item in fields(self):

@@ -36,9 +36,12 @@ from bscontroller.linklayer import (
     PDU_ADV_ADDRESS_SIZE,
     PDU_ADV_ADDRESSES_END,
     PDU_ADV_ADI_DID_BITS,
+    PDU_ADV_ADI_SIZE,
     PDU_ADV_AUX_CONNECT_RSP_SIZE,
+    PDU_ADV_AUX_PTR_SIZE,
     PDU_ADV_CONNECT_PAYLOAD_SIZE,
     PDU_ADV_CONNECT_SIZE,
+    PDU_ADV_EXT_HEADER_SIZE_MAX,
     PDU_ADV_OFFSET_UNIT_30_US,
     PDU_ADV_OFFSET_UNIT_300_US,
     PDU_ADV_OFFSET_VALUE_MASK,
@@ -59,6 +62,7 @@ from bscontroller.linklayer.advertising import (
     align_offset_us,
     scan_request,
 )
+from bscontroller.linklayer.bis import BIG_INFO_AD_TYPE
 from bscontroller.linklayer.discovery import AD_TYPE_CHANNEL_MAP_UPDATE_INDICATION
 from bscontroller.linklayer.filtering import (
     DecisionMode,
@@ -219,14 +223,33 @@ def periodic_pdu(item: Advertising) -> ExtendedPdu:
     Its SID matches the superior AUX_ADV_IND; its DID is the periodic data's own
     (Core Vol 6, Part B, 2.3.1.7, 4.4.2.11 and 4.4.2.12.1). fragments() repeats
     the ADI in every AUX_CHAIN_IND, as Table 2.7 C.1 requires; a pending
-    channel map update stays in the first PDU's ACAD.
+    channel map update stays in the first PDU's ACAD. BIGInfo is included only
+    when that header has space (Core Vol 6, Part B, 4.4.6.9), including any
+    AuxPtr needed for chained Host data.
     """
-    return ExtendedPdu(
+    pdu = ExtendedPdu(
         adi=item.sid << PDU_ADV_ADI_DID_BITS | item.periodic_did
         if item.periodic_adi
         else None,
         acad=channel_map_acad(item),
     )
+    if item.big_info:
+        big_info = bytes([len(item.big_info) + 1, BIG_INFO_AD_TYPE]) + item.big_info
+        header_size = (
+            1
+            + (PDU_ADV_ADI_SIZE if item.periodic_adi else 0)
+            + len(pdu.acad)
+            + len(big_info)
+        )
+        if header_size <= PDU_ADV_EXT_HEADER_SIZE_MAX:
+            candidate = replace(pdu, acad=pdu.acad + big_info)
+            chained = len(item.periodic_data) > candidate.data_capacity()
+            if (
+                not chained
+                or header_size + PDU_ADV_AUX_PTR_SIZE <= PDU_ADV_EXT_HEADER_SIZE_MAX
+            ):
+                return candidate
+    return pdu
 
 
 def subevent_pdu(item: Advertising, data: bytes = b'') -> ExtendedPdu:
@@ -250,6 +273,11 @@ def periodic_time_us(item: Advertising) -> int:
         fragments(periodic_pdu(item), item.periodic_data, 0, item.secondary_phy),
         item.secondary_phy,
     )
+
+
+def required_periodic_interval(item: Advertising) -> int:
+    """Smallest 1.25-ms interval that leaves T_MAFS after this PA event."""
+    return (periodic_time_us(item) + LL_MAFS_US) // LL_PERIODIC_INTERVAL_UNIT_US + 1
 
 
 def primary_pdu(item: Advertising, pointer: AuxPtr) -> ExtendedPdu:

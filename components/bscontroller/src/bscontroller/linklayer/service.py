@@ -21,7 +21,6 @@ from bscontroller.capabilities import (
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
     LL_ADV_DIRECT_HIGH_DUTY_TIMEOUT_US,
-    LL_DATA_CHANNEL_MAP_ALL,
     LL_MAFS_US,
     LL_PERIODIC_INTERVAL_UNIT_US,
     PDU_ADV_ADI_DID_MASK,
@@ -35,6 +34,8 @@ from bscontroller.linklayer.api import (
     AddressSnapshot,
     AdvertisingConfig,
     AdvertisingSnapshot,
+    BigConfig,
+    BigSyncConfig,
     ConnectionSnapshot,
     InitiatingConfig,
     PeriodicSyncConfig,
@@ -59,6 +60,7 @@ from bscontroller.linklayer.extended import (
     advertising_time_us,
     auxiliary_pdu,
     periodic_time_us,
+    required_periodic_interval,
     subevent_pdu,
 )
 from bscontroller.linklayer.features import FEATURE_MAX_PAGE
@@ -79,6 +81,7 @@ from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
     from bscontroller.address import Address
+    from bscontroller.linklayer.iso import IsoTestCounters, IsoTxSync
     from bscontroller.linklayer.link import RadioLink
 
 SUCCESS = ErrorCode.SUCCESS
@@ -263,8 +266,7 @@ class AdvertisingService:
             or (
                 field == 'periodic_data'
                 and item.periodic_interval
-                and periodic_time_us(updated) + LL_MAFS_US
-                >= item.periodic_interval * LL_PERIODIC_INTERVAL_UNIT_US
+                and required_periodic_interval(updated) > item.periodic_interval_limit
             )
             or advertising_time_us(updated)
             > (item.interval_us if item.enabled else item.interval_max_us)
@@ -362,15 +364,21 @@ class AdvertisingService:
         item = self.link.advertisers.get(handle)
         if item is None:
             return UNKNOWN_ADV
-        if item.enabled or item.periodic_enabled:
+        if (
+            item.enabled
+            or item.periodic_enabled
+            or self.link.roles.broadcast.associated_group(handle) is not None
+        ):
             return DISALLOWED
         self.link.roles.advertising.remove(handle)
         return SUCCESS
 
     def clear(self) -> int:
         if any(
-            item.enabled or item.periodic_enabled
-            for item in self.link.advertisers.values()
+            item.enabled
+            or item.periodic_enabled
+            or self.link.roles.broadcast.associated_group(handle) is not None
+            for handle, item in self.link.advertisers.items()
         ):
             return DISALLOWED
         self.link.roles.advertising.clear()
@@ -396,6 +404,11 @@ class AdvertisingService:
         item = self.link.advertisers[handle]
         if item.periodic_enabled:
             return DISALLOWED
+        if (
+            pawr is not None
+            and self.link.roles.broadcast.associated_group(handle) is not None
+        ):
+            return DISALLOWED
         if not item.extended or item.mode or item.anonymous:
             return INVALID
         interval = minimum
@@ -413,15 +426,14 @@ class AdvertisingService:
                 subevent_interval=min(interval, LL_PAWR_SUBEVENT_INTERVAL_MAX),
             )
         candidate = replace(item, pawr=pawr)
-        if (
-            periodic_time_us(candidate) + LL_MAFS_US
-            >= maximum * LL_PERIODIC_INTERVAL_UNIT_US
-        ):
+        interval = max(interval, required_periodic_interval(candidate))
+        if interval > maximum:
             return TOO_LONG
         if not item.periodic_interval:
             # The first periodic configuration seeds a random DID (4.4.2.11).
             item.periodic_did = self.link.random.randrange(PDU_ADV_ADI_DID_MASK + 1)
         item.periodic_interval = interval
+        item.periodic_interval_max = maximum
         item.pawr = pawr
         item.pawr_response_slots = response_slots if pawr is not None else 0
         return SUCCESS
@@ -492,20 +504,22 @@ class AdvertisingService:
         ):
             return DISALLOWED
         candidate = replace(item, periodic_adi=enable and include_adi)
-        if (
-            enable
-            and periodic_time_us(candidate) + LL_MAFS_US
-            >= item.periodic_interval * LL_PERIODIC_INTERVAL_UNIT_US
-        ):
-            return TOO_LONG
-        if (
-            enable
-            and advertising_time_us(replace(candidate, periodic_enabled=True))
-            + periodic_time_us(candidate)
-            + LL_MAFS_US
-            >= item.periodic_interval * LL_PERIODIC_INTERVAL_UNIT_US
-        ):
-            return DISALLOWED
+        if enable:
+            interval = max(
+                item.periodic_interval, required_periodic_interval(candidate)
+            )
+            if interval > item.periodic_interval_limit:
+                return TOO_LONG
+            if item.enabled:
+                combined = (
+                    advertising_time_us(replace(candidate, periodic_enabled=True))
+                    + periodic_time_us(candidate)
+                    + LL_MAFS_US
+                )
+                interval = max(interval, combined // LL_PERIODIC_INTERVAL_UNIT_US + 1)
+                if interval > item.periodic_interval_limit:
+                    return DISALLOWED
+            item.periodic_interval = interval
         # Re-enabling a running train only changes whether it carries the ADI.
         item.periodic_adi = candidate.periodic_adi
         self.link.roles.advertising.set_periodic_enabled(item, enable)
@@ -534,7 +548,6 @@ class LinkLayerService:
     def reset_configuration(self, address: Address) -> None:
         self._scan_parameters = Scanning(AddressSnapshot(address), *self._default_scan)
         self.link.public_address = AddressSnapshot(address)
-        self.host_channel_map = LL_DATA_CHANNEL_MAP_ALL
         self.link.default_tx_phys = self.link.default_rx_phys = (
             CONTROLLER_SUPPORTED_PHY_MASK
         )
@@ -647,7 +660,7 @@ class LinkLayerService:
             return ErrorCode.CONNECTION_ALREADY_EXISTS_ERROR
         if self.link.initiating is not None:
             return DISALLOWED
-        if len(self.link.connections) >= self.link.config.max_connections:
+        if not self.link.roles.connections.has_capacity():
             return ErrorCode.CONNECTION_LIMIT_EXCEEDED_ERROR
         return SUCCESS
 
@@ -877,6 +890,10 @@ class LinkLayerService:
     def now_us(self) -> int:
         return self.link.now_us
 
+    @property
+    def host_channel_map(self) -> int:
+        return self.link.roles.host_channel_map
+
     def random_bytes(self, length: int) -> bytes:
         return self.link.random.randbytes(length)
 
@@ -938,6 +955,67 @@ class LinkLayerService:
     def set_default_phys(self, tx: int, rx: int) -> None:
         self.link.default_tx_phys, self.link.default_rx_phys = tx, rx
 
+    def create_big(self, config: BigConfig) -> int:
+        return self.link.roles.broadcast.create(config)
+
+    def terminate_big(self, handle: int, reason: int) -> int:
+        return self.link.roles.broadcast.terminate(handle, reason)
+
+    def synchronize_big(self, config: BigSyncConfig) -> int:
+        return self.link.roles.broadcast.synchronize(config)
+
+    def terminate_big_sync(self, handle: int) -> int:
+        return self.link.roles.broadcast.terminate_sync(handle)
+
+    def has_iso_handle(self, handle: int) -> bool:
+        return self.link.roles.iso.contains(handle)
+
+    def setup_iso_data_path(
+        self,
+        handle: int,
+        direction: int,
+        path_id: int,
+        codec: int,
+        configuration: bytes,
+        controller_delay_us: int,
+    ) -> int:
+        return self.link.roles.iso.setup(
+            handle, direction, path_id, codec, configuration, controller_delay_us
+        )
+
+    def remove_iso_data_path(self, handle: int, direction: int) -> int:
+        return self.link.roles.iso.remove(handle, direction)
+
+    def iso_tx_sync(self, handle: int) -> tuple[int, IsoTxSync | None]:
+        return self.link.roles.iso.read_tx_sync(handle)
+
+    def set_iso_test(self, handle: int, transmit: bool, payload_type: int) -> int:
+        return self.link.roles.iso.test(handle, transmit, payload_type)
+
+    def iso_test_counters(
+        self, handle: int, *, end: bool = False
+    ) -> tuple[int, IsoTestCounters]:
+        return self.link.roles.iso.counters(handle, end=end)
+
+    def receive_iso_packet(
+        self,
+        handle: int,
+        fragment: bytes,
+        pb_flag: int,
+        sequence_number: int | None,
+        length: int | None,
+        timestamp_us: int | None,
+    ) -> None:
+        self.link.roles.iso.input(
+            handle,
+            fragment,
+            pb_flag,
+            sequence_number,
+            length,
+            timestamp_us,
+            self.link.now_us,
+        )
+
     def classify_channels(self, value: int) -> int:
         centrals = [
             connection
@@ -948,8 +1026,9 @@ class LinkLayerService:
             return DISALLOWED
         for connection in centrals:
             connection.controls.request_channel_map(value)
-        self.host_channel_map = value
+        self.link.roles.host_channel_map = value
         self.link.roles.advertising.update_periodic_channel_maps(value)
+        self.link.roles.broadcast.update_channel_map(value)
         return SUCCESS
 
     def set_default_data_length(self, octets: int, time_us: int) -> None:
@@ -1063,6 +1142,8 @@ class LinkLayerService:
         )
 
     def set_authenticated_timeout(self, handle: int, timeout_us: int) -> int:
+        if self.has_iso_handle(handle):
+            return DISALLOWED
         connection = self._connection(handle)
         if connection is None:
             return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR

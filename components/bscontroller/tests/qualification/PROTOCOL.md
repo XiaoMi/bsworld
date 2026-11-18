@@ -6,7 +6,7 @@ This suite validates BSController HCI commands, events and Link Layer behavior a
 
 ## Coverage
 
-The suite selects 774 protocol cases: 145 HCI and 629 LL cases across 18 test files. Coverage includes discovery, advertising, connections, timing, packet encoding, frequency hopping, security and data transfer, including privacy and Decision-Based Advertising Filtering (DBAF).
+The suite selects 821 protocol cases: 162 HCI and 659 LL cases across 21 test files. Coverage includes discovery, advertising, connections, timing, packet encoding, frequency hopping, security and data transfer, including privacy, Decision-Based Advertising Filtering (DBAF), BIS broadcasting and synchronized reception.
 
 Cases retain their specification identifiers for lookup and selection. The chapter numbers below refer to the test specifications.
 
@@ -20,6 +20,7 @@ Cases retain their specification identifiers for lookup and selection. The chapt
 | `hci/` | 4.8 Host Flow Control | [host_flow_control_test.py](hci/host_flow_control_test.py) | 1 |
 | `hci/` | 4.10 Controller Configuration | [controller_configuration_test.py](hci/controller_configuration_test.py) | 39 |
 | `hci/` | 4.13 LE Connection Management | [connection_management_test.py](hci/connection_management_test.py) | 7 |
+| `hci/` | 4.15.2 Broadcast Isochronous Streams | [broadcast_isochronous_test.py](hci/broadcast_isochronous_test.py) | 17 |
 | `hci/` | 4.17 Event Versioning | [event_versioning_test.py](hci/event_versioning_test.py) | 6 |
 | `ll/` | 4.2 Device Discovery | [device_discovery_test.py](ll/device_discovery_test.py) | 176 |
 | `ll/` | 4.3 Connection | [connection_test.py](ll/connection_test.py) | 258 |
@@ -30,6 +31,8 @@ Cases retain their specification identifiers for lookup and selection. The chapt
 | `ll/` | 4.7 Packet Handling | [packet_handling_test.py](ll/packet_handling_test.py) | 6 |
 | `ll/` | 4.8 Security | [security_test.py](ll/security_test.py) | 67 |
 | `ll/` | 4.9 Data Flow | [data_flow_test.py](ll/data_flow_test.py) | 4 |
+| `ll/` | 4.11 Broadcast Isochronous Streams | [broadcast_isochronous_test.py](ll/broadcast_isochronous_test.py) | 28 |
+| `ll/` | 4.12 Isochronous Testing | [isochronous_testing_test.py](ll/isochronous_testing_test.py) | 2 |
 
 Coverage is limited to these selected cases and does not imply complete HCI.TS, LL.TS or Core coverage. The cases that can run also depend on Controller capabilities and the test environment.
 

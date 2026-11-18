@@ -7,18 +7,16 @@ from bscontroller.linklayer import LL_SCA_PPM
 from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND
 
 
-def window_widening(elapsed_us: int, sca: int) -> int:
-    """Sleep clock uncertainty: peer SCA, local 50 ppm, instantaneous 16 us."""
-    ppm = LL_SCA_PPM[sca]
-    return (
-        LL_CLOCK_JITTER_US
-        + (
-            max(0, elapsed_us) * (ppm + LL_LOCAL_SCA_PPM)
-            + PHY_TIME_UNITS_PER_SECOND
-            - 1
-        )
-        // PHY_TIME_UNITS_PER_SECOND
-    )
+def window_widening(elapsed_us: int, sca: int, *, active: bool = False) -> int:
+    """Peer/local clock uncertainty (Core Vol 6, Part B, 4.2.4).
+
+    Sleep timing uses the advertised SCA and 16-us jitter. Adjacent subevents
+    use the active clock's 50 ppm and 2-us jitter.
+    """
+    ppm = LL_LOCAL_SCA_PPM if active else LL_SCA_PPM[sca]
+    return (2 if active else LL_CLOCK_JITTER_US) + (
+        max(0, elapsed_us) * (ppm + LL_LOCAL_SCA_PPM) + PHY_TIME_UNITS_PER_SECOND - 1
+    ) // PHY_TIME_UNITS_PER_SECOND
 
 
 LL_LOCAL_SCA_PPM = 50

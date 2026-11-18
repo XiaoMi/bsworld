@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
 from bscontroller.address import Address, OwnAddressType
 from bscontroller.linklayer import (
@@ -43,6 +44,10 @@ from bscontroller.linklayer.timing import (
 )
 from bscontroller.radio.base import Phy
 
+if TYPE_CHECKING:
+    from bscontroller.linklayer.bis import BigInfo
+
+
 # Bluetooth Assigned Numbers, Common Data Types: Channel Map Update Indication,
 # carried in periodic advertising ACAD (Core Vol 6, Part B, 2.3.4.8).
 AD_TYPE_CHANNEL_MAP_UPDATE_INDICATION = 0x28
@@ -64,7 +69,10 @@ class Advertising:
     sid: int = 0
     did: int = 0
     periodic_interval: int = 0
+    periodic_interval_max: int = 0
     periodic_data: bytearray = field(default_factory=bytearray)
+    # Encoded BIGInfo ACAD, refreshed at each AUX_SYNC_IND's actual anchor.
+    big_info: bytes = b''
     periodic_enabled: bool = False
     periodic_next_us: int = 0
     periodic_counter: int = 0
@@ -118,6 +126,15 @@ class Advertising:
             self.scan_response = bytearray(self.scan_response)
         if not isinstance(self.periodic_data, bytearray):
             self.periodic_data = bytearray(self.periodic_data)
+
+    @property
+    def periodic_interval_limit(self) -> int:
+        """A running train has a fixed interval; a disabled one may grow."""
+        return (
+            self.periodic_interval
+            if self.periodic_enabled
+            else self.periodic_interval_max or self.periodic_interval
+        )
 
 
 @dataclass
@@ -274,6 +291,8 @@ class PeriodicSync:
     cte_type: int = 0
     # Set for a PAwR train (Core Vol 6, Part B, 4.4.5.1.2).
     pawr: PawrSync | None = None
+    # BIGInfo and the start of its AUX_SYNC_IND belong to this PA acquisition.
+    big_info: tuple[BigInfo, int] | None = None
 
     def excludes(self, cte_info: int | None) -> bool:
         """CTE_Type excludes a packet with this CTEInfo, or without one."""

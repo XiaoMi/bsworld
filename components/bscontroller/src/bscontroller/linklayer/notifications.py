@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Protocol
 from bscontroller.linklayer.api import (
     AddressSnapshot,
     AdvertisingSnapshot,
+    BigSnapshot,
     ConnectionSnapshot,
     PeriodicSyncSnapshot,
     address_snapshot,
@@ -22,6 +23,9 @@ from bscontroller.linklayer.api import (
     connection_snapshot,
     synchronization_snapshot,
 )
+from bscontroller.linklayer.bis import BigInfo
+from bscontroller.linklayer.iso import IsoListener
+from bscontroller.linklayer.isoal import IsoSdu
 from bscontroller.linklayer.state import AdvertisingReport, DataStatus
 from bscontroller.radio.base import Phy
 
@@ -33,7 +37,7 @@ if TYPE_CHECKING:
     from bscontroller.linklayer.pawr import SlotResponse
 
 
-class NotificationSink(Protocol):
+class NotificationSink(IsoListener, Protocol):
     @property
     def local_version(self) -> tuple[int, int, int]: ...
 
@@ -130,6 +134,11 @@ class NotificationSink(Protocol):
         subevent: int | None = None,
     ) -> None: ...
     def on_sync_lost(self, sync: PeriodicSyncSnapshot) -> None: ...
+    def on_big_created(self, group: BigSnapshot, status: int) -> None: ...
+    def on_big_terminated(self, handle: int, reason: int) -> None: ...
+    def on_big_synchronized(self, group: BigSnapshot, status: int) -> None: ...
+    def on_big_lost(self, handle: int, reason: int) -> None: ...
+    def on_big_info(self, sync_handle: int, info: BigInfo) -> None: ...
 
 
 class NotificationAdapter:
@@ -310,3 +319,24 @@ class NotificationAdapter:
 
     def on_sync_lost(self, sync: PeriodicSync) -> None:
         self.sink.on_sync_lost(synchronization_snapshot(sync))
+
+    def on_big_created(self, group: BigSnapshot, status: int) -> None:
+        self.sink.on_big_created(group, status)
+
+    def on_big_terminated(self, handle: int, reason: int) -> None:
+        self.sink.on_big_terminated(handle, reason)
+
+    def on_big_synchronized(self, group: BigSnapshot, status: int) -> None:
+        self.sink.on_big_synchronized(group, status)
+
+    def on_big_lost(self, handle: int, reason: int) -> None:
+        self.sink.on_big_lost(handle, reason)
+
+    def on_big_info(self, sync_handle: int, info: BigInfo) -> None:
+        self.sink.on_big_info(sync_handle, info)
+
+    def on_iso_received(self, handle: int, sdu: IsoSdu) -> None:
+        self.sink.on_iso_received(handle, sdu)
+
+    def on_iso_completed(self, handle: int, count: int) -> None:
+        self.sink.on_iso_completed(handle, count)

@@ -13,11 +13,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
+from bscontroller.linklayer.iso import IsoListener
 from bscontroller.linklayer.state import AdvertisingReport, DataStatus
 from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
     from bscontroller.address import Address
+    from bscontroller.linklayer.api import BigSnapshot
+    from bscontroller.linklayer.bis import BigInfo
     from bscontroller.linklayer.connection import Connection
     from bscontroller.linklayer.discovery import Advertising, PeriodicSync
     from bscontroller.linklayer.pawr import SlotResponse
@@ -138,6 +141,16 @@ class SynchronizationListener(Protocol):
     def on_sync_lost(self, sync: PeriodicSync) -> None: ...
 
 
+class BroadcastListener(IsoListener, Protocol):
+    """BIG lifetime and ISO data (Core Vol 6, Part B, 4.4.6)."""
+
+    def on_big_created(self, group: BigSnapshot, status: int) -> None: ...
+    def on_big_terminated(self, handle: int, reason: int) -> None: ...
+    def on_big_synchronized(self, group: BigSnapshot, status: int) -> None: ...
+    def on_big_lost(self, handle: int, reason: int) -> None: ...
+    def on_big_info(self, sync_handle: int, info: BigInfo) -> None: ...
+
+
 class Listener(
     ConnectionListener,
     ControlListener,
@@ -145,6 +158,7 @@ class Listener(
     AdvertisingListener,
     ScanningListener,
     SynchronizationListener,
+    BroadcastListener,
     Protocol,
 ):
     """Internal procedure callbacks, adapted before entering an upper layer."""

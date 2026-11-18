@@ -136,17 +136,26 @@ class RadioLink:
         return self.radio.now_us
 
     def new_access_address(self, *, exclude: Iterable[int] = ()) -> int:
+        used = self.used_access_addresses()
+        used.update(exclude)
+        return generate_access_address(self.random, used)
+
+    def used_access_addresses(self) -> set[int]:
         used = {
             connection.parameters.access_address
             for connection in self.connections.values()
         }
-        used.update(exclude)
         for item in self.advertisers.values():
             if item.periodic_enabled:
                 used.add(item.periodic_aa)
                 if item.pawr_state is not None:
                     used.add(item.pawr_state.rsp_aa)
-        return generate_access_address(self.random, used)
+        for group in self.roles.broadcast.groups.values():
+            if group.info is not None:
+                used.update(
+                    group.info.access_address(n) for n in range(group.info.num_bis + 1)
+                )
+        return used
 
     def connection_parameters(
         self,
@@ -212,18 +221,20 @@ class RadioLink:
         operations = self.roles.connections.prepare(target_us)
         operations.extend(self.roles.advertising.prepare())
         operations.extend(self.roles.synchronization.prepare())
+        operations.extend(self.roles.broadcast.prepare())
         return operations, self.roles.synchronization.contexts()
 
     async def advance_to_us(self, target_us: int) -> int:
         """Dispatch role-prepared events on one radio and one simulation timeline."""
+        iso = self.roles.iso
         while self.now_us < target_us:
-            now = self.now_us
+            iso.flush(self.now_us)
             self.monitoring.expire()
             self.roles.synchronization.expire()
             operations, contexts = self._pending_operations(target_us)
             if operations:
                 operation = self.resource.select(operations)
-                if operation.due_us <= now + 1:
+                if operation.due_us <= self.now_us + 1:
                     await self.resource.execute(operation)
                     continue
                 # Leave the due tick available for the next event's preparation.
@@ -232,6 +243,8 @@ class RadioLink:
                 end = target_us
             if self.monitoring.deadline_us is not None:
                 end = min(end, self.monitoring.deadline_us)
+            if (delivery := iso.next_delivery_us) is not None:
+                end = min(end, delivery)
             for context in contexts:
                 if context.info is not None:
                     end = min(end, context.deadline_us)
@@ -241,4 +254,6 @@ class RadioLink:
             else:
                 await self.radio.advance_to_us(end)
         self.monitoring.expire()
+        self.roles.broadcast.expire()
+        iso.flush(self.now_us)
         return self.now_us

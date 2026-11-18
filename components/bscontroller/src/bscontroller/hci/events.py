@@ -30,6 +30,7 @@ from bscontroller.hci.records import ConnectionRecord
 from bscontroller.linklayer import PDU_CONTROL_FEATURE_SET_SIZE
 from bscontroller.linklayer.api import (
     AdvertisingSnapshot,
+    BigSnapshot,
     ConnectionSnapshot,
     PeriodicSyncSnapshot,
 )
@@ -38,6 +39,8 @@ from bscontroller.radio.base import RADIO_TX_POWER_MAX_DBM, RADIO_TX_POWER_MIN_D
 
 if TYPE_CHECKING:
     from bscontroller.hci.controller import Controller
+    from bscontroller.linklayer.bis import BigInfo
+    from bscontroller.linklayer.isoal import IsoSdu
     from bscontroller.linklayer.service import LinkLayerService
 
 SUCCESS = hci.HCI_ErrorCode.SUCCESS
@@ -789,4 +792,104 @@ class LeControllerEvents:
     def on_sync_lost(self, sync: PeriodicSyncSnapshot):
         self._emit_hci_packet(
             hci.HCI_LE_Periodic_Advertising_Sync_Lost_Event(sync_handle=sync.handle)
+        )
+
+    @staticmethod
+    def _big_event_parameters(group: BigSnapshot, status: int):
+        """Fields shared by Create BIG Complete and BIG Sync Established."""
+        info = group.info
+        return dict(
+            status=status,
+            big_handle=group.handle,
+            transport_latency_big=info.transport_latency_us if info else 0,
+            nse=info.nse if info else 0,
+            bn=info.bn if info else 0,
+            pto=info.pto if info else 0,
+            irc=info.irc if info else 0,
+            max_pdu=info.max_pdu if info else 0,
+            iso_interval=info.iso_interval if info else 0,
+            connection_handle=group.stream_handles if status == SUCCESS else (),
+        )
+
+    def on_big_created(self, group: BigSnapshot, status: int):
+        """LE Create BIG Complete (Vol 4, Part E, 7.7.65.27)."""
+        info = group.info
+        self._emit_hci_packet(
+            hci.HCI_LE_Create_BIG_Complete_Event(
+                **self._big_event_parameters(group, status),
+                big_sync_delay=info.sync_delay_us if info else 0,
+                phy=int(info.phy) if info else 0,
+            )
+        )
+
+    def on_big_terminated(self, handle: int, reason: int):
+        """LE Terminate BIG Complete (Vol 4, Part E, 7.7.65.28)."""
+        self._emit_hci_packet(hci.HCI_LE_Terminate_BIG_Complete_Event(handle, reason))
+
+    def on_big_synchronized(self, group: BigSnapshot, status: int):
+        """LE BIG Sync Established (Vol 4, Part E, 7.7.65.29)."""
+        self._emit_hci_packet(
+            hci.HCI_LE_BIG_Sync_Established_Event(
+                **self._big_event_parameters(group, status)
+            )
+        )
+
+    def on_big_lost(self, handle: int, reason: int):
+        """LE BIG Sync Lost (Vol 4, Part E, 7.7.65.30)."""
+        self._emit_hci_packet(hci.HCI_LE_BIG_Sync_Lost_Event(handle, reason))
+
+    def on_big_info(self, sync_handle: int, info: BigInfo):
+        """LE BIGInfo Advertising Report (Vol 4, Part E, 7.7.65.34)."""
+        self._emit_hci_packet(
+            hci.HCI_LE_BIGInfo_Advertising_Report_Event(
+                sync_handle,
+                info.num_bis,
+                info.nse,
+                info.iso_interval,
+                info.bn,
+                info.pto,
+                info.irc,
+                info.max_pdu,
+                info.sdu_interval_us,
+                info.max_sdu,
+                int(info.phy),
+                1 + info.framing_mode if info.framed else 0,
+                int(info.encrypted),
+            )
+        )
+
+    def on_iso_received(self, handle: int, sdu: IsoSdu):
+        """Deliver one SDU as ordered HCI ISO fragments (Vol 4, Part E, 5.4.5)."""
+        size = self.controller.config.iso_packet_length
+        timestamped = size >= 9
+        overhead = 8 if timestamped else 4
+        packets = []
+        offset = 0
+        while True:
+            first = offset == 0
+            capacity = size - overhead if first else size
+            fragment = sdu.data[offset : offset + capacity]
+            offset += len(fragment)
+            last = offset == len(sdu.data)
+            packets.append(
+                hci.HCI_IsoDataPacket(
+                    connection_handle=handle,
+                    data_total_length=len(fragment) + (overhead if first else 0),
+                    iso_sdu_fragment=fragment,
+                    pb_flag=2 if first and last else 0 if first else 3 if last else 1,
+                    time_stamp=sdu.reference_us & 0xFFFFFFFF
+                    if first and timestamped
+                    else None,
+                    packet_sequence_number=sdu.sequence_number if first else None,
+                    iso_sdu_length=len(sdu.data) if first else None,
+                    packet_status_flag=int(sdu.status) if first else None,
+                )
+            )
+            if last:
+                break
+        self.controller.send_hci_packets(packets)
+
+    def on_iso_completed(self, handle: int, count: int):
+        self._emit_hci_packet(
+            hci.HCI_Number_Of_Completed_Packets_Event([handle], [count])
         )

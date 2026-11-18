@@ -883,7 +883,7 @@ def test_periodic_tx_yields_and_skips_counter(link):
         periodic_data=bytes(200),
     )
     link.advertisers[0] = item
-    run(link, periodic_transmit(link, item))
+    run(link, periodic_transmit(link, item, 0))
     assert not link.radio.sent
     assert item.periodic_next_us == 10_000 + 160 * LL_PERIODIC_INTERVAL_UNIT_US
     assert item.periodic_counter == 0

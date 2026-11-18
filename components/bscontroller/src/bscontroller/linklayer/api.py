@@ -19,6 +19,7 @@ from bscontroller.linklayer import (
     AdvertisingMode,
     AdvertisingPduType,
 )
+from bscontroller.linklayer.bis import BigInfo
 from bscontroller.linklayer.data_length import DataLengths
 from bscontroller.linklayer.parameters import Parameters
 from bscontroller.linklayer.pawr import PawrTiming
@@ -273,3 +274,48 @@ def synchronization_snapshot(sync: PeriodicSync) -> PeriodicSyncSnapshot:
         sync.transfer.service_data if sync.transfer else 0,
         sync.pawr.timing if sync.pawr else None,
     )
+
+
+@dataclass(frozen=True)
+class BigTestParameters:
+    iso_interval: int
+    nse: int
+    max_pdu: int
+    bn: int
+    irc: int
+    pto: int
+
+
+@dataclass(frozen=True)
+class BigConfig:
+    handle: int
+    advertising_handle: int
+    num_bis: int
+    sdu_interval_us: int
+    max_sdu: int
+    phy: int
+    packing: int
+    framing: int
+    encryption: int
+    broadcast_code: bytes
+    max_transport_latency_ms: int = 0
+    rtn: int = 0
+    test: BigTestParameters | None = None
+
+
+@dataclass(frozen=True)
+class BigSyncConfig:
+    handle: int
+    sync_handle: int
+    encryption: int
+    broadcast_code: bytes
+    mse: int
+    timeout: int
+    bis: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class BigSnapshot:
+    handle: int
+    info: BigInfo | None
+    stream_handles: tuple[int, ...]

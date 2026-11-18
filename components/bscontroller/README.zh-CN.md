@@ -140,6 +140,10 @@ Host 有两种接入方式：
 | `periodicAdvertiserListSize` | `8` | `1`–`255` | 7.8.73 |
 | `maxConnections` | `64` | `1`–`3839` | 5.3.1 |
 | `maxPeriodicSyncs` | `16` | `1`–`3839` | 5.3.1 |
+| `isoPacketCount` | `16` | `1`–`255` | 7.8.2 |
+| `isoPacketLength` | `251` | `5`–`16383` | 7.8.2 |
+| `maxBigs` | `4` | `1`–`240` | 7.8.103, 7.8.106 |
+| `maxBis` | `16` | `1`–`3839` | 5.3.1, 7.8.103, 7.8.106 |
 
 配置文件包含两部分：`defaults` 对所有 Controller 生效；`controllers` 按 Controller 名称分别设置：
 
@@ -198,8 +202,8 @@ other = RadioController("x", "F0:F1:F2:F3:F4:03", config=ControllerConfig(max_co
 | 5.1 | Periodic Advertising Sync Transfer | * |
 | 5.1 | Initiating Periodic Advertising Sync Transfer for Local Periodic Advertising | * |
 | 5.1 | Initiating Periodic Advertising Sync Transfer for Remote Periodic Advertising | * |
-| 5.2 | Isochronous Broadcaster |  |
-| 5.2 | Synchronized Receiver |  |
+| 5.2 | Isochronous Broadcaster | * |
+| 5.2 | Synchronized Receiver | * |
 | 5.2 | Connected Isochronous Stream (CIS) |  |
 | 5.3 | Periodic Advertising ADI Support | * |
 | 5.3 | LE Channel Classification |  |
@@ -250,6 +254,6 @@ python -m pytest tests/qualification -n auto -v -rs     # 几分钟，需要 BSI
 python -m build                                         # 在 dist/ 生成 sdist 和 wheel
 ```
 
-qualification 测试从蓝牙测试规范中选取了 774 个 HCI 和 Link Layer 用例，由独立实现的 Lower Tester 执行。通过这些用例不代表 BSController 已通过蓝牙认证。测试范围见 [tests/README.zh-CN.md](tests/README.zh-CN.md)。
+qualification 测试从蓝牙测试规范中选取了 821 个 HCI 和 Link Layer 用例，由独立实现的 Lower Tester 执行。通过这些用例不代表 BSController 已通过蓝牙认证。测试范围见 [tests/README.zh-CN.md](tests/README.zh-CN.md)。
 
 许可证和第三方声明见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。

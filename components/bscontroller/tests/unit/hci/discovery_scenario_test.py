@@ -847,8 +847,8 @@ def test_periodic_enable_without_radio_time_is_disallowed(host):
     7.8.61).
 
     Steps:
-        1. Configure a Coded-PHY set and a very short periodic interval, with
-           191 octets of data.
+        1. Configure an enabled Coded-PHY extended advertiser and a very short
+           periodic interval, with 191 octets of extended advertising data.
         2. Enable periodic advertising.
 
     Expected:
@@ -861,6 +861,7 @@ def test_periodic_enable_without_radio_time_is_disallowed(host):
     )
     host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Parameters_Command(0, 6, 6, 0))
     host.cmd(data(0, Operation.COMPLETE_DATA, bytes(191)))
+    host.cmd(hci.HCI_LE_Set_Extended_Advertising_Enable_Command(1, [0], [0], [0]))
     host.cmd(
         hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 0),
         ErrorCode.COMMAND_DISALLOWED_ERROR,

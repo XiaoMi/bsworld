@@ -11,6 +11,7 @@ This is an implementation boundary inside Core Vol 6, Part B's Link Layer.
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Iterator
 from dataclasses import replace
 from functools import partial
 from typing import TYPE_CHECKING
@@ -37,6 +38,7 @@ from bscontroller.linklayer import (
     PDU_HEADER_SIZE,
 )
 from bscontroller.linklayer.advertising import ExtendedPdu, SyncInfo
+from bscontroller.linklayer.broadcast import BroadcastManager
 from bscontroller.linklayer.channel_selection import channel_selection_2
 from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.discovery import (
@@ -50,6 +52,7 @@ from bscontroller.linklayer.discovery import (
 )
 from bscontroller.linklayer.extended import periodic_time_us, subevent_pdu
 from bscontroller.linklayer.features import LeFeatureMask
+from bscontroller.linklayer.iso import IsoDataPaths
 from bscontroller.linklayer.pawr import (
     RESPONSE_TX_POWER_DBM,
     PawrAdvertiser,
@@ -293,17 +296,19 @@ class ConnectionManager:
 
     def allocate_handle(self) -> int:
         """Allocate the LL identity; HCI only serializes the assigned handle."""
-        return next(
-            handle
-            for handle in range(1, LL_CONNECTION_HANDLE_MAX + 1)
-            if handle not in self.contexts
+        return next(self.link.roles.available_connection_handles())
+
+    def has_capacity(self) -> bool:
+        return (
+            len(self.contexts) < self.link.config.max_connections
+            and self.link.roles.free_connection_handle_count() > 0
         )
 
     def can_accept(self, peer: Address) -> bool:
         peer = self.link.privacy.identity(peer)
         if peer is None:
             return False
-        return len(self.contexts) < self.link.config.max_connections and not any(
+        return self.has_capacity() and not any(
             (
                 self.link.privacy.identity(connection.peer, remember=False)
                 if connection.peer.is_resolvable
@@ -323,6 +328,9 @@ class ConnectionManager:
     def accepted(self, result: ConnectionAccepted) -> Connection | None:
         """Commit a validated connection exchange before publishing its outcome."""
         link = self.link
+        # An asynchronous RF exchange may have yielded to another allocation.
+        if not self.has_capacity():
+            return None
         item = result.advertiser
         advertising_handle = None
         if result.pawr_sync is not None and (
@@ -416,7 +424,6 @@ class AdvertisingManager:
         self.link = link
         self.contexts: dict[int, Advertising] = {}
         # The Host channel classification new periodic trains start with.
-        self.host_channel_map = LL_DATA_CHANNEL_MAP_ALL
 
     def publish(self, handle: int, item: Advertising) -> None:
         self.contexts[handle] = item
@@ -441,7 +448,7 @@ class AdvertisingManager:
     def prepare(self) -> list[PendingOperation]:
         link = self.link
         operations = []
-        for item in list(self.contexts.values()):
+        for handle, item in tuple(self.contexts.items()):
             if not self._owns(item):
                 continue
             if item.enabled and (
@@ -485,7 +492,7 @@ class AdvertisingManager:
                         periodic_transmit_start_us(item),
                         RadioPriority.PERIODIC_TX,
                         item,
-                        partial(periodic_transmit, link, item),
+                        partial(periodic_transmit, link, item, handle),
                     )
                 )
         return operations
@@ -682,7 +689,6 @@ class AdvertisingManager:
         The Channel Map Update Indication goes out in at least six events before
         its Instant (Core Vol 6, Part B, 4.4.2.12.1; LL.TS 4.2.3.13).
         """
-        self.host_channel_map = channels
         for item in self.contexts.values():
             if item.periodic_enabled and (
                 item.periodic_channel_update is not None
@@ -771,7 +777,7 @@ class AdvertisingManager:
                 next_us = phase
             item.periodic_aa = link.new_access_address()
             item.periodic_crc = link.random.getrandbits(PDU_CRC_SIZE * PHY_OCTET_BITS)
-            item.periodic_channel_map = self.host_channel_map
+            item.periodic_channel_map = link.roles.host_channel_map
             item.periodic_channel_update = None
             if item.pawr is not None:
                 # RspAA differs from the train's own Access Address (2.1.2).
@@ -1419,15 +1425,39 @@ class SynchronizationManager:
 
 class LinkRoles:
     def __init__(self, link: RadioLink):
+        self.host_channel_map = LL_DATA_CHANNEL_MAP_ALL
         self.connections = ConnectionManager(link)
         self.advertising = AdvertisingManager(link)
         self.scanning = ScanningManager(link)
         self.synchronization = SynchronizationManager(link)
+        self.iso = IsoDataPaths(link.listener)
+        self.broadcast = BroadcastManager(link, self.iso)
+
+    def _used_connection_handles(self) -> set[int]:
+        return (
+            self.connections.contexts.keys()
+            | self.broadcast.connection_handles()
+            | self.iso.connection_handles()
+        )
+
+    def available_connection_handles(self) -> Iterator[int]:
+        """Return free LL handles, including reservations for pending BIGs."""
+        used = self._used_connection_handles()
+        return (
+            handle
+            for handle in range(1, LL_CONNECTION_HANDLE_MAX + 1)
+            if handle not in used
+        )
+
+    def free_connection_handle_count(self) -> int:
+        return LL_CONNECTION_HANDLE_MAX - len(self._used_connection_handles())
 
     def reset(self) -> None:
+        self.broadcast.reset()
+        self.iso.reset()
         self.connections.contexts.clear()
         self.advertising.clear()
-        self.advertising.host_channel_map = LL_DATA_CHANNEL_MAP_ALL
+        self.host_channel_map = LL_DATA_CHANNEL_MAP_ALL
         self.scanning.enable(None)
         self.scanning.cancel_initiating()
         self.scanning.cursor = 0
@@ -1472,4 +1502,5 @@ class LinkRoles:
                     for response in sync.pawr.scheduled
                     if response is not exclude
                 )
+        reservations.extend(self.broadcast.reservations(exclude))
         return reservations

@@ -83,6 +83,11 @@ class H4Server:
                 RuntimeError('HCI Host is not draining Controller output')
             )
 
+    def on_packets(self, packets: list[bytes]) -> None:
+        # The H4 byte stream preserves each frame header. Queue the fragments
+        # of one ISO SDU as one write, including when it exceeds 128 fragments.
+        self.on_packet(b''.join(packets))
+
     async def _write(self):
         while True:
             self.writer.write(await self.queue.get())

@@ -34,30 +34,33 @@ def generate_access_address(generator: Random, used: set[int]) -> int:
         # advertising Access Address, before applying waveform constraints.
         if value in used or (value ^ PDU_ADV_ACCESS_ADDRESS).bit_count() <= 1:
             continue
-        bits = f'{value:0{width}b}'
-        run = PDU_ACCESS_ADDRESS_CONSECUTIVE_BITS_MAX + 1
-        transitions = value ^ (value >> 1)
-        msb = value >> (width - PDU_ACCESS_ADDRESS_MSB_WINDOW_BITS)
-        # Enforce both uncoded transition/run limits and the extra Coded-PHY
-        # low-bit constraints, so a later PHY update can reuse the same address.
-        if (
-            '0' * run in bits
-            or '1' * run in bits
-            or len(set(value.to_bytes(PDU_ACCESS_ADDRESS_SIZE, 'little'))) == 1
-            or (transitions & ((1 << (width - 1)) - 1)).bit_count()
-            > PDU_ACCESS_ADDRESS_TRANSITIONS_MAX
-            or (
-                (msb ^ (msb >> 1))
-                & ((1 << (PDU_ACCESS_ADDRESS_MSB_WINDOW_BITS - 1)) - 1)
-            ).bit_count()
-            < PDU_ACCESS_ADDRESS_MSB_TRANSITIONS_MIN
-            or (value & ((1 << PDU_ACCESS_ADDRESS_CODED_LSB_BITS) - 1)).bit_count()
-            < PDU_ACCESS_ADDRESS_CODED_LSB_ONES_MIN
-            or (
-                transitions
-                & ((1 << (PDU_ACCESS_ADDRESS_CODED_TRANSITION_BITS - 1)) - 1)
-            ).bit_count()
-            > PDU_ACCESS_ADDRESS_CODED_TRANSITIONS_MAX
-        ):
-            continue
-        return value
+        if valid_access_address(value):
+            return value
+
+
+def valid_access_address(value: int) -> bool:
+    """Waveform constraints for uncoded and Coded PHYs, also used by BIS seeds."""
+    width = PDU_ACCESS_ADDRESS_SIZE * PHY_OCTET_BITS
+    if not 0 <= value < 1 << width or (value ^ PDU_ADV_ACCESS_ADDRESS).bit_count() <= 1:
+        return False
+    bits = f'{value:0{width}b}'
+    run = PDU_ACCESS_ADDRESS_CONSECUTIVE_BITS_MAX + 1
+    transitions = value ^ (value >> 1)
+    msb = value >> (width - PDU_ACCESS_ADDRESS_MSB_WINDOW_BITS)
+    return not (
+        '0' * run in bits
+        or '1' * run in bits
+        or len(set(value.to_bytes(PDU_ACCESS_ADDRESS_SIZE, 'little'))) == 1
+        or (transitions & ((1 << (width - 1)) - 1)).bit_count()
+        > PDU_ACCESS_ADDRESS_TRANSITIONS_MAX
+        or (
+            (msb ^ (msb >> 1)) & ((1 << (PDU_ACCESS_ADDRESS_MSB_WINDOW_BITS - 1)) - 1)
+        ).bit_count()
+        < PDU_ACCESS_ADDRESS_MSB_TRANSITIONS_MIN
+        or (value & ((1 << PDU_ACCESS_ADDRESS_CODED_LSB_BITS) - 1)).bit_count()
+        < PDU_ACCESS_ADDRESS_CODED_LSB_ONES_MIN
+        or (
+            transitions & ((1 << (PDU_ACCESS_ADDRESS_CODED_TRANSITION_BITS - 1)) - 1)
+        ).bit_count()
+        > PDU_ACCESS_ADDRESS_CODED_TRANSITIONS_MAX
+    )
