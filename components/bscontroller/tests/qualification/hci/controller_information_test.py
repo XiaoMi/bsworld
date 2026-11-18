@@ -58,6 +58,13 @@ EXPECTED_COMMANDS = frozenset(
         hci.HCI_LE_READ_CHANNEL_MAP_COMMAND,
         hci.HCI_LE_READ_FILTER_ACCEPT_LIST_SIZE_COMMAND,
         hci.HCI_LE_READ_LOCAL_SUPPORTED_FEATURES_COMMAND,
+        hci.HCI_LE_READ_ALL_LOCAL_SUPPORTED_FEATURES_COMMAND,
+        hci.HCI_LE_READ_ALL_REMOTE_FEATURES_COMMAND,
+        hci.HCI_LE_ADD_DEVICE_TO_MONITORED_ADVERTISERS_LIST_COMMAND,
+        hci.HCI_LE_REMOVE_DEVICE_FROM_MONITORED_ADVERTISERS_LIST_COMMAND,
+        hci.HCI_LE_CLEAR_MONITORED_ADVERTISERS_LIST_COMMAND,
+        hci.HCI_LE_READ_MONITORED_ADVERTISERS_LIST_SIZE_COMMAND,
+        hci.HCI_LE_ENABLE_MONITORING_ADVERTISERS_COMMAND,
         hci.HCI_LE_READ_MAXIMUM_ADVERTISING_DATA_LENGTH_COMMAND,
         hci.HCI_LE_READ_MAXIMUM_DATA_LENGTH_COMMAND,
         hci.HCI_LE_READ_NUMBER_OF_SUPPORTED_ADVERTISING_SETS_COMMAND,
@@ -146,6 +153,7 @@ EXPECTED_LE_FEATURES = int(
     | hci.LeFeatureMask.LE_DATA_PACKET_LENGTH_EXTENSION
     | hci.LeFeatureMask.PERIPHERAL_INITIATED_FEATURE_EXCHANGE
     | hci.LeFeatureMask.MINIMUM_NUMBER_OF_USED_CHANNELS_PROCEDURE
+    | hci.LeFeatureMask.LL_EXTENDED_FEATURE_SET
 ).to_bytes(8, 'little')
 
 
@@ -388,6 +396,42 @@ PROCEDURES |= procedure_cases(
             {},
         ),
     },
+)
+
+
+async def read_all_local_supported_features(tester):
+    """LE Read All Local Supported Features Command.
+
+    Initial Condition:
+        The IUT has no LL connection. The declared page 0 features are those of
+        EXPECTED_LE_FEATURES; Monitoring Advertisers is bit 64 on page 1.
+
+    Test Steps:
+        1. Send HCI LE Read All Local Supported Features.
+        2. Require successful Command Complete, Max_Page = 1 and the complete
+           248-octet LE_Features field matching the independent ICS declaration.
+
+    Expected Outcome:
+        Pass verdict: page 0 matches the existing declaration, page 1 contains
+        only Monitoring Advertisers, and pages 2 through 10 are zero.
+
+    Source Correction:
+        The source cites 7.8.129; this command is Core Vol 4, Part E, 7.8.128.
+
+    Reference:
+        HCI.TS.p39, Section 4.6, HCI/CIN/BV-15-C, PDF pages 56-57.
+    """
+    result = await tester.command(
+        hci.HCI_LE_Read_All_Local_Supported_Features_Command()
+    )
+    assert result.max_page == 1
+    assert result.le_features == EXPECTED_LE_FEATURES + b'\x01' + bytes(239)
+
+
+# Verify all local feature pages against the independent ICS declaration.
+PROCEDURES |= procedure_cases(
+    read_all_local_supported_features,
+    {'HCI/CIN/BV-15-C': ('LE Read All Local Supported Features Command', {})},
 )
 
 

@@ -45,6 +45,14 @@ class ControlListener(Protocol):
     def on_phy_updated(self, connection: Connection, status: int) -> None: ...
     def on_data_length_changed(self, connection: Connection) -> None: ...
     def on_remote_features(self, connection: Connection, status: int) -> None: ...
+    def on_remote_features_all(
+        self,
+        connection: Connection,
+        status: int,
+        maximum: int,
+        valid: int,
+        features: bytes,
+    ) -> None: ...
     def on_remote_version(self, connection: Connection, status: int) -> None: ...
     def on_remote_parameters(
         self,
@@ -89,6 +97,8 @@ class AdvertisingListener(Protocol):
 
 class ScanningListener(Protocol):
     """Scanning state reports (Core 6.3, Vol 6, Part B, 4.4.3)."""
+
+    def on_monitored_advertiser(self, address: Address, condition: int) -> None: ...
 
     def on_advertisement(
         self,

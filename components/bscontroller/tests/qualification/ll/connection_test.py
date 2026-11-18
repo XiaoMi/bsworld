@@ -4123,7 +4123,7 @@ async def _preferred_parameters(tester, *, central, anchors_only=False, anchors=
     await link.disconnect()
 
 
-async def _remote_features(tester, *, central, unsupported=False):
+async def _remote_features(tester, *, central, unsupported=False, all_features=False):
     """Verify the Host command, role-specific on-air request and exact completion
     features."""
     link = await establish(
@@ -4139,7 +4139,11 @@ async def _remote_features(tester, *, central, unsupported=False):
         ).le_features,
         'little',
     )
-    await tester.command(hci.HCI_LE_Read_Remote_Features_Command(link.handle))
+    await tester.command(
+        hci.HCI_LE_Read_All_Remote_Features_Command(link.handle, 1)
+        if all_features
+        else hci.HCI_LE_Read_Remote_Features_Command(link.handle)
+    )
     opcode = Opcode.LL_FEATURE_REQ if central else Opcode.LL_PERIPHERAL_FEATURE_REQ
     initial = link.last_received.pdu[PDU_HEADER_SIZE:]
     request = (
@@ -4165,13 +4169,17 @@ async def _remote_features(tester, *, central, unsupported=False):
         sent_sn = link.sn
         packet = await link.exchange()
     assert bool(packet.pdu[0] & PDU_DATA_NESN_MASK) != bool(sent_sn)
-    event = await tester.event(hci.HCI_LE_Read_Remote_Features_Complete_Event)
+    event = await tester.event(
+        hci.HCI_LE_Read_All_Remote_Features_Complete_Event
+        if all_features
+        else hci.HCI_LE_Read_Remote_Features_Complete_Event
+    )
     assert event.connection_handle == link.handle
     assert event.status == (
         ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR if unsupported else ErrorCode.SUCCESS
     )
     if not unsupported:
-        assert event.le_features == response[1:]
+        assert event.le_features == response[1:] + (bytes(240) if all_features else b'')
     await link.disconnect()
 
 
@@ -8941,41 +8949,39 @@ async def initiate_feature_exchange(tester):
     await _remote_features(tester, central=False, unsupported=False)
 
 
-async def initiate_feature_exchange_central_does_not_support(tester):
+async def initiate_feature_exchange_central_does_not_support(
+    tester, *, all_features=False
+):
     """Initiate Feature Exchange – Central does not support.
 
     Initial Condition:
-        An unencrypted connected Peripheral with supported own address type,
-        common interval/channel parameters, and selected timeout. Select public
-        addresses. The Lower Central must not initiate Feature Exchange after
-        establishment; retain the ACL handle and local feature declaration.
+        Connected, unencrypted Peripheral; public addresses, common connection
+        parameters. The Lower Central must not initiate Feature Exchange.
+
+    Test Case Configuration:
+        LL/CON/PER/BV-23-C: LE Read Remote Features (page 0).
+        LL/CON/PER/BV-165-C: LE Read All Remote Features, Pages_Requested = 1.
 
     Test Steps:
-        1. For BV-23-C in Table 4.3-39, send LE Read Remote Features Page 0
-           for the handle and require successful Command Status.
-        2. Use an autonomous LL_PERIPHERAL_FEATURE_REQ already sent by the IUT,
-           or receive the request after Step 1. Check its opcode, length and
-           peer-visible supported features, applying Send-to-Peer/RFU rules.
-        3. Acknowledge the request and send LL_UNKNOWN_RSP with UnknownType
-           identifying LL_PERIPHERAL_FEATURE_REQ; require the IUT to ACK it.
-        4. Require LE Read Remote Features Page 0 Complete with the same handle
-           and Unsupported Remote Feature status (0x1A).
+        1. Send the selected Host feature command for the established handle;
+           require successful Command Status.
+        2. Receive LL_PERIPHERAL_FEATURE_REQ and validate its page 0 features
+           against the independent local declaration and Send-to-Peer rules.
+        3. Send and acknowledge LL_UNKNOWN_RSP identifying that request opcode.
+        4. Require the selected feature-completion event, matching handle and
+           Unsupported Remote Feature (0x1A), then terminate the connection.
 
     Expected Outcome:
-        Pass verdict:
-            The selected HCI completion reports status 0x1A in response to the
-            Lower Tester's LL_UNKNOWN_RSP, without a Central feature request.
-
-    Coverage Note:
-        This workbook selects BV-23-C, not the Read All Remote Features variant
-        BV-165-C. Read local features for the request oracle, and disconnect
-        through HCI after the normative four-step procedure.
+        Pass verdict: the selected completion reports 0x1A without a Central
+        feature request.
 
     Reference:
         LL.TS.p28, Section 4.3.5.1, Table 4.3-39, Figure 4.3-65;
-        LL/CON/PER/BV-23-C; PDF 618-619, printed 4.3-145 through 4.3-146.
+        printed pages 4.3-145 through 4.3-146.
     """
-    await _remote_features(tester, central=False, unsupported=True)
+    await _remote_features(
+        tester, central=False, unsupported=True, all_features=all_features
+    )
 
 
 async def initiating_connection_parameter_request_accept(tester):
@@ -17589,6 +17595,10 @@ PROCEDURES |= procedure_cases(
             'Initiate Feature Exchange – Central does not support',
             {},
         ),
+        'LL/CON/PER/BV-165-C': (
+            'Initiate Feature Exchange – Central does not support',
+            {'all_features': True},
+        ),
     },
 )
 
@@ -19586,6 +19596,259 @@ PROCEDURES |= procedure_cases(
         'LL/CON/PER/BV-120-C': (
             'Sending Long Control PDUs after Feature Exchange',
             {'central': False, 'phy': Phy.LE_CODED},
+        ),
+    },
+)
+
+
+def _extended_feature_pdu(pdu, opcode, page):
+    """Independent ICS oracle: Monitoring is not sent to a peer; OTA MaxPage is 0."""
+    assert len(pdu) == 27
+    assert pdu[:3] == bytes([opcode, 0, page])
+    assert pdu[3:] == bytes(24)
+
+
+async def extended_feature_response(tester, *, central):
+    """LL Extended Feature Set Response.
+
+    Initial Condition:
+        Unencrypted ACL, public addresses and common connection parameters.
+        The Lower Tester declares MaxPage 10 and random 192-bit feature pages.
+
+    Test Case Configuration:
+        LL/CON/CEN/BV-164-C: Central IUT.
+        LL/CON/PER/BV-168-C: Peripheral IUT.
+
+    Test Steps:
+        Repeat for pages 1 through 10 in a reproducibly shuffled random order:
+        1. Send LL_FEATURE_EXT_REQ, MaxPage 10, the selected PageNumber and
+           random 24-octet FeaturePage; ensure page 10 is nonzero.
+        2. Require LL_FEATURE_EXT_RSP with the same PageNumber, constant MaxPage
+           and peer-visible FeaturePage matching the independent ICS declaration.
+
+    Expected Outcome:
+        Pass verdict: every page has the correct response opcode, length and
+        page number. MaxPage is 0 and all extended pages are zero because the
+        sole local page-1 feature, Monitoring Advertisers, has Send to Peer = N.
+
+    Reference:
+        LL.TS.p28, Section 4.3.7.50, Table 4.3-133, Figure 4.3-262,
+        printed page 4.3-545; Core Vol 6, Part B, 5.1.4.3.
+    """
+    link = await establish(tester, central=central)
+    rng = random.Random(164)
+    pages = list(range(1, 11))
+    rng.shuffle(pages)
+    for page in pages:
+        features = (rng.getrandbits(192) | 1).to_bytes(24, 'little')
+        response = await link.control(
+            Opcode.LL_FEATURE_EXT_RSP,
+            bytes([Opcode.LL_FEATURE_EXT_REQ, 10, page]) + features,
+        )
+        _extended_feature_pdu(response, Opcode.LL_FEATURE_EXT_RSP, page)
+    await link.disconnect(local=False)
+
+
+async def extended_feature_request(tester, *, central):
+    """LL Extended Feature Set Request.
+
+    Initial Condition:
+        Unencrypted ACL, public addresses and common connection parameters.
+        Lower Tester feature bit 63 is set. Pages 1, 3 and MaxPage contain
+        reproducible random nonzero bits. Each round uses a different LT address.
+
+    Test Case Configuration:
+        LL/CON/CEN/BV-165-C: Central IUT.
+        LL/CON/PER/BV-169-C: Peripheral IUT.
+
+    Test Steps:
+        Repeat for (MaxPageLT, MaxRequested) = (10,10), (10,5), (6,10), (6,3), (3,1):
+        1. Establish a new ACL using a distinct public LT address.
+        2-3. Send Read All Remote Features and require successful Command Status
+             followed by the role-specific legacy feature request.
+        4-5. Send a duplicate Host command while the first is pending; require
+             Command Disallowed (0x0C).
+        6. Respond with LL_FEATURE_RSP, feature bit 63 set.
+        7-8. Receive every extended page request through min(MaxPageLT,
+             MaxRequested), validate its local FeaturePage and constant MaxPage,
+             and respond with the same PageNumber and the LT's MaxPage/data.
+        9. Require successful Read All Remote Features Complete: correct handle,
+           Max_Remote_Page, highest fetched Max_Valid_Page, exact page 0 and
+           fetched pages, and zero-filled remaining pages.
+        10. Terminate the ACL from the Lower Tester.
+
+    Expected Outcome:
+        Pass verdict: all five rounds reject the duplicate command, obtain all
+        required pages, and report the exact remote features and page limits.
+
+    Source Correction:
+        Step 9's reference to data sent in Steps 6 and 9 means Steps 6 and 8.
+
+    Reference:
+        LL.TS.p28, Section 4.3.7.51, Tables 4.3-134/135, Figure 4.3-263,
+        printed pages 4.3-546 through 4.3-548; Core Vol 6, Part B, 5.1.4.3.
+    """
+    rng = random.Random(165)
+    for index, (maximum, requested) in enumerate(
+        ((10, 10), (10, 5), (6, 10), (6, 3), (3, 1))
+    ):
+        peer = hci.Address(f'12:34:56:78:90:{index:02X}', hci.AddressType.PUBLIC_DEVICE)
+        link = await establish(tester, central=central, peer_address=peer)
+        command = hci.HCI_LE_Read_All_Remote_Features_Command(link.handle, requested)
+        await tester.command(command)
+        opcode = Opcode.LL_FEATURE_REQ if central else Opcode.LL_PERIPHERAL_FEATURE_REQ
+        initial = link.last_received.pdu[PDU_HEADER_SIZE:]
+        request = (
+            initial
+            if link.last_received.pdu[0] & PDU_DATA_LLID_MASK == LlId.CONTROL
+            and initial[:1] == bytes([opcode])
+            else await link.control(opcode)
+        )
+        assert request[0] == opcode and len(request) == 9
+        assert int.from_bytes(request[1:], 'little') & (1 << 63)
+        await tester.command(command, ErrorCode.COMMAND_DISALLOWED_ERROR)
+        page0 = (1 << 63).to_bytes(8, 'little')
+        packet = await link.exchange(
+            bytes([Opcode.LL_FEATURE_RSP]) + page0, llid=LlId.CONTROL
+        )
+        needed = min(maximum, requested)
+        expected = bytearray(page0 + bytes(240))
+        received = set()
+        for _ in range(needed):
+            payload = packet.pdu[PDU_HEADER_SIZE:]
+            if (
+                packet.pdu[0] & PDU_DATA_LLID_MASK != LlId.CONTROL
+                or payload[0] != Opcode.LL_FEATURE_EXT_REQ
+            ):
+                payload = await link.control(Opcode.LL_FEATURE_EXT_REQ)
+            page = payload[2]
+            assert 1 <= page <= needed and page not in received
+            _extended_feature_pdu(payload, Opcode.LL_FEATURE_EXT_REQ, page)
+            received.add(page)
+            bits = (
+                (rng.getrandbits(192) | 1).to_bytes(24, 'little')
+                if page in (1, 3, maximum)
+                else bytes(24)
+            )
+            offset = 8 + (page - 1) * 24
+            expected[offset : offset + 24] = bits
+            packet = await link.exchange(
+                bytes([Opcode.LL_FEATURE_EXT_RSP, maximum, page]) + bits,
+                llid=LlId.CONTROL,
+            )
+        assert received == set(range(1, needed + 1))
+        # Grant the last Peripheral transmission so the completion can reach HCI.
+        await link.exchange()
+        event = await tester.event(hci.HCI_LE_Read_All_Remote_Features_Complete_Event)
+        assert event.status == 0 and event.connection_handle == link.handle
+        assert (event.max_remote_page, event.max_valid_page) == (maximum, needed)
+        assert event.le_features == bytes(expected)
+        await link.disconnect(local=False)
+
+
+async def extended_feature_peer_unsupported(tester, *, central, peer_initiates=False):
+    """LL Extended Feature Set Not Supported by the Peer.
+
+    Initial Condition:
+        Unencrypted ACL, public addresses and common connection parameters.
+        The Lower Tester clears feature bit 63; select page-0 features 0x0101.
+
+    Test Case Configuration:
+        LL/CON/CEN/BV-166-C and LL/CON/PER/BV-170-C: Central/Peripheral IUT;
+            the IUT initiates the legacy feature request after the Host command.
+        LL/CON/PER/BV-166-C: Peripheral IUT; the Lower Tester initiates first.
+        LL/CON/PER/BV-167-C: Peripheral IUT; the Lower Tester does not initiate.
+
+    Test Steps:
+        1. Establish the ACL. For PER/BV-166-C, send LL_FEATURE_REQ first and
+           validate the IUT's legacy response including its feature bit 63.
+        2. Send Read All Remote Features, Pages_Requested 1; require Command
+           Status success. For other cases receive the role-specific legacy
+           request and respond with LL_FEATURE_RSP, bit 63 clear.
+        3. Require successful Read All Remote Features Complete for the handle:
+           Max_Remote_Page 0, Max_Valid_Page 0, matching page 0, other pages zero.
+
+    Expected Outcome:
+        Pass verdict: the cached or freshly received legacy features complete
+        the Host request without an extended feature-page exchange.
+
+    Source Correction:
+        PER/BV-166-C reverses recipients in Steps 1 and 2: the LT sends its
+        request to the IUT, and the IUT responds to the LT.
+
+    Reference:
+        LL.TS.p28, Section 4.3.7.52, Table 4.3-136, Figure 4.3-264,
+        printed pages 4.3-549 through 4.3-550; PER/BV-166-C and PER/BV-167-C,
+        printed pages 4.3-265 through 4.3-267; Core Vol 6, Part B, 5.1.4.
+    """
+    link = await establish(tester, central=central)
+    page0 = (0x0101).to_bytes(8, 'little')
+    if peer_initiates:
+        response = await link.control(
+            Opcode.LL_FEATURE_RSP, bytes([Opcode.LL_FEATURE_REQ]) + page0
+        )
+        assert len(response) == 9
+        assert int.from_bytes(response[1:], 'little') & (1 << 63)
+    await tester.command(hci.HCI_LE_Read_All_Remote_Features_Command(link.handle, 1))
+    if not peer_initiates:
+        opcode = Opcode.LL_FEATURE_REQ if central else Opcode.LL_PERIPHERAL_FEATURE_REQ
+        await link.control(opcode)
+        await link.exchange(bytes([Opcode.LL_FEATURE_RSP]) + page0, llid=LlId.CONTROL)
+        await link.exchange()
+    event = await tester.event(hci.HCI_LE_Read_All_Remote_Features_Complete_Event)
+    assert event.status == 0 and event.connection_handle == link.handle
+    assert event.max_remote_page == event.max_valid_page == 0
+    assert event.le_features == page0 + bytes(240)
+    await link.disconnect(local=False)
+
+
+# Verify both roles for extended page responses/requests, and legacy-only peers.
+PROCEDURES |= procedure_cases(
+    extended_feature_response,
+    {
+        'LL/CON/CEN/BV-164-C': (
+            'LL Extended Feature Set Response',
+            {'central': True},
+        ),
+        'LL/CON/PER/BV-168-C': (
+            'LL Extended Feature Set Response',
+            {'central': False},
+        ),
+    },
+)
+
+PROCEDURES |= procedure_cases(
+    extended_feature_request,
+    {
+        'LL/CON/CEN/BV-165-C': (
+            'LL Extended Feature Set Request',
+            {'central': True},
+        ),
+        'LL/CON/PER/BV-169-C': (
+            'LL Extended Feature Set Request',
+            {'central': False},
+        ),
+    },
+)
+
+PROCEDURES |= procedure_cases(
+    extended_feature_peer_unsupported,
+    {
+        'LL/CON/CEN/BV-166-C': (
+            'LL Extended Feature Set Not Supported by the Peer',
+            {'central': True, 'peer_initiates': False},
+        ),
+        'LL/CON/PER/BV-170-C': (
+            'LL Extended Feature Set Not Supported by the Peer',
+            {'central': False, 'peer_initiates': False},
+        ),
+        'LL/CON/PER/BV-166-C': (
+            'LL Extended Feature Set Not Supported by the Peer',
+            {'central': False, 'peer_initiates': True},
+        ),
+        'LL/CON/PER/BV-167-C': (
+            'LL Extended Feature Set Not Supported by the Peer',
+            {'central': False, 'peer_initiates': False},
         ),
     },
 )

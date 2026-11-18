@@ -888,6 +888,51 @@ def phy_then_enc_req(dut, *, extended=False):
     dut.ut_rx(LTK_REQUEST)
 
 
+@pytest.mark.parametrize('wrong_page', [False, True])
+def test_delayed_feature_unknown_rsp_survives_ignored_page(peripheral, wrong_page):
+    """An ignored feature page cannot turn a delayed UNKNOWN_RSP into a MIC failure.
+
+    Purpose: Retain the outstanding feature exchange during Encryption Start
+    (Core Vol 6, Part B, 5.1.3.1 and 5.1.4.3).
+
+    Steps:
+        1. Start Read All Remote Features and receive the IUT's page-1 request.
+        2. Optionally send a wrong-page response, then send ENC_REQ.
+        3. Acknowledge ENC_RSP with UNKNOWN_RSP for the feature-page request.
+        4. Supply no key, receive the key-missing rejection and acknowledge it.
+
+    Expected:
+        The Host feature request completes as Unsupported Remote Feature (0x1A).
+        The connection stays open, Encryption Start retains its own deadline,
+        and rejecting the missing key resumes the paused data path.
+    """
+    peripheral.host_start('prepare_features', pages=1)
+    peripheral.event_prepare()
+    peripheral.lt_rx(Opcode.LL_PERIPHERAL_FEATURE_REQ)
+    peripheral.lt_tx(pdu(Opcode.LL_FEATURE_RSP, (1 << 63).to_bytes(8, 'little')))
+    peripheral.lt_rx(Opcode.LL_FEATURE_EXT_REQ)
+    if wrong_page:
+        peripheral.lt_tx(pdu(Opcode.LL_FEATURE_EXT_RSP, 2, 2, bytes(24)))
+        peripheral.ut_rx_q_is_empty()
+    peripheral.lt_tx(enc_req())
+    peripheral.ut_rx(LTK_REQUEST)
+    peripheral.lt_rx(Opcode.LL_ENC_RSP)
+    deadline = peripheral.encryption.deadline_us
+    peripheral.lt_tx(unknown_rsp(Opcode.LL_FEATURE_EXT_REQ))
+    peripheral.ut_rx(
+        hci.HCI_LE_Read_All_Remote_Features_Complete_Event,
+        status=ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR,
+    )
+    assert not peripheral.connection.closed
+    assert peripheral.encryption.deadline_us == deadline
+    peripheral.connection.enqueue_acl(False, b'queued')
+    peripheral.host('supply_key', None)
+    peripheral.lt_rx(Opcode.LL_REJECT_IND)
+    peripheral.tx_ack()
+    assert not peripheral.encryption.busy
+    assert peripheral.lt_rx_data().payload == b'queued'
+
+
 @pytest.mark.parametrize('extended', [False, True], ids=['reject', 'reject-ext'])
 @pytest.mark.parametrize('when', ['before-enc-rsp', 'after-enc-rsp', 'after-unknown'])
 def test_delayed_unknown_rsp_survives_key_rejection(peripheral, extended, when):

@@ -15,7 +15,7 @@ import pytest
 from bscontroller import hci
 from bscontroller.config import ControllerConfig
 from bscontroller.hci.capabilities import HCI_RSSI_NOT_AVAILABLE
-from bscontroller.linklayer import LlId
+from bscontroller.linklayer import LL_RESPONSE_TIMEOUT_US, ControlOpcode, LlId
 from bscontroller.linklayer.instant import InstantUpdate
 from bscontroller.radio.base import Phy
 from tests.unit.hci.harness import IUT_ADDRESS, PEERS, UNKNOWN_HANDLE, ErrorCode
@@ -1109,3 +1109,224 @@ def test_create_connection_cancel_reports_unknown_connection(host):
         hci.HCI_LE_Create_Connection_Cancel_Command(),
         ErrorCode.COMMAND_DISALLOWED_ERROR,
     )
+
+
+# ---------------------------------------------------------------------------
+# Extended feature pages (Vol 4, Part E, 7.8.129)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize('role', [hci.Role.CENTRAL, hci.Role.PERIPHERAL])
+def test_all_remote_features_extended_pages(host, role):
+    """Fetch pages 1..3, reject a second Host command, then reuse the complete cache.
+
+    Purpose: Read multiple remote feature pages in either role through the H4 boundary.
+
+    Steps:
+        Start the Host command, reject a duplicate, answer page 0 and pages 1..3,
+        then issue the command again against the populated cache.
+
+    Expected:
+        Both completions contain exactly the received pages and zero padding;
+        the pending duplicate fails with 0x0C.
+    """
+    connection = host.connection(role)
+    command = hci.HCI_LE_Read_All_Remote_Features_Command(connection.handle, 3)
+    host.cmd_status(command)
+    host.cmd_status(command, ErrorCode.COMMAND_DISALLOWED_ERROR)
+    control = connection.llcp
+    host.in_loop(
+        control.control,
+        bytes([ControlOpcode.LL_FEATURE_RSP]) + (1 << 63).to_bytes(8, 'little'),
+    )
+    for page in range(1, 4):
+        host.in_loop(
+            control.control,
+            bytes([ControlOpcode.LL_FEATURE_EXT_RSP, 3, page]) + bytes([page]) * 24,
+        )
+    event = host.ut_rx(
+        hci.HCI_LE_Read_All_Remote_Features_Complete_Event,
+        status=0,
+        max_remote_page=3,
+        max_valid_page=3,
+    )
+    assert event.le_features == (
+        (1 << 63).to_bytes(8, 'little')
+        + bytes([1]) * 24
+        + bytes([2]) * 24
+        + bytes([3]) * 24
+        + bytes(168)
+    )
+    host.cmd_status(command)
+    cached = host.ut_rx(hci.HCI_LE_Read_All_Remote_Features_Complete_Event, status=0)
+    assert bytes(cached) == bytes(event)
+    host.ut_rx_q_is_empty()
+
+
+def test_all_remote_features_unsupported_peer(host):
+    """A legacy-only peer completes with page 0 and zero padding.
+
+    Purpose: Use cached legacy features without requesting unsupported extended pages.
+
+    Steps:
+        Cache a legacy-only peer feature request, then request all remote pages.
+
+    Expected:
+        A successful completion has Max_Remote_Page/Max_Valid_Page zero and
+        zero-filled extended pages.
+    """
+    connection = host.connection()
+    host.in_loop(
+        connection.llcp.control,
+        bytes([ControlOpcode.LL_PERIPHERAL_FEATURE_REQ]) + bytes(8),
+    )
+    host.cmd_status(hci.HCI_LE_Read_All_Remote_Features_Command(connection.handle, 10))
+    host.ut_rx(
+        hci.HCI_LE_Read_All_Remote_Features_Complete_Event,
+        status=0,
+        max_remote_page=0,
+        max_valid_page=0,
+        le_features=bytes(248),
+    )
+
+
+@pytest.mark.parametrize('reason', ['unknown', 'timeout', 'disconnect'])
+def test_all_remote_features_failure_completion(host, reason):
+    """Unknown response, timeout and disconnect finish the Host request.
+
+    Purpose: Finish a pending Host command on peer rejection, timeout or disconnection.
+
+    Steps:
+        Start Read All Remote Features, then inject the selected failure.
+
+    Expected:
+        The all-features completion reports the exact reason and stops its timer.
+    """
+    connection = host.connection()
+    host.cmd_status(hci.HCI_LE_Read_All_Remote_Features_Command(connection.handle, 1))
+    if reason == 'unknown':
+        host.in_loop(
+            connection.llcp.control,
+            bytes([ControlOpcode.LL_UNKNOWN_RSP, ControlOpcode.LL_FEATURE_REQ]),
+        )
+        status = ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
+    elif reason == 'timeout':
+        host.radio.now_us += LL_RESPONSE_TIMEOUT_US
+        host.in_loop(connection.llcp.check_timeout)
+        status = ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR
+    else:
+        status = ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR
+        host.in_loop(connection.complete, status)
+    host.ut_rx(hci.HCI_LE_Read_All_Remote_Features_Complete_Event, status=status)
+    assert not connection.controls.feature_request
+
+
+def test_all_remote_features_rejects_invalid_pages_and_cross_connection_overlap(host):
+    """Validate page limits and Controller-wide command exclusion.
+
+    Purpose: Validate the requested page range and Controller-wide command exclusion.
+
+    Steps:
+        Request page 11 and an unknown handle; start one valid request and issue
+        another for a different connected device.
+
+    Expected:
+        Invalid parameters, unknown handle and overlap produce 0x12, 0x02
+        and 0x0C respectively.
+    """
+    first, second = host.connection(), host.connection()
+    host.cmd_status(
+        hci.HCI_LE_Read_All_Remote_Features_Command(first.handle, 11),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    host.cmd_status(
+        hci.HCI_LE_Read_All_Remote_Features_Command(UNKNOWN_HANDLE, 1), UNKNOWN
+    )
+    host.cmd_status(hci.HCI_LE_Read_All_Remote_Features_Command(first.handle, 1))
+    host.cmd_status(
+        hci.HCI_LE_Read_All_Remote_Features_Command(second.handle, 1),
+        ErrorCode.COMMAND_DISALLOWED_ERROR,
+    )
+
+
+@pytest.mark.parametrize('requested,maximum', [(0, 0), (0, 3), (10, 0), (10, 2)])
+def test_all_remote_features_remote_page_limit(host, requested, maximum):
+    """Discover the remote page limit, including a peer with no extended bits.
+
+    Purpose: Distinguish an unknown MaxPage from a known MaxPage of zero.
+
+    Steps:
+        Start the selected Host request, complete page 0, and supply page 1
+        with the remote maximum. Supply page 2 if requested and supported.
+
+    Expected:
+        Completion uses the remote maximum and only the contiguous fetched
+        prefix; a page-0 request may fetch page 1 to discover MaxPage.
+    """
+    connection = host.connection()
+    host.cmd_status(
+        hci.HCI_LE_Read_All_Remote_Features_Command(connection.handle, requested)
+    )
+    host.in_loop(
+        connection.llcp.control,
+        bytes([ControlOpcode.LL_FEATURE_RSP]) + (1 << 63).to_bytes(8, 'little'),
+    )
+    host.in_loop(
+        connection.llcp.control,
+        bytes([ControlOpcode.LL_FEATURE_EXT_RSP, maximum, 1]) + bytes(24),
+    )
+    if requested and maximum == 2:
+        host.in_loop(
+            connection.llcp.control,
+            bytes([ControlOpcode.LL_FEATURE_EXT_RSP, 2, 2]) + b'\x01' + bytes(23),
+        )
+    expected_valid = 0 if maximum == 0 else (2 if requested else 1)
+    host.ut_rx(
+        hci.HCI_LE_Read_All_Remote_Features_Complete_Event,
+        status=0,
+        max_remote_page=maximum,
+        max_valid_page=expected_valid,
+    )
+
+
+@pytest.mark.parametrize(
+    'reply,status',
+    [
+        (bytes([ControlOpcode.LL_UNKNOWN_RSP, ControlOpcode.LL_FEATURE_EXT_REQ]), 0x1A),
+        (
+            bytes(
+                [
+                    ControlOpcode.LL_REJECT_EXT_IND,
+                    ControlOpcode.LL_FEATURE_EXT_REQ,
+                    0x1E,
+                ]
+            ),
+            0x1E,
+        ),
+    ],
+)
+def test_all_remote_features_extended_page_rejected(host, reply, status):
+    """Only a refusal of the current extended request completes the Host command.
+
+    Purpose: Match rejection opcodes to the active feature exchange.
+
+    Steps:
+        Finish page 0, send an obsolete UNKNOWN_RSP for the legacy request,
+        then refuse the pending extended request.
+
+    Expected:
+        The obsolete response is ignored; the current refusal produces one
+        completion with the exact error and ends supervision.
+    """
+    connection = host.connection()
+    host.cmd_status(hci.HCI_LE_Read_All_Remote_Features_Command(connection.handle, 1))
+    host.in_loop(
+        connection.llcp.control,
+        bytes([ControlOpcode.LL_FEATURE_RSP]) + (1 << 63).to_bytes(8, 'little'),
+    )
+    host.in_loop(
+        connection.llcp.control,
+        bytes([ControlOpcode.LL_UNKNOWN_RSP, ControlOpcode.LL_FEATURE_REQ]),
+    )
+    host.ut_rx_q_is_empty()
+    host.in_loop(connection.llcp.control, reply)
+    host.ut_rx(hci.HCI_LE_Read_All_Remote_Features_Complete_Event, status=status)
+    assert not connection.controls.feature_request

@@ -331,6 +331,10 @@ async def scan_packet(link: RadioLink, channel: int, packet: Received) -> None:
     identity = link.privacy.identity(address)
     if identity is None:
         return
+    if link.scan is not None:
+        # Monitoring is independent of the scanner's Filter Accept List
+        # (Core Vol 6, Part B, 4.4.3.8).
+        link.monitoring.received(identity, packet.rssi)
     if (
         link.scan
         and link.scan.filter_policy & ScanningFilterPolicy.FILTER_ACCEPT_LIST

@@ -653,6 +653,24 @@ class ExtendedProcedures:
             AdvertisingPduType.ADV_DECISION_IND,
         ):
             return
+        primary_addresses_valid = decision or (
+            not primary.mode and packet.phy == Phy.LE_1M
+        )
+        primary_identity = None
+        if (
+            not initiating
+            and link.scan is not None
+            and link.monitoring.enabled
+            and primary.aux_ptr is not None
+            and primary_addresses_valid
+            and primary.address is not None
+        ):
+            address = Address(primary.address, AddressType(primary.random_address))
+            primary_identity = link.privacy.identity(address)
+            if primary_identity is not None:
+                # A valid addressed primary PDU is an observation even if its
+                # auxiliary PDU is missed (Vol 6, Part B, 4.4.3.8).
+                link.monitoring.received(primary_identity, packet.rssi)
         ext, received, channel = primary, packet, None
         if primary.aux_ptr:
             channel = primary.aux_ptr.channel
@@ -667,9 +685,6 @@ class ExtendedProcedures:
             ):
                 return
             # Table 2.5 C.1/C.2: repeated auxiliary addresses are RFU.
-            primary_addresses_valid = decision or (
-                not primary.mode and packet.phy == Phy.LE_1M
-            )
             if primary_addresses_valid and primary.address is not None:
                 ext = replace(
                     ext,
@@ -698,9 +713,11 @@ class ExtendedProcedures:
             if ext.address is not None
             else Address(bytes(PDU_ADV_ADDRESS_SIZE), AddressType.ANONYMOUS)
         )
-        identity = link.privacy.identity(address)
+        identity = primary_identity or link.privacy.identity(address)
         if identity is None:
             return
+        if not initiating and link.scan is not None and ext.address is not None:
+            link.monitoring.received(identity, received.rssi)
         target = (
             Address(ext.target, AddressType(ext.random_target)) if ext.target else None
         )

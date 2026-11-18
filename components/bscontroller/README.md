@@ -207,7 +207,8 @@ These are the Link Layer features of the Bluetooth Core specification, listed by
 | 5.4 | Periodic Advertising with Responses | * |
 | 6.0 | Channel Sounding |  |
 | 6.0 | Decision-Based Advertising Filtering | * |
-| 6.0 | Monitoring Advertisers |  |
+| 6.0 | LL Extended Feature Set | * |
+| 6.0 | Monitoring Advertisers | * |
 | 6.0 | Frame Space Update |  |
 | 6.1 | Randomized RPA Updates | * |
 | 6.2 | Shorter Connection Intervals |  |
@@ -249,6 +250,6 @@ python -m pytest tests/qualification -n auto -v -rs     # a few minutes, needs B
 python -m build                                         # sdist and wheel in dist/
 ```
 
-The qualification suite runs 754 selected HCI and Link Layer test cases from the Bluetooth test specifications against independent lower testers. Passing them does not make BSController Bluetooth-qualified. See [tests/README.md](tests/README.md) for the test scope.
+The qualification suite runs 774 selected HCI and Link Layer test cases from the Bluetooth test specifications against independent lower testers. Passing them does not make BSController Bluetooth-qualified. See [tests/README.md](tests/README.md) for the test scope.
 
 Licensing and third-party notices are in [LICENSE](LICENSE) and [NOTICE](NOTICE).

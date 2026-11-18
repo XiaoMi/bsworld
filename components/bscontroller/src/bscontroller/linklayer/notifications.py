@@ -52,6 +52,14 @@ class NotificationSink(Protocol):
     def on_remote_features(
         self, connection: ConnectionSnapshot, status: int
     ) -> None: ...
+    def on_remote_features_all(
+        self,
+        connection: ConnectionSnapshot,
+        status: int,
+        maximum: int,
+        valid: int,
+        features: bytes,
+    ) -> None: ...
     def on_remote_version(
         self, connection: ConnectionSnapshot, status: int
     ) -> None: ...
@@ -75,6 +83,9 @@ class NotificationSink(Protocol):
     def on_advertising_ended(self, item: AdvertisingSnapshot, status: int) -> None: ...
     def on_scan_request(
         self, item: AdvertisingSnapshot, peer: AddressSnapshot
+    ) -> None: ...
+    def on_monitored_advertiser(
+        self, address: AddressSnapshot, condition: int
     ) -> None: ...
     def on_subevent_data_request(
         self, item: AdvertisingSnapshot, start: int, count: int
@@ -162,6 +173,18 @@ class NotificationAdapter:
     def on_remote_features(self, connection: Connection, status: int) -> None:
         self.sink.on_remote_features(connection_snapshot(connection), status)
 
+    def on_remote_features_all(
+        self,
+        connection: Connection,
+        status: int,
+        maximum: int,
+        valid: int,
+        features: bytes,
+    ) -> None:
+        self.sink.on_remote_features_all(
+            connection_snapshot(connection), status, maximum, valid, features
+        )
+
     def on_remote_version(self, connection: Connection, status: int) -> None:
         self.sink.on_remote_version(connection_snapshot(connection), status)
 
@@ -201,6 +224,9 @@ class NotificationAdapter:
 
     def on_advertising_ended(self, item: Advertising, status: int) -> None:
         self.sink.on_advertising_ended(self._advertiser(item), status)
+
+    def on_monitored_advertiser(self, address: Address, condition: int) -> None:
+        self.sink.on_monitored_advertiser(AddressSnapshot(address), condition)
 
     def on_scan_request(self, item: Advertising, peer: Address) -> None:
         self.sink.on_scan_request(self._advertiser(item), AddressSnapshot(peer))

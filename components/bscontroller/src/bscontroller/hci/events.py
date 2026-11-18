@@ -132,6 +132,20 @@ class LeControllerEvents:
             )
         )
 
+    def on_remote_features_all(
+        self,
+        connection: ConnectionSnapshot,
+        status: int,
+        maximum: int,
+        valid: int,
+        features: bytes,
+    ) -> None:
+        self._emit_hci_packet(
+            hci.HCI_LE_Read_All_Remote_Features_Complete_Event(
+                status, connection.handle, maximum, valid, features
+            )
+        )
+
     @property
     def local_version(self) -> tuple[int, int, int]:
         return (
@@ -544,6 +558,14 @@ class LeControllerEvents:
                     ),
                 )
             )
+
+    def on_monitored_advertiser(self, address, condition):
+        """LE Monitored Advertisers Report (Vol 4, Part E, 7.7.65.47)."""
+        self._emit_hci_packet(
+            hci.HCI_LE_Monitored_Advertisers_Report_Event(
+                address.address_type, address, condition
+            )
+        )
 
     def on_scan_request(self, item: AdvertisingSnapshot, peer):
         handle = item.handle

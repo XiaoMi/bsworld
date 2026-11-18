@@ -6,6 +6,21 @@
 
 from bscontroller.serialization import CompatibleIntFlag, SpecableEnum
 
+FEATURE_SET_SIZE = 248
+FEATURE_PAGE_SIZE = 24
+FEATURE_MAX_PAGE = 10
+
+
+def feature_page(features: int, page: int) -> bytes:
+    """Encode page 0 (64 bits) or an extended page (192 bits), Vol 6, Part B, 4.6."""
+    size = 8 if page == 0 else FEATURE_PAGE_SIZE
+    offset = 0 if page == 0 else 64 + (page - 1) * FEATURE_PAGE_SIZE * 8
+    return ((features >> offset) & ((1 << (size * 8)) - 1)).to_bytes(size, 'little')
+
+
+def feature_max_page(features: int) -> int:
+    return max(0, (features.bit_length() - 64 + 191) // 192)
+
 
 class LeFeature(SpecableEnum):
     LE_ENCRYPTION = 0
@@ -171,4 +186,7 @@ FEATURES_NOT_SENT_TO_PEER = int(
     LeFeatureMask.REMOTE_PUBLIC_KEY_VALIDATION
     | LeFeatureMask.DECISION_BASED_ADVERTISING_FILTERING
     | LeFeatureMask.CHANNEL_SOUNDING_TONE_QUALITY_INDICATION
+    | LeFeatureMask.MONITORING_ADVERTISERS
+    | LeFeatureMask.UTP_HCI_MODE
+    | LeFeatureMask.LE_FLUSHABLE_ACL_DATA
 )

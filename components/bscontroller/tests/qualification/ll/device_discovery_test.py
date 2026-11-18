@@ -13450,6 +13450,321 @@ PROCEDURES |= procedure_cases(
 )
 
 
+async def _monitor_scan(tester, *, extended, active, policy, enabled):
+    if not enabled:
+        command = (
+            hci.HCI_LE_Set_Extended_Scan_Enable_Command(0, 0, 0, 0)
+            if extended
+            else hci.HCI_LE_Set_Scan_Enable_Command(0, 0)
+        )
+        await tester.command(command)
+        return
+    await tester.command(
+        scan_parameters(
+            extended=True,
+            scan_types=[int(active)],
+            scan_intervals=[16],
+            scan_windows=[16],
+            scanning_filter_policy=policy,
+        )
+        if extended
+        else scan_parameters(
+            le_scan_type=int(active),
+            le_scan_interval=16,
+            le_scan_window=16,
+            scanning_filter_policy=policy,
+        )
+    )
+    await tester.command(
+        hci.HCI_LE_Set_Extended_Scan_Enable_Command(1, 0, 0, 0)
+        if extended
+        else hci.HCI_LE_Set_Scan_Enable_Command(1, 0)
+    )
+
+
+async def _monitor_advertisements(tester, count, power, *, extended, active, policy):
+    """Send 100-ms events and check advertising and monitoring reports."""
+    monitor = hci.HCI_LE_Monitored_Advertisers_Report_Event
+    report_type = ExtendedReport if extended else LegacyReport
+    found = []
+    reports = 0
+    for sequence in range(count):
+        start = tester.radio.now_us + 100
+        data = sequence.to_bytes(2, 'little')
+        adi = ADVERTISING_SID << PDU_ADV_ADI_DID_BITS | sequence & PDU_ADV_ADI_DID_MASK
+        for channel in (37, 38, 39):
+            if extended:
+                primary_start = tester.radio.now_us + 100
+                await tester.transmit(
+                    channel,
+                    ext_pdu(adi=adi, aux=aux_pointer(0, 1500)),
+                    start_us=primary_start,
+                    power_dbm=power,
+                )
+                end = await tester.transmit(
+                    0,
+                    ext_pdu(
+                        address=LOWER_PERIPHERAL_PUBLIC_ADDRESS, adi=adi, data=data
+                    ),
+                    start_us=primary_start + 1500,
+                    power_dbm=power,
+                )
+            else:
+                end = await tester.transmit(
+                    channel,
+                    adv_pdu(address=LOWER_PERIPHERAL_PUBLIC_ADDRESS, data=data),
+                    power_dbm=power,
+                )
+            if active and not extended:
+                request = await tester.receive(channel, duration_us=500)
+                if request is not None:
+                    assert not policy
+                    assert (
+                        request.pdu[0] & PDU_ADV_TYPE_MASK
+                        == AdvertisingPduType.SCAN_REQ
+                    )
+                    await tester.transmit(
+                        channel,
+                        adv_pdu(
+                            AdvertisingPduType.SCAN_RSP,
+                            address=LOWER_PERIPHERAL_PUBLIC_ADDRESS,
+                            data=data,
+                        ),
+                        start_us=request.end_us + LL_IFS_US,
+                        power_dbm=power,
+                    )
+            await tester.wait(max(0, end + 1000 - tester.radio.now_us))
+        await tester.wait(max(0, start + 100_000 - tester.radio.now_us))
+        while (event := tester.take(lambda e: isinstance(e, report_type))) is not None:
+            assert not policy, 'Filter Accept List rejected advertiser was reported'
+            for report in event.reports:
+                assert report.address == LOWER_PERIPHERAL_PUBLIC_ADDRESS
+                assert report.address_type == 0
+                assert report.data == data
+                if extended:
+                    assert report.advertising_sid == ADVERTISING_SID
+                if power == -40:
+                    assert report.rssi < -65
+                elif power == -5:
+                    assert -65 < report.rssi < -35
+                else:
+                    assert report.rssi >= -35
+                reports += 1
+        while (event := tester.take(lambda e: isinstance(e, monitor))) is not None:
+            assert event.subevent_code == 0x34
+            assert event.address_type == 0
+            assert event.address == LOWER_PERIPHERAL_PUBLIC_ADDRESS
+            found.append(event.condition)
+    if not policy:
+        assert reports, 'no received advertising reports in this RSSI phase'
+    return found
+
+
+async def monitoring_advertisers(tester, *, extended, active):
+    """Monitoring Advertisers.
+
+    Initial Condition:
+        The IUT is in standby, with an empty Filter Accept List. Select LE 1M,
+        scan interval/window 0x0010, duplicate filtering disabled, public LT
+        address, 100-ms advertising interval, thresholds -65/-35 dBm and 10 s
+        timeout. Powers -40/-5/+20 dBm with the fixture's 45-dB path loss select
+        below-low, intermediate and above-high RSSI, verified in received reports.
+
+    Test Case Configuration:
+        LL/DDI/SCN/BV-111-C: Legacy Advertising, passive scanning.
+        LL/DDI/SCN/BV-112-C: Legacy Advertising, active scanning.
+        LL/DDI/SCN/BV-113-C: Extended Advertising, passive scanning.
+        LL/DDI/SCN/BV-114-C: Extended Advertising, active scanning.
+
+    Test Steps:
+        1-7. Configure and enable the selected scan, add the LT, remove it, then
+             add it with the selected thresholds and 10-second timeout.
+        8-11. Start intermediate-RSSI advertising, check normal reports, and
+              enable monitoring with successful Command Complete.
+        12-14. After 20 intervals send below-low RSSI for 5 seconds, then
+               intermediate RSSI for 5 seconds. Require no monitoring event.
+        15-17. Send intermediate RSSI for ten more intervals, then below-low
+               RSSI. Require one condition-0 report at the 10-second timeout.
+        18-21. Continue low RSSI for 20 intervals, intermediate for 20 intervals,
+               then high RSSI. Require condition 1 on the first received high PDU.
+        22-27. Send intermediate RSSI for ten intervals and high RSSI again;
+               require no duplicate high report. Disable monitoring and send
+               low RSSI for 10 seconds without further monitoring events.
+        28-31. Clear the list, disable scanning, and repeat with scanning filter
+               policy 1 and an empty Filter Accept List. Monitoring still works;
+               normal advertising reports and scan requests are suppressed.
+
+    Expected Outcome:
+        Pass verdict: successful commands, exactly one low and subsequent high
+        report per policy, correct address and condition, and silent disabled
+        monitoring. Normal reports use the selected legacy/extended event type.
+
+    Source Correction:
+        Steps 17 and 21 say Subevent_Code 0x3E. Core Vol 4, Part E, 7.7.65.47
+        defines subevent 0x34 inside the outer LE Meta event 0x3E.
+
+    Reference:
+        LL.TS.p28, Section 4.2.4.28, Table 4.2-96, Figures 4.2-147/148,
+        printed pages 4.2-358 through 4.2-363; Core Vol 6, Part B, 4.4.3.8.
+    """
+    await tester.command(hci.HCI_LE_Clear_Filter_Accept_List_Command())
+    for policy in (0, 1):
+        await _monitor_scan(
+            tester, extended=extended, active=active, policy=policy, enabled=True
+        )
+        add = hci.HCI_LE_Add_Device_To_Monitored_Advertisers_List_Command(
+            0, LOWER_PERIPHERAL_PUBLIC_ADDRESS, -65, -35, 10
+        )
+        await tester.command(add)
+        await tester.command(
+            hci.HCI_LE_Remove_Device_From_Monitored_Advertisers_List_Command(
+                0, LOWER_PERIPHERAL_PUBLIC_ADDRESS
+            )
+        )
+        await tester.command(add)
+
+        async def burst(count, power):
+            return await _monitor_advertisements(
+                tester, count, power, extended=extended, active=active, policy=policy
+            )
+
+        assert not await burst(1, -5)
+        await tester.command(hci.HCI_LE_Enable_Monitoring_Advertisers_Command(1))
+        assert not await burst(20, -5)
+        assert not await burst(50, -40)
+        assert not await burst(50, -5)
+        assert not await burst(10, -5)
+        # The scanner can miss an entire advertising event while following AuxPtr.
+        # Sample the timeout across the last three 100-ms reception opportunities;
+        # exact deadline/threshold boundaries are covered by the air unit tests.
+        assert not await burst(96, -40)
+        assert await burst(5, -40) == [0]
+        assert not await burst(20, -40)
+        assert not await burst(20, -5)
+        assert await burst(1, 20) == [1]
+        assert not await burst(10, -5)
+        assert not await burst(1, 20)
+        await tester.command(hci.HCI_LE_Enable_Monitoring_Advertisers_Command(0))
+        assert not await burst(100, -40)
+        await tester.command(hci.HCI_LE_Clear_Monitored_Advertisers_List_Command())
+        await _monitor_scan(
+            tester, extended=extended, active=active, policy=policy, enabled=False
+        )
+
+
+async def monitoring_advertisers_clear_list(tester, *, extended, active):
+    """Monitoring Advertisers, Clear List.
+
+    Initial Condition:
+        Standby IUT, public LT address, LE 1M, 100-ms advertising interval,
+        scan interval/window 0x0010, accept-all policy, no duplicate filtering.
+        Select thresholds -65/-35 dBm and timeout 10 seconds.
+
+    Test Case Configuration:
+        LL/DDI/SCN/BV-123-C: Legacy Advertising, passive scanning.
+        LL/DDI/SCN/BV-124-C: Legacy Advertising, active scanning.
+        LL/DDI/SCN/BV-125-C: Extended Advertising, passive scanning.
+        LL/DDI/SCN/BV-126-C: Extended Advertising, active scanning.
+
+    Test Steps:
+        1-5. Enable the selected scan. Add the LT twice using identical valid
+             parameters and require successful Command Complete for both adds.
+        6-10. Start intermediate-RSSI advertising and enable monitoring. Switch
+              below low and require condition 0 after the 10-second timeout.
+        11-13. Send intermediate RSSI, clear the list while monitoring remains
+               enabled, and require successful Command Complete.
+        14-16. Send above-high RSSI, then intermediate RSSI for 20 advertising
+               intervals; require no further monitoring events.
+
+    Expected Outcome:
+        Pass verdict: duplicate add succeeds, low supervision reports correctly,
+        and clearing prevents the pending high report while scanning continues.
+
+    Source Correction:
+        Step 10's Subevent_Code 0x3E is the outer event; the defined subevent is
+        0x34 (Core Vol 4, Part E, 7.7.65.47).
+
+    Reference:
+        LL.TS.p28, Section 4.2.4.30, Table 4.2-98, Figure 4.2-150,
+        printed pages 4.2-367 through 4.2-370; Core Vol 6, Part B, 4.4.3.8.
+    """
+    await _monitor_scan(
+        tester, extended=extended, active=active, policy=0, enabled=True
+    )
+    add = hci.HCI_LE_Add_Device_To_Monitored_Advertisers_List_Command(
+        0, LOWER_PERIPHERAL_PUBLIC_ADDRESS, -65, -35, 10
+    )
+    await tester.command(add)
+    await tester.command(add)
+
+    async def burst(count, power):
+        return await _monitor_advertisements(
+            tester, count, power, extended=extended, active=active, policy=0
+        )
+
+    assert not await burst(1, -5)
+    await tester.command(hci.HCI_LE_Enable_Monitoring_Advertisers_Command(1))
+    assert not await burst(96, -40)
+    assert await burst(5, -40) == [0]
+    assert not await burst(1, -5)
+    await tester.command(hci.HCI_LE_Clear_Monitored_Advertisers_List_Command())
+    assert not await burst(1, 20)
+    assert not await burst(20, -5)
+    await _monitor_scan(
+        tester, extended=extended, active=active, policy=0, enabled=False
+    )
+
+
+# Verify RSSI supervision for legacy/extended and passive/active scanners,
+# including Filter Accept List independence and clear-list behavior.
+PROCEDURES |= procedure_cases(
+    monitoring_advertisers,
+    {
+        'LL/DDI/SCN/BV-111-C': (
+            'Monitoring Advertisers, Legacy Advertising, Passive Scanning',
+            {'extended': False, 'active': False},
+        ),
+        'LL/DDI/SCN/BV-112-C': (
+            'Monitoring Advertisers, Legacy Advertising, Active Scanning',
+            {'extended': False, 'active': True},
+        ),
+        'LL/DDI/SCN/BV-113-C': (
+            'Monitoring Advertisers, Extended Advertising, Passive Scanning',
+            {'extended': True, 'active': False},
+        ),
+        'LL/DDI/SCN/BV-114-C': (
+            'Monitoring Advertisers, Extended Advertising, Active Scanning',
+            {'extended': True, 'active': True},
+        ),
+    },
+)
+
+PROCEDURES |= procedure_cases(
+    monitoring_advertisers_clear_list,
+    {
+        'LL/DDI/SCN/BV-123-C': (
+            'Monitoring Advertisers, Clear List, Legacy Advertising, Passive Scanning',
+            {'extended': False, 'active': False},
+        ),
+        'LL/DDI/SCN/BV-124-C': (
+            'Monitoring Advertisers, Clear List, Legacy Advertising, Active Scanning',
+            {'extended': False, 'active': True},
+        ),
+        'LL/DDI/SCN/BV-125-C': (
+            (
+                'Monitoring Advertisers, Clear List, Extended Advertising, '
+                'Passive Scanning'
+            ),
+            {'extended': True, 'active': False},
+        ),
+        'LL/DDI/SCN/BV-126-C': (
+            'Monitoring Advertisers, Clear List, Extended Advertising, Active Scanning',
+            {'extended': True, 'active': True},
+        ),
+    },
+)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     'identifier,description,procedure,parameters,marks',

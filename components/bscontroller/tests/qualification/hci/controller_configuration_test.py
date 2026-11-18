@@ -1545,6 +1545,97 @@ PROCEDURES |= procedure_cases(
 )
 
 
+async def monitored_advertisers_capacity(tester):
+    """LE Monitoring Advertisers RSSI command, Memory Capacity Exceeded.
+
+    Initial Condition:
+        The IUT is in standby with an empty Monitored Advertisers List.
+
+    Test Steps:
+        1. Add devices with distinct public addresses, low threshold -70 dBm,
+           high threshold -40 dBm and timeout 10 seconds; require success.
+        2. Repeat until Command Complete reports Memory Capacity Exceeded (0x07).
+        3. Send LE Read Monitored Advertisers List Size with no parameters.
+        4. Require success and Number equal to the number of successful additions.
+
+    Expected Outcome:
+        Pass verdict: a full list rejects another address with 0x07, and the
+        reported Number is the independently declared capacity of eight devices.
+
+    Reference:
+        HCI.TS.p39, Section 4.10, HCI/CCO/BV-24-C, PDF pages 212-213;
+        Core Vol 4, Part E, 7.8.146 and 7.8.150.
+    """
+    for index in range(9):
+        address = hci.Address(
+            index.to_bytes(6, 'little'), hci.AddressType.PUBLIC_DEVICE
+        )
+        await tester.command(
+            hci.HCI_LE_Add_Device_To_Monitored_Advertisers_List_Command(
+                0, address, -70, -40, 10
+            ),
+            ErrorCode.SUCCESS
+            if index < 8
+            else ErrorCode.MEMORY_CAPACITY_EXCEEDED_ERROR,
+        )
+    result = await tester.command(
+        hci.HCI_LE_Read_Monitored_Advertisers_List_Size_Command()
+    )
+    assert result.number == 8
+
+
+async def invalid_monitored_advertisers_parameters(tester):
+    """Invalid LE Monitoring Advertisers Parameters.
+
+    Initial Condition:
+        The IUT is in standby; the Monitored Advertisers List is empty. All
+        unchanged add parameters are public address, -70/-40 dBm and 10 seconds.
+
+    Test Steps:
+        1. Perform all eight Table 4.62 rounds: add with address type 2; low
+           threshold 21; high threshold 21; high below low; timeout zero;
+           remove with address type 2; remove a valid absent address; enable 2.
+        2. In every round require Command Complete for the transmitted opcode
+           with Invalid HCI Command Parameters (0x12).
+
+    Expected Outcome:
+        Pass verdict: all eight invalid commands return 0x12.
+
+    Reference:
+        HCI.TS.p39, Section 4.10, HCI/CCO/BI-71-C, Table 4.62,
+        PDF pages 213-214; Core Vol 4, Part E, 7.8.146, 7.8.147 and 7.8.149.
+    """
+    add = hci.HCI_LE_Add_Device_To_Monitored_Advertisers_List_Command
+    remove = hci.HCI_LE_Remove_Device_From_Monitored_Advertisers_List_Command
+    for command in (
+        add(2, PEER_ADDRESS, -70, -40, 10),
+        add(0, PEER_ADDRESS, 21, -40, 10),
+        add(0, PEER_ADDRESS, -70, 21, 10),
+        add(0, PEER_ADDRESS, -40, -70, 10),
+        add(0, PEER_ADDRESS, -70, -40, 0),
+        remove(2, PEER_ADDRESS),
+        remove(0, PEER_ADDRESS),
+        hci.HCI_LE_Enable_Monitoring_Advertisers_Command(2),
+    ):
+        await tester.command(command, ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR)
+
+
+# Verify monitoring-list capacity and every invalid-parameter round in Table 4.62.
+PROCEDURES |= procedure_cases(
+    monitored_advertisers_capacity,
+    {
+        'HCI/CCO/BV-24-C': (
+            'LE Monitoring Advertisers RSSI command, Memory Capacity Exceeded',
+            {},
+        )
+    },
+)
+PROCEDURES |= procedure_cases(
+    invalid_monitored_advertisers_parameters,
+    {'HCI/CCO/BI-71-C': ('Invalid LE Monitoring Advertisers Parameters', {})},
+)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     'identifier,description,procedure,parameters,marks',
