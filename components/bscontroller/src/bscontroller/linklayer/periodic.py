@@ -39,12 +39,13 @@ if TYPE_CHECKING:
     from bscontroller.linklayer.link import RadioLink
 
 
-async def periodic_transmit(link: RadioLink, item: Advertising) -> None:
+async def periodic_transmit(link: RadioLink, item: Advertising, handle: int) -> None:
     # A single radio cannot replay a train anchor that another event occupied.
     """Transmit one AUX_SYNC_IND train on its CSA #2 channel (Core Vol 6, Part B,
     4.4.2.12, 4.5.8.3).
     """
     link.roles.advertising.apply_periodic_channel_map(item)
+    item.big_info = link.roles.broadcast.advertising_info(handle, item.periodic_next_us)
     channel = channel_selection_2(
         item.periodic_counter, item.periodic_aa, item.periodic_channel_map
     )
@@ -118,6 +119,7 @@ async def periodic_receive(link: RadioLink, sync: PeriodicSync) -> None:
             # 4.4.5.1.1). received() has already refreshed the timing and applied
             # the ACAD, which AUX_CHAIN_IND does not carry.
             if not synchronization.reportable(sync, ext.adi):
+                link.roles.broadcast.observed_info(sync, ext.acad, packet.start_us)
                 synchronization.completed(sync)
                 return
 
@@ -138,6 +140,7 @@ async def periodic_receive(link: RadioLink, sync: PeriodicSync) -> None:
                 crc_init=info.crc_init,
             )
             report_fragment(data, status, packet)
+            link.roles.broadcast.observed_info(sync, ext.acad, packet.start_us)
             synchronization.reported(sync, ext.adi, status)
     link.roles.synchronization.completed(sync)
 

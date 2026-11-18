@@ -3964,7 +3964,7 @@ class HCI_LE_Read_ISO_TX_Sync_ReturnParameters(
 ):
     packet_sequence_number: int = field(metadata=metadata(2))
     tx_time_stamp: int = field(metadata=metadata(4))
-    time_offset: int = field(metadata=metadata(4))
+    time_offset: int = field(metadata=metadata(3))
 
 
 @HCI_SyncCommand.sync_command(HCI_LE_Read_ISO_TX_Sync_ReturnParameters)
@@ -4092,6 +4092,30 @@ class HCI_LE_Create_BIG_Command(HCI_AsyncCommand):
 # -----------------------------------------------------------------------------
 @HCI_Command.command
 @dataclasses.dataclass
+class HCI_LE_Create_BIG_Test_Command(HCI_AsyncCommand):
+    '''See Bluetooth spec @ 7.8.104 LE Create BIG Test command.'''
+
+    big_handle: int = field(metadata=metadata(1))
+    advertising_handle: int = field(metadata=metadata(1))
+    num_bis: int = field(metadata=metadata(1))
+    sdu_interval: int = field(metadata=metadata(3))
+    iso_interval: int = field(metadata=metadata(2))
+    nse: int = field(metadata=metadata(1))
+    max_sdu: int = field(metadata=metadata(2))
+    max_pdu: int = field(metadata=metadata(2))
+    phy: int = field(metadata=metadata(1))
+    packing: int = field(metadata=metadata(1))
+    framing: int = field(metadata=metadata(1))
+    bn: int = field(metadata=metadata(1))
+    irc: int = field(metadata=metadata(1))
+    pto: int = field(metadata=metadata(1))
+    encryption: int = field(metadata=metadata(1))
+    broadcast_code: bytes = field(metadata=metadata(16))
+
+
+# -----------------------------------------------------------------------------
+@HCI_Command.command
+@dataclasses.dataclass
 class HCI_LE_Terminate_BIG_Command(HCI_AsyncCommand):
     '''
     See Bluetooth spec @ 7.8.105 LE Terminate BIG command
@@ -4170,6 +4194,61 @@ class HCI_LE_Remove_ISO_Data_Path_Command(
 
     connection_handle: int = field(metadata=metadata(2))
     data_path_direction: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@HCI_SyncCommand.sync_command(HCI_StatusAndConnectionHandleReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_ISO_Transmit_Test_Command(
+    HCI_SyncCommand[HCI_StatusAndConnectionHandleReturnParameters]
+):
+    '''See Bluetooth spec @ 7.8.111 LE ISO Transmit Test command.'''
+
+    connection_handle: int = field(metadata=metadata(2))
+    payload_type: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@HCI_SyncCommand.sync_command(HCI_StatusAndConnectionHandleReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_ISO_Receive_Test_Command(
+    HCI_SyncCommand[HCI_StatusAndConnectionHandleReturnParameters]
+):
+    '''See Bluetooth spec @ 7.8.112 LE ISO Receive Test command.'''
+
+    connection_handle: int = field(metadata=metadata(2))
+    payload_type: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@dataclasses.dataclass
+class HCI_LE_ISO_Read_Test_Counters_ReturnParameters(
+    HCI_StatusAndConnectionHandleReturnParameters
+):
+    received_sdu_count: int = field(metadata=metadata(4))
+    missed_sdu_count: int = field(metadata=metadata(4))
+    failed_sdu_count: int = field(metadata=metadata(4))
+
+
+@HCI_SyncCommand.sync_command(HCI_LE_ISO_Read_Test_Counters_ReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_ISO_Read_Test_Counters_Command(
+    HCI_SyncCommand[HCI_LE_ISO_Read_Test_Counters_ReturnParameters]
+):
+    '''See Bluetooth spec @ 7.8.113 LE ISO Read Test Counters command.'''
+
+    connection_handle: int = field(metadata=metadata(2))
+
+
+# -----------------------------------------------------------------------------
+@HCI_SyncCommand.sync_command(HCI_LE_ISO_Read_Test_Counters_ReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_ISO_Test_End_Command(
+    HCI_SyncCommand[HCI_LE_ISO_Read_Test_Counters_ReturnParameters]
+):
+    '''See Bluetooth spec @ 7.8.114 LE ISO Test End command.'''
+
+    connection_handle: int = field(metadata=metadata(2))
 
 
 # -----------------------------------------------------------------------------
@@ -6185,6 +6264,9 @@ class HCI_IsoDataPacket(HCI_Packet):
         if len(packet) < pos + 4:
             raise InvalidPacketError(f'ISO data packet too short: {len(packet)} bytes')
         pdu_info, data_total_length = struct.unpack_from('<HH', packet, pos)
+        data_total_length &= 0x3FFF
+        if len(packet) != 5 + data_total_length:
+            raise InvalidPacketError('ISO data packet length mismatch')
         connection_handle = pdu_info & 0xFFF
         pb_flag = (pdu_info >> 12) & 0b11
         ts_flag = (pdu_info >> 14) & 0b01
@@ -6206,7 +6288,7 @@ class HCI_IsoDataPacket(HCI_Packet):
                 raise InvalidPacketError('ISO data packet truncated (SDU info)')
             packet_sequence_number, sdu_info = struct.unpack_from('<HH', packet, pos)
             iso_sdu_length = sdu_info & 0xFFF
-            packet_status_flag = (sdu_info >> 15) & 1
+            packet_status_flag = (sdu_info >> 14) & 0b11
             pos += 4
 
         iso_sdu_fragment = packet[pos:]
@@ -6240,7 +6322,7 @@ class HCI_IsoDataPacket(HCI_Packet):
             fmt += 'HH'
             args += [
                 self.packet_sequence_number,
-                self.iso_sdu_length | self.packet_status_flag << 15,
+                self.iso_sdu_length | self.packet_status_flag << 14,
             ]
         return struct.pack(fmt, *args) + self.iso_sdu_fragment
 

@@ -22,6 +22,7 @@ from bscontroller.linklayer import (
 from bscontroller.linklayer.channel_selection import (
     channel_selection_1,
     channel_selection_2,
+    isochronous_channels,
 )
 
 
@@ -82,3 +83,35 @@ def test_csa1_core_spec_channel_map_update_example(event, channel_map, expected)
     # Core Vol 6, Part B, 5.1.2: hopIncrement 10, first event uses (0 + 10) mod 37.
     unmapped = (event + 1) * 10 % 37
     assert channel_selection_1(unmapped, channel_map) == expected
+
+
+@pytest.mark.parametrize(
+    'counter,channel_map,expected',
+    [
+        (0, LL_DATA_CHANNEL_MAP_ALL, (25, 1, 16, 36)),
+        (1, LL_DATA_CHANNEL_MAP_ALL, (20, 36, 12, 34)),
+        (2, LL_DATA_CHANNEL_MAP_ALL, (6, 18, 32, 21)),
+        (3, LL_DATA_CHANNEL_MAP_ALL, (21, 4, 22, 8)),
+        (6, 0x1E00E00600, (23, 35, 21, 36)),
+        (7, 0x1E00E00600, (9, 22, 36, 33)),
+        (8, 0x1E00E00600, (34, 9, 33, 10)),
+        (11, 0x106, (1, 2, 1, 8)),
+        (12, 0x106, (2, 1, 8, 2)),
+        (13, 0x106, (2, 8, 2, 1)),
+    ],
+)
+def test_iso_subevents_against_core_sample_data(counter, channel_map, expected):
+    """ISO subevents reproduce the Core Vol 6, Part C, Section 3 samples.
+
+    Purpose: Protect the state carried between subevents, which differs from
+    applying ordinary CSA #2 independently to each subevent.
+
+    Steps:
+        1. Select four subevent channels using channelIdentifier 0x305F.
+        2. Compare the complete sequence with the published full/reduced-map
+           sample, including the event's initial channel.
+
+    Expected:
+        - Every channel matches the independent sample sequence.
+    """
+    assert isochronous_channels(counter, 0x305F, channel_map, 4) == expected

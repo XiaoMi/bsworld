@@ -19,7 +19,10 @@ python -m samples.advertise_scan
 | `python -m samples.gatt` | A Central discovers a Battery Service, reads its value and receives a notification. |
 | `python -m samples.central_multilink` | One Central keeps three Peripheral connections and verifies GATT reads and notifications on every link. Use `--peripherals N` to change the device count. |
 | `python -m samples.periodic` | An observer keeps two independent periodic advertising synchronizations and receives data from both. |
+| `python -m samples.broadcast_iso` | One broadcaster sends two BIS streams to two synchronized receivers; every SDU is checked byte for byte. |
 | `python -m samples.coexistence` | Five devices keep five ACL links, two periodic advertisers and four periodic synchronizations while scanning, advertising and exchanging GATT data. |
+
+`broadcast_iso` accepts `--encrypted`, `--framed`, `--phy 1|2|3` (1M, 2M, Coded) and `--receivers N`.
 
 Successful runs print a JSON result and exit; a missing report, wrong payload or lost connection fails the sample. Use `--log-dir /tmp/bscontroller-samples` to retain `result.json`, `phy.log`, a separate `.snoop` capture for each device, and the PHY's transmit/receive records under `air/`. `devices.json` maps PHY device numbers to names, addresses and HCI captures. Each run creates its own subdirectory. `--bsim-dir` overrides `BSIM_OUT_PATH`; `--timeout` bounds the complete sample in simulation seconds.
 

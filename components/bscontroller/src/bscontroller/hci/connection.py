@@ -338,6 +338,8 @@ class LeConnectionCommands(LeControllerContext):
             (
                 SUCCESS
                 if connection
+                else DISALLOWED
+                if self.ll.has_iso_handle(command.connection_handle)
                 else hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
             ),
             command.connection_handle,

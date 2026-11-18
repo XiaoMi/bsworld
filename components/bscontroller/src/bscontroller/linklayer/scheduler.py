@@ -13,9 +13,10 @@ class RadioPriority(IntEnum):
 
     EXPIRY = -1
     CONNECTION = 0
-    PERIODIC_TX = 1
-    PERIODIC_RX = 2
-    ADVERTISING = 3
+    ISOCHRONOUS = 1
+    PERIODIC_TX = 2
+    PERIODIC_RX = 3
+    ADVERTISING = 4
 
 
 @dataclass(frozen=True)

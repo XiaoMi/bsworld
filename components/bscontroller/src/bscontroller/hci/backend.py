@@ -50,6 +50,8 @@ class RadioBackend:
         | hci.LeFeatureMask.MINIMUM_NUMBER_OF_USED_CHANNELS_PROCEDURE
         | hci.LeFeatureMask.LL_EXTENDED_FEATURE_SET
         | hci.LeFeatureMask.MONITORING_ADVERTISERS
+        | hci.LeFeatureMask.ISOCHRONOUS_BROADCASTER
+        | hci.LeFeatureMask.SYNCHRONIZED_RECEIVER
     )
     lmp_features = (
         hci.LmpFeatureMask.LE_SUPPORTED_CONTROLLER
@@ -70,6 +72,19 @@ class RadioBackend:
             hci.HCI_READ_BD_ADDR_COMMAND,
             hci.HCI_LE_SET_EVENT_MASK_COMMAND,
             hci.HCI_LE_READ_BUFFER_SIZE_COMMAND,
+            hci.HCI_LE_READ_BUFFER_SIZE_V2_COMMAND,
+            hci.HCI_LE_READ_ISO_TX_SYNC_COMMAND,
+            hci.HCI_LE_CREATE_BIG_COMMAND,
+            hci.HCI_LE_CREATE_BIG_TEST_COMMAND,
+            hci.HCI_LE_TERMINATE_BIG_COMMAND,
+            hci.HCI_LE_BIG_CREATE_SYNC_COMMAND,
+            hci.HCI_LE_BIG_TERMINATE_SYNC_COMMAND,
+            hci.HCI_LE_SETUP_ISO_DATA_PATH_COMMAND,
+            hci.HCI_LE_REMOVE_ISO_DATA_PATH_COMMAND,
+            hci.HCI_LE_ISO_TRANSMIT_TEST_COMMAND,
+            hci.HCI_LE_ISO_RECEIVE_TEST_COMMAND,
+            hci.HCI_LE_ISO_READ_TEST_COUNTERS_COMMAND,
+            hci.HCI_LE_ISO_TEST_END_COMMAND,
             hci.HCI_LE_READ_LOCAL_SUPPORTED_FEATURES_COMMAND,
             hci.HCI_LE_READ_ALL_LOCAL_SUPPORTED_FEATURES_COMMAND,
             hci.HCI_LE_READ_ALL_REMOTE_FEATURES_COMMAND,

@@ -165,6 +165,8 @@ class Controller:
                 self.on_hci_command_packet(packet)
             case hci.HCI_AclDataPacket():
                 self.on_hci_acl_data_packet(packet)
+            case hci.HCI_IsoDataPacket():
+                self.le_procedures.on_iso_packet(packet)
             case hci.HCI_Event():
                 self.on_hci_event_packet(packet)
             case _:
@@ -230,15 +232,31 @@ class Controller:
         connection.on_hci_acl_data_packet(packet)
 
     def send_hci_packet(self, packet: hci.HCI_Packet) -> None:
-        logger.debug(
-            f'{color(">>>", "green")} [{self.name}] '
-            f'{color("CONTROLLER -> HOST", "green")}: {packet}'
-        )
+        self.send_hci_packets((packet,))
+
+    def send_hci_packets(self, packets) -> None:
+        """Send an ordered batch, preserving individual H4 frames in the trace."""
         if self.host:
-            data = bytes(packet)
-            if self._snoop is not None:
-                self._snoop.capture(data, received=True)
-            asyncio.get_running_loop().call_soon(self.host.on_packet, data)
+            frames = []
+            for packet in packets:
+                logger.debug(
+                    '%s [%s] %s: %s',
+                    color('>>>', 'green'),
+                    self.name,
+                    color('CONTROLLER -> HOST', 'green'),
+                    packet,
+                )
+                data = bytes(packet)
+                if self._snoop is not None:
+                    self._snoop.capture(data, received=True)
+                frames.append(data)
+            loop = asyncio.get_running_loop()
+            receive_batch = getattr(self.host, 'on_packets', None)
+            if len(frames) > 1 and receive_batch is not None:
+                loop.call_soon(receive_batch, frames)
+            else:
+                for frame in frames:
+                    loop.call_soon(self.host.on_packet, frame)
 
     def _send_hci_command_status(self, status: int, op_code: int) -> None:
         self.send_hci_packet(

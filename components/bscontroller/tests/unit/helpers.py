@@ -17,6 +17,7 @@ from bscontroller.linklayer import (
     PDU_ACCESS_ADDRESS_SIZE,
     PDU_ADV_ACCESS_ADDRESS,
 )
+from bscontroller.linklayer.bis import BigInfo
 from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.parameters import Parameters
 from bscontroller.radio.base import (
@@ -196,3 +197,27 @@ def add_connection(first, index, role=hci.Role.CENTRAL):
     link.connections[result.handle] = result
     result.report_created()
     return result
+
+
+def bis_info(**changes):
+    return replace(
+        BigInfo(
+            offset_us=990,
+            iso_interval=8,
+            num_bis=1,
+            nse=2,
+            bn=1,
+            sub_interval_us=600,
+            pto=0,
+            bis_spacing_us=1200,
+            irc=2,
+            max_pdu=32,
+            seed_access_address=0x12345678,
+            sdu_interval_us=10000,
+            max_sdu=32,
+            base_crc_init=0x1234,
+            channel_map=0x1FFFFFFFFF,
+            phy=Phy.LE_1M,
+        ),
+        **changes,
+    )

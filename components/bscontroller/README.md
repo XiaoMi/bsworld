@@ -140,6 +140,10 @@ Values the Bluetooth specification leaves to the Controller form a `ControllerCo
 | `periodicAdvertiserListSize` | `8` | `1`–`255` | 7.8.73 |
 | `maxConnections` | `64` | `1`–`3839` | 5.3.1 |
 | `maxPeriodicSyncs` | `16` | `1`–`3839` | 5.3.1 |
+| `isoPacketCount` | `16` | `1`–`255` | 7.8.2 |
+| `isoPacketLength` | `251` | `5`–`16383` | 7.8.2 |
+| `maxBigs` | `4` | `1`–`240` | 7.8.103, 7.8.106 |
+| `maxBis` | `16` | `1`–`3839` | 5.3.1, 7.8.103, 7.8.106 |
 
 A configuration file has a `defaults` object for every Controller, and a `controllers` object with one entry per Controller name:
 
@@ -198,8 +202,8 @@ These are the Link Layer features of the Bluetooth Core specification, listed by
 | 5.1 | Periodic Advertising Sync Transfer | * |
 | 5.1 | Initiating Periodic Advertising Sync Transfer for Local Periodic Advertising | * |
 | 5.1 | Initiating Periodic Advertising Sync Transfer for Remote Periodic Advertising | * |
-| 5.2 | Isochronous Broadcaster |  |
-| 5.2 | Synchronized Receiver |  |
+| 5.2 | Isochronous Broadcaster | * |
+| 5.2 | Synchronized Receiver | * |
 | 5.2 | Connected Isochronous Stream (CIS) |  |
 | 5.3 | Periodic Advertising ADI Support | * |
 | 5.3 | LE Channel Classification |  |
@@ -250,6 +254,6 @@ python -m pytest tests/qualification -n auto -v -rs     # a few minutes, needs B
 python -m build                                         # sdist and wheel in dist/
 ```
 
-The qualification suite runs 774 selected HCI and Link Layer test cases from the Bluetooth test specifications against independent lower testers. Passing them does not make BSController Bluetooth-qualified. See [tests/README.md](tests/README.md) for the test scope.
+The qualification suite runs 821 selected HCI and Link Layer test cases from the Bluetooth test specifications against independent lower testers. Passing them does not make BSController Bluetooth-qualified. See [tests/README.md](tests/README.md) for the test scope.
 
 Licensing and third-party notices are in [LICENSE](LICENSE) and [NOTICE](NOTICE).

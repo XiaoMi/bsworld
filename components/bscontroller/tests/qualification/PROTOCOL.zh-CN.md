@@ -6,7 +6,7 @@
 
 ## 测试范围
 
-当前选取 774 个协议用例：145 个 HCI 用例、629 个 LL 用例，分布在 18 个测试文件中。覆盖设备发现、广播、连接、定时、报文编码、跳频、安全及数据传输，也包含隐私和基于决策的广播过滤（DBAF）相关测试。
+当前选取 821 个协议用例：162 个 HCI 用例、659 个 LL 用例，分布在 21 个测试文件中。覆盖设备发现、广播、连接、定时、报文编码、跳频、安全及数据传输，也包含隐私、基于决策的广播过滤（DBAF）、BIS 广播和同步接收。
 
 用例保留测试规范中的编号，可按编号查找和运行。下表的章节号对应测试规范章节。
 
@@ -20,6 +20,7 @@
 | `hci/` | 4.8 Host Flow Control | [host_flow_control_test.py](hci/host_flow_control_test.py) | 1 |
 | `hci/` | 4.10 Controller Configuration | [controller_configuration_test.py](hci/controller_configuration_test.py) | 39 |
 | `hci/` | 4.13 LE Connection Management | [connection_management_test.py](hci/connection_management_test.py) | 7 |
+| `hci/` | 4.15.2 Broadcast Isochronous Streams | [broadcast_isochronous_test.py](hci/broadcast_isochronous_test.py) | 17 |
 | `hci/` | 4.17 Event Versioning | [event_versioning_test.py](hci/event_versioning_test.py) | 6 |
 | `ll/` | 4.2 Device Discovery | [device_discovery_test.py](ll/device_discovery_test.py) | 176 |
 | `ll/` | 4.3 Connection | [connection_test.py](ll/connection_test.py) | 258 |
@@ -30,6 +31,8 @@
 | `ll/` | 4.7 Packet Handling | [packet_handling_test.py](ll/packet_handling_test.py) | 6 |
 | `ll/` | 4.8 Security | [security_test.py](ll/security_test.py) | 67 |
 | `ll/` | 4.9 Data Flow | [data_flow_test.py](ll/data_flow_test.py) | 4 |
+| `ll/` | 4.11 Broadcast Isochronous Streams | [broadcast_isochronous_test.py](ll/broadcast_isochronous_test.py) | 28 |
+| `ll/` | 4.12 Isochronous Testing | [isochronous_testing_test.py](ll/isochronous_testing_test.py) | 2 |
 
 本套件覆盖上述选取用例，不表示对 HCI.TS、LL.TS 或蓝牙核心规范的完整覆盖。实际执行范围还取决于被测 Controller 的能力和测试环境。
 

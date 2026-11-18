@@ -19,6 +19,7 @@ import pytest
 from bscontroller import hci
 from bscontroller.address import Address
 from bscontroller.errors import ErrorCode
+from bscontroller.linklayer import roles
 from bscontroller.linklayer.api import (
     AdvertisingConfig,
     ConnectionSnapshot,
@@ -36,6 +37,11 @@ from tests.unit.helpers import PARAMETERS, FakeRadio
     'module',
     [
         'api',
+        'bis',
+        'broadcast',
+        'iso',
+        'isoal',
+        'iso_radio',
         'service',
         'notifications',
         'connection_event',
@@ -140,6 +146,34 @@ def test_ll_allocates_distinct_handles_before_hci_publication(connection, contro
     assert other.handle != connection.handle
     assert connection.link.connections[connection.handle] is connection
     assert not controller.le_connections
+
+
+def test_acl_admission_counts_handles_reserved_for_bis(
+    connection, controller, monkeypatch
+):
+    """An ACL cannot consume a handle reserved for an ISO stream.
+
+    Steps:
+        1. Limit the handle space to two, with one live ACL and one reservation.
+        2. Check incoming and outgoing ACL admission, then free the reservation.
+
+    Expected:
+        - Both directions reject while the handle space is full.
+        - The released handle becomes allocatable again.
+    """
+    link = connection.link
+    peer = Address('F0:F1:F2:F3:F4:03')
+    service = controller.le_procedures.ll
+    monkeypatch.setattr(roles, 'LL_CONNECTION_HANDLE_MAX', 2)
+    with monkeypatch.context() as reserved:
+        reserved.setattr(link.roles.broadcast, 'connection_handles', lambda: {2})
+        assert not link.roles.connections.can_accept(peer)
+        assert service.initiating_status(peer, False) == (
+            ErrorCode.CONNECTION_LIMIT_EXCEEDED_ERROR
+        )
+
+    assert link.roles.connections.can_accept(peer)
+    assert link.roles.connections.allocate_handle() == 2
 
 
 def test_hci_scan_configuration_is_a_detached_view(controller):
@@ -551,8 +585,20 @@ def test_hci_does_not_enter_live_ll_collections_or_procedure_objects():
         'controls',
         'encryption',
         'packet_security',
+        'groups',
+        'streams',
     }
     for source in Path(package.__file__).parent.glob('*.py'):
         for node in ast.walk(ast.parse(source.read_text())):
             if isinstance(node, ast.Attribute):
+                if isinstance(node.value, ast.Attribute) and node.value.attr == 'll':
+                    assert node.attr not in {'broadcast', 'iso'}
+                # Encryption is also a decoded HCI BIG command field. It
+                # carries a scalar mode, not a live LL encryption procedure.
+                if (
+                    node.attr == 'encryption'
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == 'command'
+                ):
+                    continue
                 assert node.attr not in forbidden, (source.name, node.lineno, node.attr)

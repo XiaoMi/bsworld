@@ -12,6 +12,7 @@ from bscontroller.hci import (
 from bscontroller.hci.advertising import LeAdvertisingCommands
 from bscontroller.hci.connection import LeConnectionCommands
 from bscontroller.hci.context import SUCCESS
+from bscontroller.hci.iso import LeIsoCommands
 from bscontroller.hci.privacy import LePrivacyCommands
 from bscontroller.hci.records import LegacyAdvertiser
 from bscontroller.hci.scanning import LeScanningCommands
@@ -67,7 +68,11 @@ EXTENDED_ADVERTISING_COMMANDS = frozenset(
 
 
 class LeControllerProcedures(
-    LeAdvertisingCommands, LeScanningCommands, LeConnectionCommands, LePrivacyCommands
+    LeAdvertisingCommands,
+    LeScanningCommands,
+    LeConnectionCommands,
+    LePrivacyCommands,
+    LeIsoCommands,
 ):
     """One command endpoint, grouped by the LE procedures each command configures."""
 
