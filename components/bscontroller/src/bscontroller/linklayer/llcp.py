@@ -303,7 +303,7 @@ class LlcpCoordinator:
 
     def close(self, reason: int) -> None:
         self.deferred.clear()
-        self.controls.finish_features(reason)
+        self.controls.features.finish(reason)
         self.controls.finish_version(None)
         self.local_exchanges.clear()
         self.response_timer.stop()
@@ -341,7 +341,9 @@ class LlcpCoordinator:
                 None,
             )
         if exchange is not None and exchange.owner.control(payload):
-            self.local_exchanges.pop(exchange.request, None)
+            # Consuming a response need not complete its exchange (for example,
+            # an extended feature response may carry the wrong page number).
+            self._prune_exchanges()
             return
         if self.encryption.control(payload):
             return
@@ -370,10 +372,11 @@ class LlcpCoordinator:
             SUCCESS, lambda: self.encryption.start(rand, ediv, key)
         )
 
-    def prepare_features(self) -> PreparedProcedure:
-        if self.controls.feature_request:
+    def prepare_features(self, pages: int | None = None) -> PreparedProcedure:
+        features = self.controls.features
+        if features.pending:
             return PreparedProcedure(DISALLOWED)
-        return PreparedProcedure(SUCCESS, self.controls.request_features)
+        return PreparedProcedure(SUCCESS, lambda: features.request(pages))
 
     def prepare_version(self) -> PreparedProcedure:
         if self.controls.version_request:

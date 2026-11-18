@@ -36,6 +36,11 @@ from bscontroller.colors import color
 from bscontroller.config import ControllerConfig
 from bscontroller.hci.records import AdvertisingSet, ConnectionRecord, LegacyAdvertiser
 from bscontroller.hci.transport import TransportSink
+from bscontroller.linklayer.features import (
+    FEATURE_SET_SIZE,
+    feature_max_page,
+    feature_page,
+)
 
 if TYPE_CHECKING:
     from bscontroller.hci.backend import ControllerBackend
@@ -361,7 +366,20 @@ class Controller:
         '''
         return hci.HCI_LE_Read_Local_Supported_Features_ReturnParameters(
             status=hci.HCI_ErrorCode.SUCCESS,
-            le_features=self.le_features.value.to_bytes(8, 'little'),
+            le_features=feature_page(self.le_features, 0),
+        )
+
+    def on_hci_le_read_all_local_supported_features_command(
+        self, _command: hci.HCI_LE_Read_All_Local_Supported_Features_Command
+    ) -> hci.HCI_LE_Read_All_Local_Supported_Features_ReturnParameters:
+        '''
+        See Bluetooth spec Vol 4, Part E - 7.8.128 LE Read All Local Supported
+        Features Command
+        '''
+        return hci.HCI_LE_Read_All_Local_Supported_Features_ReturnParameters(
+            status=hci.HCI_ErrorCode.SUCCESS,
+            max_page=feature_max_page(self.le_features),
+            le_features=self.le_features.to_bytes(FEATURE_SET_SIZE, 'little'),
         )
 
     def on_hci_le_read_supported_states_command(

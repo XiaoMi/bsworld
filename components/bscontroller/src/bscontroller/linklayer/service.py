@@ -61,6 +61,7 @@ from bscontroller.linklayer.extended import (
     periodic_time_us,
     subevent_pdu,
 )
+from bscontroller.linklayer.features import FEATURE_MAX_PAGE
 from bscontroller.linklayer.llcp import PreparedProcedure
 from bscontroller.linklayer.pawr import (
     LL_PAWR_SUBEVENT_INTERVAL_MAX,
@@ -886,6 +887,20 @@ class LinkLayerService:
         self.link.reset()
         self.reset_configuration(address)
 
+    def add_monitored_advertiser(
+        self, address: Address, low: int, high: int, timeout: int
+    ) -> int:
+        return self.link.monitoring.add(AddressSnapshot(address), low, high, timeout)
+
+    def remove_monitored_advertiser(self, address: Address) -> int:
+        return self.link.monitoring.remove(AddressSnapshot(address))
+
+    def clear_monitored_advertisers(self) -> None:
+        self.link.monitoring.clear()
+
+    def enable_advertiser_monitoring(self, enabled: bool) -> None:
+        self.link.monitoring.enable(enabled)
+
     def edit_filter(self, address: Address | None, add: bool, capacity: int) -> int:
         if self.filter_in_use():
             return DISALLOWED
@@ -958,10 +973,20 @@ class LinkLayerService:
             else PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
         )
 
-    def prepare_features(self, handle: int) -> PreparedProcedure:
+    def prepare_features(
+        self, handle: int, pages: int | None = None
+    ) -> PreparedProcedure:
+        if pages is not None:
+            if not 0 <= pages <= FEATURE_MAX_PAGE or not 0 <= handle <= 0x0EFF:
+                return PreparedProcedure(ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR)
+            if any(
+                item.controls.features.all_pending
+                for item in self.link.connections.values()
+            ):
+                return PreparedProcedure(DISALLOWED)
         connection = self._connection(handle)
         return (
-            connection.llcp.prepare_features()
+            connection.llcp.prepare_features(pages)
             if connection
             else PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
         )

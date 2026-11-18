@@ -41,7 +41,7 @@ PEER_FEATURES = int(
 
 
 # Core Vol 6, Part B, Table 4.9: locally reported bits forbidden on the ACL.
-HCI_ONLY_FEATURES = (1 << 27) | (1 << 42) | (1 << 48)
+HCI_ONLY_FEATURES = (1 << 27) | (1 << 42) | (1 << 48) | (1 << 64)
 
 
 def request_opcode(role):
@@ -57,6 +57,42 @@ def le_features(event):
 # ---------------------------------------------------------------------------
 # Feature Exchange, local
 # ---------------------------------------------------------------------------
+@pytest.mark.parametrize('role', ROLES)
+def test_extended_feature_wrong_page_keeps_exchange(iut, role):
+    """A wrong-page response leaves the sent exchange available for its real response.
+
+    Purpose: Preserve LLCP response ownership when ignoring a mismatched page
+    (Core Vol 6, Part B, 5.1.4.3).
+
+    Steps:
+        1. Start Read All Remote Features and exchange legacy page 0.
+        2. Receive the IUT's page-1 request, then send a page-2 response.
+        3. Send the matching page-1 response through the same LLCP/ARQ path.
+
+    Expected:
+        The wrong page generates no Host completion or outgoing rejection.
+        The matching page completes successfully with exactly the supplied data.
+    """
+    dut = iut(role)
+    dut.host_start('prepare_features', pages=1)
+    dut.event_prepare()
+    dut.lt_rx(request_opcode(role))
+    dut.lt_tx(feature(Opcode.LL_FEATURE_RSP, 1 << 63))
+    dut.lt_rx(Opcode.LL_FEATURE_EXT_REQ)
+    dut.lt_tx(bytes([Opcode.LL_FEATURE_EXT_RSP, 2, 2]) + bytes(24))
+    dut.ut_rx_q_is_empty()
+    dut.lt_rx_q_is_empty()
+    dut.lt_tx(bytes([Opcode.LL_FEATURE_EXT_RSP, 1, 1]) + b'\x01' + bytes(23))
+    dut.ut_rx(
+        hci.HCI_LE_Read_All_Remote_Features_Complete_Event,
+        status=ErrorCode.SUCCESS,
+        max_remote_page=1,
+        max_valid_page=1,
+        le_features=(1 << 63).to_bytes(8, 'little') + b'\x01' + bytes(239),
+    )
+    assert not dut.controls.feature_request
+
+
 @pytest.mark.parametrize('role', ROLES)
 def test_feature_loc(iut, role):
     """Local Feature Exchange completes and a repeat is served from the cache.
@@ -606,12 +642,12 @@ def test_version_timer_is_independent_of_feature_timer(central):
         - After finishing features, the next deadline is the version deadline.
     """
     central.host_start('prepare_features')
-    first = central.controls.feature_deadline_us
+    first = central.controls.features.deadline_us
     central.elapse(1000)
     central.host_start('prepare_version')
     assert central.controls.version_deadline_us == first + 1000
     assert central.controls.next_deadline_us == first
-    central.controls.finish_features(ErrorCode.SUCCESS)
+    central.controls.features.finish(ErrorCode.SUCCESS)
     assert central.controls.next_deadline_us == first + 1000
 
 
@@ -692,18 +728,18 @@ def test_unknown_handle(central, method):
 def test_hci_only_features_are_never_sent_in_acl_exchange(iut, role, local):
     """Features marked Send to Peer = N never appear in Feature Exchange PDUs.
 
-    Purpose: Verify that feature bits 27, 42 and 48, which have Send to Peer
+    Purpose: Verify that feature bits 27, 42, 48 and 64, which have Send to Peer
     = N, stay zero in both the initiating request and the LL_FEATURE_RSP,
     for both roles (Vol 6, Part B, Table 4.9).
 
     Steps:
-        1. Set the three HCI-only bits in the IUT's local features.
+        1. Set the four HCI-only bits in the IUT's local features.
         2. Either Upper Tester starts a local Feature Exchange, or Lower Tester
            sends the peer role's feature request with an empty feature set.
         3. Lower Tester receives the IUT's request or LL_FEATURE_RSP.
 
     Expected:
-        - None of bits 27, 42 or 48 is set in the sent FeatureSet.
+        - None of bits 27, 42, 48 or 64 is set in the sent FeatureSet.
         - A request carries the remaining local features; a response also
           clears the first octet, which reflects the peer's empty set.
     """

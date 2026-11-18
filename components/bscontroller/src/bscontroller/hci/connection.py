@@ -369,6 +369,14 @@ class LeConnectionCommands(LeControllerContext):
             command, self.ll.prepare_features(command.connection_handle)
         )
 
+    def on_hci_le_read_all_remote_features_command(self, command):
+        self._run_ll_request(
+            command,
+            self.ll.prepare_features(
+                command.connection_handle, command.pages_requested
+            ),
+        )
+
     def on_hci_read_remote_version_information_command(self, command):
         self._run_ll_request(
             command, self.ll.prepare_version(command.connection_handle)

@@ -2723,6 +2723,82 @@ class HCI_LE_Set_Decision_Instructions_Command(
 
 
 # -----------------------------------------------------------------------------
+@HCI_SyncCommand.sync_command(HCI_StatusReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_Add_Device_To_Monitored_Advertisers_List_Command(
+    HCI_SyncCommand[HCI_StatusReturnParameters]
+):
+    '''
+    See Bluetooth spec @ 7.8.146 LE Add Device To Monitored Advertisers List Command
+    '''
+
+    address_type: int = field(metadata=metadata(1))
+    address: Address = field(metadata=metadata(Address.parse_address_preceded_by_type))
+    rssi_low_threshold: int = field(metadata=metadata(-1))
+    rssi_high_threshold: int = field(metadata=metadata(-1))
+    timeout: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@HCI_SyncCommand.sync_command(HCI_StatusReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_Remove_Device_From_Monitored_Advertisers_List_Command(
+    HCI_SyncCommand[HCI_StatusReturnParameters]
+):
+    '''
+    See Bluetooth spec @ 7.8.147 LE Remove Device From Monitored Advertisers List
+    Command
+    '''
+
+    address_type: int = field(metadata=metadata(1))
+    address: Address = field(metadata=metadata(Address.parse_address_preceded_by_type))
+
+
+# -----------------------------------------------------------------------------
+@HCI_SyncCommand.sync_command(HCI_StatusReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_Clear_Monitored_Advertisers_List_Command(
+    HCI_SyncCommand[HCI_StatusReturnParameters]
+):
+    '''
+    See Bluetooth spec @ 7.8.148 LE Clear Monitored Advertisers List Command
+    '''
+
+
+# -----------------------------------------------------------------------------
+@HCI_SyncCommand.sync_command(HCI_StatusReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_Enable_Monitoring_Advertisers_Command(
+    HCI_SyncCommand[HCI_StatusReturnParameters]
+):
+    '''
+    See Bluetooth spec @ 7.8.149 LE Enable Monitoring Advertisers Command
+    '''
+
+    enable: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@dataclasses.dataclass
+class HCI_LE_Read_Monitored_Advertisers_List_Size_ReturnParameters(
+    HCI_StatusReturnParameters
+):
+    number: int = field(metadata=metadata(1))
+
+
+@HCI_SyncCommand.sync_command(
+    HCI_LE_Read_Monitored_Advertisers_List_Size_ReturnParameters
+)
+@dataclasses.dataclass
+class HCI_LE_Read_Monitored_Advertisers_List_Size_Command(
+    HCI_SyncCommand[HCI_LE_Read_Monitored_Advertisers_List_Size_ReturnParameters]
+):
+    '''
+    See Bluetooth spec @ 7.8.150 LE Read Monitored Advertisers List Size Command
+    '''
+
+
+# -----------------------------------------------------------------------------
 @dataclasses.dataclass
 class HCI_LE_Read_Resolving_List_Size_ReturnParameters(HCI_StatusReturnParameters):
     resolving_list_size: int = field(metadata=metadata(1))
@@ -4158,6 +4234,18 @@ class HCI_LE_Read_All_Local_Supported_Features_Command(
 
 
 # -----------------------------------------------------------------------------
+@HCI_Command.command
+@dataclasses.dataclass
+class HCI_LE_Read_All_Remote_Features_Command(HCI_AsyncCommand):
+    '''
+    See Bluetooth spec @ 7.8.129 LE Read All Remote Features Command
+    '''
+
+    connection_handle: int = field(metadata=metadata(2))
+    pages_requested: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
 @dataclasses.dataclass
 class HCI_LE_CS_Read_Local_Supported_Capabilities_ReturnParameters(
     HCI_StatusReturnParameters
@@ -4999,6 +5087,21 @@ class HCI_LE_Read_Remote_Features_Complete_Event(HCI_LE_Meta_Event):
 # -----------------------------------------------------------------------------
 @HCI_LE_Meta_Event.event
 @dataclasses.dataclass
+class HCI_LE_Read_All_Remote_Features_Complete_Event(HCI_LE_Meta_Event):
+    '''
+    See Bluetooth spec @ 7.7.65.38 LE Read All Remote Features Complete Event
+    '''
+
+    status: int = field(metadata=metadata(STATUS_SPEC))
+    connection_handle: int = field(metadata=metadata(2))
+    max_remote_page: int = field(metadata=metadata(1))
+    max_valid_page: int = field(metadata=metadata(1))
+    le_features: bytes = field(metadata=metadata(248))
+
+
+# -----------------------------------------------------------------------------
+@HCI_LE_Meta_Event.event
+@dataclasses.dataclass
 class HCI_LE_Long_Term_Key_Request_Event(HCI_LE_Meta_Event):
     '''
     See Bluetooth spec @ 7.7.65.5 LE Long Term Key Request Event
@@ -5276,6 +5379,19 @@ class HCI_LE_Periodic_Advertising_Sync_Lost_Event(HCI_LE_Meta_Event):
     '''
 
     sync_handle: int = field(metadata=metadata(2))
+
+
+# -----------------------------------------------------------------------------
+@HCI_LE_Meta_Event.event
+@dataclasses.dataclass
+class HCI_LE_Monitored_Advertisers_Report_Event(HCI_LE_Meta_Event):
+    '''
+    See Bluetooth spec @ 7.7.65.47 LE Monitored Advertisers Report Event
+    '''
+
+    address_type: int = field(metadata=metadata(1))
+    address: Address = field(metadata=metadata(Address.parse_address_preceded_by_type))
+    condition: int = field(metadata=metadata(1))
 
 
 # -----------------------------------------------------------------------------

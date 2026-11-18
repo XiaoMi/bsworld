@@ -27,8 +27,6 @@ from bscontroller.linklayer import (
     LL_INSTANT_MIN_LISTENING_EVENTS,
     LL_RESPONSE_TIMEOUT_US,
     PDU_CONTROL_CHANNEL_MAP_SIZE,
-    PDU_CONTROL_FEATURE_SET_SIZE,
-    PDU_CONTROL_FEATURE_SIZE,
     PDU_CONTROL_INSTANT_SIZE,
     PDU_CONTROL_MIN_USED_CHANNELS_SIZE,
     PDU_CONTROL_OPCODE_SIZE,
@@ -47,7 +45,8 @@ from bscontroller.linklayer.connection_parameters import (
 )
 from bscontroller.linklayer.data_length import DataLengthProcedure
 from bscontroller.linklayer.data_path import TransmissionConstraints
-from bscontroller.linklayer.features import FEATURES_NOT_SENT_TO_PEER, LeFeatureMask
+from bscontroller.linklayer.feature_exchange import FeatureExchangeProcedure
+from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.instant import InstantUpdate
 from bscontroller.linklayer.parameters import valid_channel_map
 from bscontroller.linklayer.phy import PhyProcedure
@@ -59,7 +58,7 @@ from bscontroller.linklayer.transfer import (
     TrainSource,
     transfer_indication,
 )
-from bscontroller.radio.base import PHY_OCTET_MASK, Phy
+from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.connection import Connection
@@ -89,7 +88,7 @@ class ControlProcedures:
         self.transmitted = False
         self.acknowledged = False
         self.data_length = DataLengthProcedure(connection)
-        self.feature_context: ProcedureContext | None = None
+        self.features = FeatureExchangeProcedure(self)
         # Includes a local indication queued but not yet transmitted during a collision.
         self.version_sent = False
         self.peer_version: tuple[int, int, int] | None = None
@@ -104,11 +103,7 @@ class ControlProcedures:
 
     @property
     def feature_request(self) -> bool:
-        return self.feature_context is not None and self.feature_context.active
-
-    @property
-    def feature_deadline_us(self) -> int:
-        return self.feature_context.deadline_us if self.feature_request else 0
+        return self.features.pending
 
     @property
     def version_request(self) -> bool:
@@ -121,7 +116,7 @@ class ControlProcedures:
     def local_contexts(self) -> tuple[ProcedureContext, ...]:
         """Expose procedure instances for routing, without duplicate activity flags."""
         contexts = (
-            self.feature_context,
+            self.features.context,
             self.version_context,
             self.phy.context,
             self.connection_parameters.local_context,
@@ -155,7 +150,7 @@ class ControlProcedures:
             for deadline in (
                 self.deadline_us,
                 self.data_length.deadline_us,
-                self.feature_deadline_us,
+                self.features.deadline_us,
                 self.version_deadline_us,
             )
             if deadline
@@ -417,45 +412,6 @@ class ControlProcedures:
         if payload[0] == Opcode.LL_PHY_UPDATE_IND:
             self.phy.indication_sent(payload)
 
-    def request_features(self) -> None:
-        """Start Feature Exchange or report the cached result (Core Vol 6, Part B,
-        5.1.4).
-        """
-        opcode = (
-            Opcode.LL_FEATURE_REQ
-            if self.connection.role == Role.CENTRAL
-            else Opcode.LL_PERIPHERAL_FEATURE_REQ
-        )
-        self.feature_context = ProcedureContext(
-            opcode, frozenset((Opcode.LL_FEATURE_RSP,)), self, host_initiated=True
-        )
-        if self.connection.peer_features is not None:
-            self.finish_features(ErrorCode.SUCCESS)
-            return
-        self.feature_context.deadline_us = (
-            self.connection.radio.now_us + LL_RESPONSE_TIMEOUT_US
-        )
-        self.enqueue(
-            bytes(
-                [
-                    (
-                        Opcode.LL_FEATURE_REQ
-                        if self.connection.role == Role.CENTRAL
-                        else Opcode.LL_PERIPHERAL_FEATURE_REQ
-                    )
-                ]
-            )
-            + (self.connection.link.features & ~FEATURES_NOT_SENT_TO_PEER).to_bytes(
-                PDU_CONTROL_FEATURE_SET_SIZE, 'little'
-            )
-        )
-
-    def finish_features(self, status: int) -> None:
-        if not self.feature_request:
-            return
-        self.feature_context.finish()
-        self.listener.on_remote_features(self.connection, status)
-
     def send_version(self) -> None:
         """Send LL_VERSION_IND at most once per connection (Core Vol 6, Part B,
         5.1.5).
@@ -497,30 +453,9 @@ class ControlProcedures:
         connection = self.connection
         if self.phy.control(payload) or self.connection_parameters.control(payload):
             return True
-        if self.data_length.control(payload):
+        if self.data_length.control(payload) or self.features.control(payload):
             return True
         opcode = payload[0]
-        if (
-            opcode in (Opcode.LL_FEATURE_REQ, Opcode.LL_PERIPHERAL_FEATURE_REQ)
-            and len(payload) == PDU_CONTROL_FEATURE_SIZE
-        ):
-            connection.peer_features = int.from_bytes(payload[1:], 'little')
-            # Use the first-octet feature intersection and retain local higher octets
-            # for FEATURE_RSP (Vol 6, Part B, 5.1.4.1; 5.1.4.2).
-            local_features = connection.link.features & ~FEATURES_NOT_SENT_TO_PEER
-            features = (local_features & ~PHY_OCTET_MASK) | (
-                local_features & payload[1]
-            )
-            connection.enqueue_control(
-                bytes([Opcode.LL_FEATURE_RSP])
-                + features.to_bytes(PDU_CONTROL_FEATURE_SET_SIZE, "little"),
-                priority=True,
-            )
-            return True
-        if opcode == Opcode.LL_FEATURE_RSP and len(payload) == PDU_CONTROL_FEATURE_SIZE:
-            connection.peer_features = int.from_bytes(payload[1:], 'little')
-            self.finish_features(ErrorCode.SUCCESS)
-            return True
         if (
             opcode == Opcode.LL_MIN_USED_CHANNELS_IND
             and len(payload) == PDU_CONTROL_MIN_USED_CHANNELS_SIZE
@@ -589,12 +524,7 @@ class ControlProcedures:
             opcode == Opcode.LL_UNKNOWN_RSP
             and len(payload) == PDU_CONTROL_UNKNOWN_RSP_SIZE
         ):
-            if self.feature_request and payload[1] in (
-                Opcode.LL_FEATURE_REQ,
-                Opcode.LL_PERIPHERAL_FEATURE_REQ,
-            ):
-                self.finish_features(ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
-            elif (
+            if (
                 self.connection_parameters.parameter_request
                 and payload[1] == Opcode.LL_CONNECTION_PARAM_REQ
             ):
@@ -610,17 +540,8 @@ class ControlProcedures:
         if opcode == Opcode.LL_REJECT_IND and len(payload) == PDU_CONTROL_REJECT_SIZE:
             # The legacy reject has no rejected opcode. Route it using the outstanding
             # procedure (Vol 6, Part B, 2.4.2.14).
-            if self.feature_request:
-                self.finish_features(payload[1])
-            elif self.connection_parameters.parameter_request:
+            if self.connection_parameters.parameter_request:
                 self.connection_parameters.reject_parameters(payload[1])
-            return True
-        if (
-            opcode == Opcode.LL_REJECT_EXT_IND
-            and len(payload) == PDU_CONTROL_REJECT_EXT_SIZE
-            and payload[1] in (Opcode.LL_FEATURE_REQ, Opcode.LL_PERIPHERAL_FEATURE_REQ)
-        ):
-            self.finish_features(payload[2])
             return True
         if (
             opcode == Opcode.LL_REJECT_EXT_IND
@@ -719,12 +640,7 @@ class ControlProcedures:
             self.finish_version(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
             self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
             return True
-        if (
-            self.feature_deadline_us
-            and self.connection.radio.now_us >= self.feature_deadline_us
-        ):
-            self.finish_features(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
-            self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
+        if self.features.check_timeout():
             return True
         if self.deadline_us and self.connection.radio.now_us >= self.deadline_us:
             self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)

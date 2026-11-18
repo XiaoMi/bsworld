@@ -1994,3 +1994,87 @@ def test_extended_advertising_record_parameters_follow_reconfigure(host):
     host.cmd(extended_parameters(advertising_sid=2))
     assert host.controller.advertising_sets[0].parameters.advertising_sid == 2
     assert isinstance(host.link.advertisers[0], Advertising)
+
+
+# ---------------------------------------------------------------------------
+# Monitoring Advertisers list commands (Vol 4, Part E, 7.8.146-7.8.150)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    'address_type,low,high,timeout',
+    [
+        (2, -70, -40, 1),
+        (0, -128, -40, 1),
+        (0, 21, 21, 1),
+        (0, -70, 21, 1),
+        (0, -40, -70, 1),
+        (0, -70, -40, 0),
+    ],
+)
+def test_monitoring_invalid_add_parameters(host, address_type, low, high, timeout):
+    """Reject invalid address, RSSI, threshold ordering and timeout parameters.
+
+    Purpose: Validate every reserved or out-of-range add parameter across H4.
+
+    Steps:
+        Send the parameterized add command using an otherwise valid configuration.
+
+    Expected:
+        Command Complete reports Invalid HCI Command Parameters (0x12).
+    """
+    host.cmd(
+        hci.HCI_LE_Add_Device_To_Monitored_Advertisers_List_Command(
+            address_type, PEER_ADDRESS, low, high, timeout
+        ),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+
+
+def test_monitoring_list_capacity_duplicate_and_remove(host):
+    """Duplicate adds succeed at capacity; invalid removes fail.
+
+    Purpose: Exercise list capacity, duplicate insertion and invalid removals across H4.
+
+    Steps:
+        Fill the reported list capacity; add a duplicate and a new device. Clear the
+        list, then try an absent remove, reserved address type and invalid enable.
+
+    Expected:
+        A duplicate succeeds; a new device fails with 0x07; invalid commands fail
+        with 0x12 and the list can be cleared.
+    """
+    capacity = host.cmd(
+        hci.HCI_LE_Read_Monitored_Advertisers_List_Size_Command()
+    ).number
+    for index in range(capacity):
+        address = hci.Address(
+            index.to_bytes(6, 'little'), hci.AddressType.PUBLIC_DEVICE
+        )
+        host.cmd(
+            hci.HCI_LE_Add_Device_To_Monitored_Advertisers_List_Command(
+                0, address, -70, -40, 1
+            )
+        )
+    host.cmd(
+        hci.HCI_LE_Add_Device_To_Monitored_Advertisers_List_Command(
+            0, address, -70, -40, 1
+        )
+    )
+    host.cmd(
+        hci.HCI_LE_Add_Device_To_Monitored_Advertisers_List_Command(
+            0, PEER_ADDRESS, -70, -40, 1
+        ),
+        ErrorCode.MEMORY_CAPACITY_EXCEEDED_ERROR,
+    )
+    host.cmd(
+        hci.HCI_LE_Remove_Device_From_Monitored_Advertisers_List_Command(2, address),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    host.cmd(hci.HCI_LE_Clear_Monitored_Advertisers_List_Command())
+    host.cmd(
+        hci.HCI_LE_Remove_Device_From_Monitored_Advertisers_List_Command(0, address),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    host.cmd(
+        hci.HCI_LE_Enable_Monitoring_Advertisers_Command(2),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )

@@ -35,6 +35,7 @@ from bscontroller.linklayer.discovery import (
 )
 from bscontroller.linklayer.extended import ExtendedProcedures
 from bscontroller.linklayer.listener import Listener
+from bscontroller.linklayer.monitoring import AdvertiserMonitoring
 from bscontroller.linklayer.parameters import Parameters
 from bscontroller.linklayer.privacy import Privacy
 from bscontroller.linklayer.resource import RadioResourceManager
@@ -72,6 +73,7 @@ class RadioLink:
         self.random = random.Random(seed)
         self.privacy = Privacy(self)
         self.decision = DecisionProgram(self)
+        self.monitoring = AdvertiserMonitoring(self)
         self.roles = LinkRoles(self)
         self.extended = ExtendedProcedures(self)
         self.resource = RadioResourceManager(
@@ -122,6 +124,7 @@ class RadioLink:
         self.random.seed(self.seed)
         self.privacy.reset()
         self.decision.tests = ()
+        self.monitoring.reset()
         self.accept_list.clear()
         self.periodic_advertiser_list.clear()
         self.sync_transfer = SyncTransferConfig()
@@ -215,6 +218,7 @@ class RadioLink:
         """Dispatch role-prepared events on one radio and one simulation timeline."""
         while self.now_us < target_us:
             now = self.now_us
+            self.monitoring.expire()
             self.roles.synchronization.expire()
             operations, contexts = self._pending_operations(target_us)
             if operations:
@@ -226,6 +230,8 @@ class RadioLink:
                 end = min(target_us, operation.due_us - 1)
             else:
                 end = target_us
+            if self.monitoring.deadline_us is not None:
+                end = min(end, self.monitoring.deadline_us)
             for context in contexts:
                 if context.info is not None:
                     end = min(end, context.deadline_us)
@@ -234,4 +240,5 @@ class RadioLink:
                 await self.roles.scanning.run(scan, end)
             else:
                 await self.radio.advance_to_us(end)
+        self.monitoring.expire()
         return self.now_us

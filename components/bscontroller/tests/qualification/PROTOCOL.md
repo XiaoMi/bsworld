@@ -6,7 +6,7 @@ This suite validates BSController HCI commands, events and Link Layer behavior a
 
 ## Coverage
 
-The suite selects 754 protocol cases: 142 HCI and 612 LL cases across 18 test files. Coverage includes discovery, advertising, connections, timing, packet encoding, frequency hopping, security and data transfer, including privacy and Decision-Based Advertising Filtering (DBAF).
+The suite selects 774 protocol cases: 145 HCI and 629 LL cases across 18 test files. Coverage includes discovery, advertising, connections, timing, packet encoding, frequency hopping, security and data transfer, including privacy and Decision-Based Advertising Filtering (DBAF).
 
 Cases retain their specification identifiers for lookup and selection. The chapter numbers below refer to the test specifications.
 
@@ -15,14 +15,14 @@ Cases retain their specification identifiers for lookup and selection. The chapt
 | `hci/` | 4.3 Generic Events | [generic_events_test.py](hci/generic_events_test.py) | 5 |
 | `hci/` | 4.4 Device Setup | [device_setup_test.py](hci/device_setup_test.py) | 5 |
 | `hci/` | 4.5 Controller Flow Control | [controller_flow_control_test.py](hci/controller_flow_control_test.py) | 1 |
-| `hci/` | 4.6 Controller Information | [controller_information_test.py](hci/controller_information_test.py) | 5 |
+| `hci/` | 4.6 Controller Information | [controller_information_test.py](hci/controller_information_test.py) | 6 |
 | `hci/` | 4.7 Device Discovery | [device_discovery_test.py](hci/device_discovery_test.py) | 75 |
 | `hci/` | 4.8 Host Flow Control | [host_flow_control_test.py](hci/host_flow_control_test.py) | 1 |
-| `hci/` | 4.10 Controller Configuration | [controller_configuration_test.py](hci/controller_configuration_test.py) | 37 |
+| `hci/` | 4.10 Controller Configuration | [controller_configuration_test.py](hci/controller_configuration_test.py) | 39 |
 | `hci/` | 4.13 LE Connection Management | [connection_management_test.py](hci/connection_management_test.py) | 7 |
 | `hci/` | 4.17 Event Versioning | [event_versioning_test.py](hci/event_versioning_test.py) | 6 |
-| `ll/` | 4.2 Device Discovery | [device_discovery_test.py](ll/device_discovery_test.py) | 168 |
-| `ll/` | 4.3 Connection | [connection_test.py](ll/connection_test.py) | 249 |
+| `ll/` | 4.2 Device Discovery | [device_discovery_test.py](ll/device_discovery_test.py) | 176 |
+| `ll/` | 4.3 Connection | [connection_test.py](ll/connection_test.py) | 258 |
 | `ll/` | 4.3.7 Periodic Advertising Sync Transfer | [sync_transfer_test.py](ll/sync_transfer_test.py) | 84 |
 | `ll/` | 4.4 Timing | [timing_test.py](ll/timing_test.py) | 21 |
 | `ll/` | 4.5 Encoding | [encoding_test.py](ll/encoding_test.py) | 7 |

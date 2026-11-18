@@ -45,6 +45,7 @@ from bscontroller.linklayer.filtering import (
     EXTENDED_SCANNING_FILTER_POLICIES,
     LEGACY_SCANNING_FILTER_POLICIES,
 )
+from bscontroller.linklayer.monitoring import MONITORED_ADVERTISERS_MAX
 from bscontroller.linklayer.pawr import LL_PAWR_SUBEVENTS_MAX
 from bscontroller.radio.base import Phy
 
@@ -321,6 +322,46 @@ class LeScanningCommands(LeControllerContext):
         List Command
         '''
         return self._edit_filter(command, False)
+
+    def on_hci_le_add_device_to_monitored_advertisers_list_command(self, command):
+        """Add an advertiser for RSSI monitoring (Vol 4, Part E, 7.8.146)."""
+        low, high = command.rssi_low_threshold, command.rssi_high_threshold
+        status = INVALID
+        if (
+            command.address_type in (0, 1)
+            and -127 <= low <= high <= 20
+            and command.timeout
+        ):
+            status = self.ll.add_monitored_advertiser(
+                command.address, low, high, command.timeout
+            )
+        return hci.HCI_StatusReturnParameters(status)
+
+    def on_hci_le_remove_device_from_monitored_advertisers_list_command(self, command):
+        """Remove one monitored advertiser (Vol 4, Part E, 7.8.147)."""
+        return hci.HCI_StatusReturnParameters(
+            INVALID
+            if command.address_type not in (0, 1)
+            else self.ll.remove_monitored_advertiser(command.address)
+        )
+
+    def on_hci_le_clear_monitored_advertisers_list_command(self, _command):
+        """Clear entries, including any pending loss timers (7.8.148)."""
+        self.ll.clear_monitored_advertisers()
+        return hci.HCI_StatusReturnParameters(SUCCESS)
+
+    def on_hci_le_enable_monitoring_advertisers_command(self, command):
+        """Enable, disable or restart monitoring (Vol 4, Part E, 7.8.149)."""
+        if command.enable not in (0, 1):
+            return hci.HCI_StatusReturnParameters(INVALID)
+        self.ll.enable_advertiser_monitoring(bool(command.enable))
+        return hci.HCI_StatusReturnParameters(SUCCESS)
+
+    def on_hci_le_read_monitored_advertisers_list_size_command(self, _command):
+        """Read list capacity (Vol 4, Part E, 7.8.150)."""
+        return hci.HCI_LE_Read_Monitored_Advertisers_List_Size_ReturnParameters(
+            SUCCESS, MONITORED_ADVERTISERS_MAX
+        )
 
     def on_hci_le_periodic_advertising_create_sync_command(self, command):
         '''
