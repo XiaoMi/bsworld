@@ -2,27 +2,31 @@
 
 English | [简体中文](zh-CH/controllers.md)
 
-Each Bluetooth Host connects to a BSController worker over H4 HCI on a Unix socket. BSController runs the Link Layer and exchanges packets through the shared BabbleSim PHY. Each worker writes an HCI capture (`hciN.snoop`), and the PHY supplies the packets for the shared radio trace (`ellisys.bttrp`). See [Logs, traces, and captures](artifacts.md).
+Each Bluetooth Host uses its own BSController worker. The worker runs the Link Layer, accepts H4 traffic over a Unix socket, and exchanges packets through the shared BabbleSim PHY.
+
+The worker writes its HCI capture to `hciN.snoop`. BSWorld generates the shared radio trace from PHY transmit records. For file locations and analysis tools, see [Logs, traces, and captures](artifacts.md).
 
 ## Adding a Controller
 
-Register a Controller with `topo.add_controller()` and connect the Host to its `hci_sock` after `topo.start()`.
+Register the Controller with `topo.add_controller()` before starting the topology. The Host can connect to `controller.hci_sock` once `await topo.start()` returns.
 
 ```python
 controller = topo.add_controller(public_address="F0:F1:F2:F3:F4:01")
 await topo.start()
 ```
 
+For a UML Guest, BSWorld connects the socket to the Guest's `/dev/ttyS0`. The launcher setup is described in [Running Hosts in UML](writing-tests.md#running-hosts-in-uml).
+
 | Argument | Meaning |
 |---|---|
 | `public_address` | Public device address in `AA:BB:CC:DD:EE:FF` format. If omitted, BSController derives a distinct address from the Controller number. |
-| `log_subdir` | Where to write `hciN.snoop`, relative to the test log directory. |
-| `config` | A `ControllerConfig` for this Controller. |
-| `max_step_us` | Longest simulation step the worker takes while idle. |
+| `log_subdir` | Directory for `hciN.snoop`, relative to the test log directory. Defaults to `controllers/hciN/`. |
+| `config` | Per-Controller settings supplied as a `ControllerConfig`. |
+| `max_step_us` | Maximum idle simulation step in microseconds. |
 
 ## Configuring BSController
 
-Pass a `ControllerConfig` to set buffers, list sizes, limits, and Bluetooth version per Controller. See the [configuration reference](../components/bscontroller/README.md#configuration) for fields, defaults, and ranges.
+Use `ControllerConfig` to set buffers, list sizes, limits, and Bluetooth version for each Controller. Available fields, defaults, and ranges are listed in the [BSController configuration reference](../components/bscontroller/README.md#configuration).
 
 ```python
 from bscontroller import ControllerConfig

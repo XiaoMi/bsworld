@@ -2,18 +2,18 @@
 
 English | [简体中文](README.zh-CN.md)
 
-BSController is a Bluetooth LE Controller written in Python. Your Host stack talks to it over standard H4 HCI, and it transmits and receives over a simulated radio ([BabbleSim](https://babblesim.github.io/)). Controllers on the same simulated radio communicate with each other. Simulation time is discrete, so runs are reproducible.
+BSController is a Bluetooth LE Controller written in Python. Host stacks connect over standard H4 HCI, and Controllers exchange radio packets through a shared [BabbleSim PHY](https://babblesim.github.io/). The PHY advances a discrete simulation clock for reproducible timing.
 
 ## Quick start
 
-BSController needs Linux, Python 3.11 or newer, and a BabbleSim build. On Ubuntu 24.04 x86_64, install the build tools:
+BSController requires Linux, Python 3.11 or newer, and a BabbleSim build. Install the build tools on Ubuntu 24.04 x86_64.
 
 ```sh
 sudo apt-get update
 sudo apt-get install -y git repo build-essential gcc-multilib g++-multilib python3-venv
 ```
 
-Fetch BabbleSim and build its PHY, modem and channel models:
+Fetch BabbleSim and build the PHY, modem and channel models.
 
 ```sh
 mkdir -p "$HOME/bsim" && cd "$HOME/bsim"
@@ -24,9 +24,9 @@ export BSIM_COMPONENTS_PATH="$PWD/components"
 make -j"$(nproc)" ext_2G4_phy_v1 ext_2G4_modem_BLE_simple ext_2G4_channel_multiatt
 ```
 
-Keep `BSIM_OUT_PATH` exported whenever you run BSController. See the BabbleSim [fetching](https://babblesim.github.io/fetching.html) and [building](https://babblesim.github.io/building.html) guides for other options.
+Keep `BSIM_OUT_PATH` exported in the shell used to run BSController. Other checkout and build options are covered in the BabbleSim [fetching](https://babblesim.github.io/fetching.html) and [building](https://babblesim.github.io/building.html) guides.
 
-Then install BSController from this directory:
+Return to the BSController directory to install the package.
 
 ```sh
 python3 -m venv .venv
@@ -36,22 +36,19 @@ python -m pip install .
 
 ## Standalone Controller
 
-Start a Controller and connect your Host to its socket:
+`bscontroller serve` starts a BabbleSim PHY and exposes H4 HCI on a Unix socket. Point the Host at the socket path.
 
 ```sh
 bscontroller serve --hci-socket /tmp/radio.sock
 ```
 
-`serve` starts a BabbleSim PHY and serves H4 HCI on the Unix socket; 
-
-Give `--hci-socket` several paths to run several Controllers on the same PHY. They are named `hci0`, `hci1`, ..., and their public addresses count up from `--address` (default `F0:F1:F2:F3:F4:01`):
+Pass multiple paths to `--hci-socket` to run Controllers on a shared PHY. Each socket gets its own Controller, named `hci0`, `hci1`, and so on. Public addresses increment from `--address`, which defaults to `F0:F1:F2:F3:F4:01`.
 
 ```sh
 bscontroller serve --hci-socket /tmp/radio0.sock /tmp/radio1.sock
 ```
 
-
-By default, simulation time advances as fast as the machine allows. A Host that uses wall-clock timers sees the Controller run ahead, so timers and timeouts on the two sides disagree. Add `--realtime` to keep simulation time at wall-clock time:
+Simulation time advances as fast as the machine allows by default. For a Host that uses wall-clock timers, add `--realtime` to keep simulation time in step with wall-clock time.
 
 ```sh
 bscontroller serve --hci-socket /tmp/radio.sock --realtime
@@ -59,13 +56,13 @@ bscontroller serve --hci-socket /tmp/radio.sock --realtime
 
 ### Using BSController with BlueZ
 
-For example, to let a scanning BlueZ adapter discover an advertising one, start two Controllers:
+To discover one BlueZ adapter from another, start two Controllers in real time.
 
 ```sh
 bscontroller serve --hci-socket /tmp/radio0.sock /tmp/radio1.sock --realtime
 ```
 
-Once `serve` prints both sockets, run the four commands below, each in its own terminal:
+Once `serve` lists both sockets, use `socat` to create a pseudo-terminal for each socket. Attach the terminals as HCI UART devices with BlueZ's `btattach`. Run each command in a separate terminal.
 
 ```sh
 socat PTY,link=/tmp/bscontroller-tty0,rawer UNIX-CONNECT:/tmp/radio0.sock
@@ -74,11 +71,13 @@ sudo btattach -B "$(readlink -f /tmp/bscontroller-tty0)" -P h4
 sudo btattach -B "$(readlink -f /tmp/bscontroller-tty1)" -P h4
 ```
 
-In `bluetoothctl`, `select F0:F1:F2:F3:F4:01` and turn on advertising, then `select F0:F1:F2:F3:F4:02` and start scanning.
+In `bluetoothctl`, use `select F0:F1:F2:F3:F4:01` to select the advertising adapter and enable advertising. Select `F0:F1:F2:F3:F4:02` and start scanning.
 
 ## Using BSController from Python
 
-`RadioController` runs one Controller in its own worker thread. Create it inside a running asyncio event loop. `RadioSession` joins it to a PHY that is already running. The example below expects a PHY started with the same `sim_id` (`example`) and two devices: device `0` for the Controller and device `1` for the Host clock.
+Create a `RadioController` inside a running asyncio event loop. It runs the Controller in a dedicated thread. `RadioSession` starts and stops that thread and attaches the Controller to a running PHY.
+
+For this example, start the PHY with `sim_id` set to `example` and two device slots. The Controller uses device `0`, and the Host clock uses device `1`.
 
 ```python
 import asyncio
@@ -99,26 +98,26 @@ with asyncio.Runner(loop_factory=RadioEventLoop) as runner:
     runner.run(main())
 ```
 
-The [Bumble Host samples](samples/README.md) run advertising, scanning, GATT, multiple connections, periodic synchronization and simultaneous roles. Install `python -m pip install -e '.[bumble]'` and run `python -m samples.advertise_scan` from this directory. Each device uses its own Bumble Host and Controller over H4; `bscontroller.hosts.bumble` provides the shared Host and advertising-set contexts.
+Choose the Host connection when creating the Controller.
 
-There are two ways to connect a Host:
-
-- **Socket.** Pass `hci_socket`, as above. Any Host that speaks H4 over a Unix socket can connect. Startup returns once the socket is listening. HCI commands are processed after the Controller has synchronized with the PHY.
-- **In process.** Omit `hci_socket`. Register an object with an `on_packet(packet: bytes)` method through `controller.set_packet_sink(sink)` before starting, then send complete H4 packets with `controller.on_packet(packet)`.
+- **Unix socket** with `hci_socket`. The worker opens the socket on startup and begins processing HCI commands once the Controller has synchronized with the PHY.
+- **In-process H4** with `hci_socket` omitted. Before starting the Controller, register a sink with `controller.set_packet_sink(sink)`. The sink receives H4 packets through its `on_packet(packet: bytes)` method. To send an H4 packet to the Controller, call `controller.on_packet(packet)`.
 
 Pass `hci_snoop_file=Path(...)` to record a BTSnoop capture, timestamped with simulation time.
 
-Other public names are `ControllerConfig` (see [Configuration](#configuration)), `RadioEventLoop`, `Radio`, `Phy`, `Received` and `hci` (HCI packet classes).
+The package also exposes `Radio`, `Phy`, `Received` and the HCI packet classes in `hci`. Controller settings are described under [Configuration](#configuration).
 
-When managing the runtime yourself:
+When managing the simulation from Python, keep the PHY running for the lifetime of the session.
 
-- `RadioSession` does not start the PHY; use `bscontroller.runtime.PhyProcess`.
-- With `clock_dev_id`, the Host event loop must be a `RadioEventLoop`. Without it, you provide the clock and a distinct PHY device ID for every participant.
-- Stop the Controllers before closing the Host clock and the PHY; `async with RadioSession(...)` does this.
+- Start the PHY with `bscontroller.runtime.PhyProcess` before entering `RadioSession`.
+- To run the Host on simulation time, use a `RadioEventLoop` and give its clock a `clock_dev_id` distinct from the Controller device IDs.
+- Exiting `RadioSession` stops the Controllers before closing its Host clock connection. Exit `PhyProcess` after the session ends.
+
+For runnable examples of advertising, scanning, GATT, periodic synchronization and concurrent roles, see the [Bumble Host samples](samples/README.md).
 
 ## Configuration
 
-Values the Bluetooth specification leaves to the Controller form a `ControllerConfig`. Unset fields keep their defaults.
+`ControllerConfig` defines the values the Bluetooth specification leaves to the Controller. Fields you omit retain their defaults.
 
 | JSON key | Default | Range | Spec (Vol 4, Part E) |
 |---|---|---|---|
@@ -145,7 +144,7 @@ Values the Bluetooth specification leaves to the Controller form a `ControllerCo
 | `maxBigs` | `4` | `1`–`240` | 7.8.103, 7.8.106 |
 | `maxBis` | `16` | `1`–`3839` | 5.3.1, 7.8.103, 7.8.106 |
 
-A configuration file has a `defaults` object for every Controller, and a `controllers` object with one entry per Controller name:
+Use `defaults` for settings shared by all Controllers and `controllers` for overrides by name.
 
 ```json
 {
@@ -154,16 +153,16 @@ A configuration file has a `defaults` object for every Controller, and a `contro
 }
 ```
 
-Keys are camelCase; snake_case also works. For each value, the most specific source wins: built-in default, then `defaults`, then `controllers.<name>`, then Python keyword arguments. An unknown key, or a value outside its range, is skipped with a warning; that field keeps its previous value and the rest of the file still applies.
+Keys accept camelCase and snake_case. Settings in `defaults` override the built-in values, and `controllers.<name>` overrides the shared settings for that Controller. `ControllerConfig.load()` and `ControllerConfig.from_mapping()` also accept keyword overrides with the highest priority. An unknown key or out-of-range value triggers a warning and leaves the current settings for that entry in effect.
 
-On the command line:
+Export the built-in defaults to a file, edit it and pass it to `serve`.
 
 ```sh
 bscontroller config > bsc.json        # every default, ready to edit
 bscontroller serve --hci-socket /tmp/radio0.sock /tmp/radio1.sock --config bsc.json
 ```
 
-In Python, pass the file (or an equivalent dict) to `RadioController`. Each Controller picks the `controllers` entry with its own name:
+In a running asyncio event loop, pass a file path, an equivalent mapping or a `ControllerConfig` to `RadioController`. A file or mapping applies the `controllers` entry matching the Controller name.
 
 ```python
 from bscontroller import ControllerConfig, RadioController
@@ -177,7 +176,7 @@ other = RadioController("x", "F0:F1:F2:F3:F4:03", config=ControllerConfig(max_co
 
 ## Supported features
 
-These are the Link Layer features of the Bluetooth Core specification, listed by the version that introduced them. `*` marks implemented features. Assigned Link Layer feature bits are reported in the LE FeatureSet ([Vol 6, Part B, 4.6](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core_v6.3/out/en/low-energy-controller/link-layer-specification.html#UUID-56ada5ed-4ae3-acee-198f-27ead57d86f1)). Bluetooth Classic (BR/EDR) is not.
+The table groups Link Layer features by the Bluetooth Core version that introduced them. `*` marks implemented features. BSController reports the assigned feature bits in the LE FeatureSet. See [Vol 6, Part B, 4.6](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core_v6.3/out/en/low-energy-controller/link-layer-specification.html#UUID-56ada5ed-4ae3-acee-198f-27ead57d86f1).
 
 | Core spec version | Link Layer feature | Supported |
 |---|---|:---:|
@@ -221,13 +220,13 @@ These are the Link Layer features of the Bluetooth Core specification, listed by
 
 ## How it works
 
-Each Controller contains an HCI layer, a Link Layer and a radio adapter. All Controllers connect to one BabbleSim PHY, which carries their packets on shared channels and advances one common simulation clock. Protocol behaviour follows [Bluetooth Core 6.3](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core_v6.3/out/en/architecture,-change-history,-and-conventions/architecture.html#UUID-37039e1f-e0cd-37ce-2cf0-15dd6e6cff2e).
+The HCI layer exchanges packets with the Host. The Link Layer implements the controller procedures, and the radio adapter passes packets to and from the BabbleSim PHY. Protocol behavior follows [Bluetooth Core 6.3](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core_v6.3/out/en/architecture,-change-history,-and-conventions/architecture.html#UUID-37039e1f-e0cd-37ce-2cf0-15dd6e6cff2e).
 
 <div align="center"><img src="docs/images/radio_controller_arch.svg" alt="Multiple Controllers sharing a BabbleSim PHY" width="80%"><br><em>Figure 1: Controllers on a shared PHY</em></div>
 
-Inside one Controller, the Link Layer keeps a manager for each role (advertising, scanning, initiating, synchronizing, connections). Every ACL connection has its own control-procedure state, encryption state and connection-event executor. All roles share one radio scheduler, which decides what the single radio does next.
+The Link Layer has separate managers for advertising, scanning, initiating connections, synchronization and connections. Each ACL connection keeps its own control-procedure state, encryption state and event executor. A single scheduler coordinates radio use across the roles.
 
-**Threads and time.** Each `RadioController` runs in a dedicated thread with its own event loop and PHY connection. The Host thread and the Controller thread share no state; they only pass immutable H4 packets. Radio time is in integer microseconds. Every Controller, and an optional Host clock, synchronizes with the PHY before simulation time advances, so timing does not depend on how fast the machine is.
+Each Controller thread has its own event loop and PHY connection. The Host and Controller exchange complete H4 packets. The PHY advances simulation time in integer microseconds as the Controllers and any Host clock synchronize with it.
 
 | Object | Owns |
 | --- | --- |
@@ -243,17 +242,17 @@ Inside one Controller, the Link Layer keeps a manager for each role (advertising
 ├── src/bscontroller/     # Package: HCI, Link Layer, radio, runtime, config
 ├── samples/              # Bumble Host scenarios, including concurrent roles
 └── tests/
-    ├── unit/             # Fast tests, no PHY needed
-    └── qualification/    # HCI/LL protocol cases; radio cases need BabbleSim
+    ├── unit/             # Unit tests that run without a PHY
+    └── qualification/    # HCI and Link Layer specification tests
 ```
 
 ```sh
 python -m pip install -e '.[test]'
-python -m pytest tests/unit -n auto -q                  # about 3 s
-python -m pytest tests/qualification -n auto -v -rs     # a few minutes, needs BSIM_OUT_PATH
-python -m build                                         # sdist and wheel in dist/
+python -m pytest tests/unit -n auto -q
+python -m pytest tests/qualification -n auto -v -rs     # Radio cases use BSIM_OUT_PATH
+python -m build                                        # sdist and wheel in dist/
 ```
 
-The qualification suite runs 821 selected HCI and Link Layer test cases from the Bluetooth test specifications against independent lower testers. Passing them does not make BSController Bluetooth-qualified. See [tests/README.md](tests/README.md) for the test scope.
+The qualification suite uses independent lower testers to exercise 821 selected HCI and Link Layer cases from the Bluetooth test specifications. See the [test guide](tests/README.md) for coverage, setup and logs.
 
 Licensing and third-party notices are in [LICENSE](LICENSE) and [NOTICE](NOTICE).

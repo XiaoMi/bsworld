@@ -2,35 +2,39 @@
 
 [English](CONTRIBUTING.md) | [简体中文](docs/zh-CH/CONTRIBUTING.md)
 
-Thank you for contributing to BSWorld. Contributions may include bug fixes, tests, documentation, new Bluetooth LE Application environments, platform integrations, and improvements to the deterministic runtime or RF orchestration.
+BSWorld welcomes bug fixes, tests, documentation, Bluetooth LE application environments, platform integrations, and improvements to the deterministic runtime or RF orchestration.
 
-BSWorld's first-party code is licensed under Apache License 2.0. Imported or reused components retain their original licenses and are identified in their source files and [Third-Party Notices](THIRD_PARTY_NOTICES.md). All commits use the [Developer Certificate of Origin](https://developercertificate.org/) process and record the contributor's certification with a `Signed-off-by` line.
+BSWorld's own code uses Apache License 2.0. Third-party components retain the licenses recorded in their sources and in the [Third-Party Notices](THIRD_PARTY_NOTICES.md).
 
 ## Before You Start
 
 - Search existing issues before opening a new one.
-- Use [SECURITY.md](SECURITY.md) for vulnerabilities. Do not disclose security-sensitive details in a public issue.
-- Open an issue before starting a substantial architectural change, new backend, or broad API change so the design and scope can be discussed first.
+- Report vulnerabilities privately using the [security reporting process](SECURITY.md).
+- Open an issue to discuss the design and scope before starting a substantial architectural change, new backend, or broad API change.
 - Small fixes, focused tests, and documentation corrections may be submitted directly as a pull request.
 - Follow the [Code of Conduct](CODE_OF_CONDUCT.md) in all project spaces.
 
 ## Development Setup
 
-Develop in the [local Linux environment](README.md#local-linux). The [published images](docker/README.md#run-tests) hold only the final executables: use them with your checkout mounted to verify tests, and [build an image](docker/README.md#build) to verify firmware or Dockerfile changes.
+Set up the [local Linux environment](README.md#local-linux) for development.
+
+To test a checkout in Docker, mount it when running a [published image](docker/README.md#run-tests). For firmware or Dockerfile changes, [build the image from your checkout](docker/README.md#build).
 
 ## Making Changes
 
-- Keep each change focused on one behavior or problem. Avoid unrelated refactoring and generated-file churn.
-- Follow the existing separation between reusable framework code in `src/bsworld/` and Application-specific profiles, build files, and scenarios under `tests/`.
-- Use standard asyncio APIs for asynchronous test work. Do not use blocking waits such as `time.sleep()` in an async test.
-- Add or update tests for externally visible behavior. Prefer assertions on public outcomes over private implementation details.
+- Keep each change focused on one behavior or problem. Leave unrelated refactoring and generated file changes out of the pull request.
+- Keep reusable framework code in `src/bsworld/`. Put application-specific profiles, build files, and scenarios under `tests/`.
+- Use standard asyncio APIs, such as `asyncio.sleep()` for waits, in async tests.
+- Add or update tests for externally visible behavior and assert the public results where possible.
 - Update English and Chinese documentation together when behavior, commands, or public interfaces change.
-- Do not commit locally compiled binaries, caches, or test logs.
-- Add the Apache-2.0 copyright header used by neighboring files to new first-party source, configuration, and script files. Preserve upstream license headers in third-party code and update `THIRD_PARTY_NOTICES*` when introducing a new external component.
+- Keep locally compiled binaries, caches, and test logs out of commits.
+- Use the Apache-2.0 copyright header from neighboring files for new first-party source, configuration, and scripts. Preserve upstream license headers and update `THIRD_PARTY_NOTICES*` when introducing an external component.
 
 ## Validation
 
-Run the checks relevant to the change in your local environment, or in a published image with your checkout mounted; see [Verifying Changes](docs/development.md#verifying-changes). At minimum, framework changes should pass:
+Run the checks relevant to your change locally or in Docker. See [Verifying Changes](docs/development.md#verifying-changes) for how to select an image.
+
+Framework changes need to pass at least the lint, formatting, and unit checks.
 
 ```sh
 ruff check --no-cache .
@@ -38,15 +42,15 @@ ruff format --check --no-cache .
 pytest tests/unit
 ```
 
-Follow the repository's Python [code style](docs/development.md#code-style). The `Checks` workflow, part of `CI`, checks all maintained Python code and runs the unit tests for every pull request and push to main.
+Follow the repository's [Python code style](docs/development.md#code-style). CI runs `Checks` for pull requests to `main` and pushes to `main`, covering lint, formatting, and unit tests.
 
-Run the affected virtual-system suite when changing process startup, scheduling, HCI, RF behavior, platform configuration, or test Applications. For example:
+Run the affected integration tests when changing process startup, scheduling, HCI, RF behavior, platform configuration, or test applications. With the integration environment prepared, run the suite from the repository root.
 
 ```sh
 pytest tests/integration -n auto
 ```
 
-Use the full suite when the change crosses subsystem boundaries:
+For changes that cross subsystem boundaries, run all tests under `tests/`.
 
 ```sh
 pytest tests/ -n auto
@@ -56,38 +60,36 @@ If a required suite cannot be run locally, state that explicitly in the pull req
 
 ## Pull Requests
 
-A pull request should:
+- Explain the problem and why the change is needed.
+- Describe the resulting behavior and any compatibility implications.
+- List the exact validation commands and results.
+- Include matching tests and documentation where applicable.
+- Identify new dependencies, copied code, generated assets, and license implications.
+- Keep credentials, private logs, machine-specific paths, and unrelated binary files out of the pull request.
 
-- explain the problem and why the change is needed;
-- describe the resulting behavior, including compatibility implications;
-- list the exact validation commands and results;
-- include matching tests and documentation where applicable;
-- identify new dependencies, copied code, generated assets, or license implications;
-- avoid credentials, private logs, machine-specific paths, and unrelated binary files.
-
-Review may request that a large change be split into smaller commits. Commit messages should be concise, use the imperative mood, and describe the externally meaningful change rather than the editing process.
+Reviewers may ask you to split large changes into smaller commits. Write concise, imperative commit messages that describe the change and its effect.
 
 ## Developer Certificate of Origin
 
-BSWorld uses the Developer Certificate of Origin 1.1 instead of a separate contributor license agreement. Every commit in a pull request must contain a sign-off line with the contributor's real name and email address:
+BSWorld uses the [Developer Certificate of Origin 1.1](https://developercertificate.org/) for contributor certification. Each pull request commit must carry a `Signed-off-by` line with the contributor's real name and email address.
 
 ```text
 Signed-off-by: Jane Doe <jane@example.com>
 ```
 
-Add it automatically when creating a commit:
+Use `--signoff` to add the line when creating a commit.
 
 ```sh
 git commit --signoff
 ```
 
-To sign an existing local commit, amend it before publishing the pull request:
+To sign an existing local commit, amend it before publishing the pull request.
 
 ```sh
 git commit --amend --signoff --no-edit
 ```
 
-The sign-off certifies your agreement to the following declaration:
+The sign-off certifies your agreement to the declaration below.
 
 ```text
 Developer Certificate of Origin

@@ -2,7 +2,7 @@
 
 The unit suite exercises `src/bsworld` with deterministic fakes for BabbleSim and UML.
 
-| Area | Invariants protected |
+| Tests | Coverage |
 |---|---|
 | `test_topology.py` | BSController allocation and configuration, registration, lifecycle ordering, clock binding, capture placement, and RF endpoint resolution. |
 | `test_interference.py` | Declarative RF input validation, numeric boundaries, window ordering, and defaults. |
@@ -17,14 +17,13 @@ The unit suite exercises `src/bsworld` with deterministic fakes for BabbleSim an
 | `test_plugin.py`, `test_env.py`, `test_deps.py`, `test_log.py` | Pytest identity/configuration, explicit artifact discovery, setup failures, and log routing. |
 | `test_version.py` | Package version from the installed distribution metadata, with a fallback when the metadata is missing. |
 
-## Test design rules
+## Test Design
 
-- Place a test beside the production module whose contract it protects.
+- Group tests by the module they exercise under `src/bsworld`.
 - Check that rejected registration or Guest startup leaves the topology usable. Assert Controller ownership and capture placement after a successful retry.
-- Test one externally meaningful invariant per test; do not assert that obsolete symbols or unused keyword arguments are absent.
-- Prefer small deterministic fakes at process, clock, and RF boundaries. Do not start a native PHY in this suite.
-- Compute expected protocol/file values independently of the implementation where practical.
-- Add a regression test only when it would fail for a plausible defect in core behavior, validation, or cleanup.
+- Assert one observable behavior per test.
+- Use small deterministic fakes at the process, clock, and RF boundaries. Tests that start a native PHY belong in `tests/integration`.
+- Derive expected protocol values and file contents independently of the implementation where practical.
 
 ## Run
 

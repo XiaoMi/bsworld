@@ -2,13 +2,13 @@
 
 English | [简体中文](PROTOCOL.zh-CN.md)
 
-This suite validates BSController HCI commands, events and Link Layer behavior against HCI.TS.p39, LL.TS.p28 and the Bluetooth Core Specification. Its results support development verification and do not constitute Bluetooth SIG qualification.
+This suite checks BSController HCI commands, events, and Link Layer behavior for development verification. The cases draw on HCI.TS.p39, LL.TS.p28, and the Bluetooth Core Specification.
 
 ## Coverage
 
-The suite selects 821 protocol cases: 162 HCI and 659 LL cases across 21 test files. Coverage includes discovery, advertising, connections, timing, packet encoding, frequency hopping, security and data transfer, including privacy, Decision-Based Advertising Filtering (DBAF), BIS broadcasting and synchronized reception.
+The suite covers discovery, advertising, connections, timing, packet encoding, frequency hopping, security, and data transfer. The selected cases include privacy, Decision-Based Advertising Filtering (DBAF), BIS broadcasting, and synchronized reception.
 
-Cases retain their specification identifiers for lookup and selection. The chapter numbers below refer to the test specifications.
+The table lists 821 selected protocol cases across 21 files, with 162 HCI cases and 659 LL cases. Find and select cases by their test specification identifiers.
 
 | Directory | Source Chapter | Test File | Selected Cases |
 |---|---|---|---:|
@@ -34,11 +34,11 @@ Cases retain their specification identifiers for lookup and selection. The chapt
 | `ll/` | 4.11 Broadcast Isochronous Streams | [broadcast_isochronous_test.py](ll/broadcast_isochronous_test.py) | 28 |
 | `ll/` | 4.12 Isochronous Testing | [isochronous_testing_test.py](ll/isochronous_testing_test.py) | 2 |
 
-Coverage is limited to these selected cases and does not imply complete HCI.TS, LL.TS or Core coverage. The cases that can run also depend on Controller capabilities and the test environment.
-
 ## Running tests
 
-Prepare the environment as described in the [test README](../README.md#run). Run these commands from `components/bscontroller`; RF cases require a working BabbleSim PHY.
+Run these commands from `components/bscontroller`. To configure the BabbleSim PHY required by RF cases, follow the [test setup instructions](../README.md#run).
+
+Running `tests/qualification` also includes four [lower-tester regression checks](peer_test.py).
 
 ```sh
 # Run all protocol cases.
@@ -51,34 +51,34 @@ python -m pytest tests/qualification/hci -n auto --dist worksteal -v -rs
 python -m pytest tests/qualification -k 'LL/DDI/SCN/BV-88-C' -v -rs
 ```
 
-Use `-n 4` to select a fixed worker count. Environment setup and parallel execution guidance are in the [test README](../README.md#parallel-execution).
+Use `-n 4` for a fixed worker count. For worker setup and output isolation, see the [parallel execution guide](../README.md#parallel-execution).
 
 ## Interpreting results
 
-A pytest `passed` result means the executed assertions passed. Consult the case's `protocol.log` for its protocol verdict and any limitations.
+A pytest `passed` result means the executed assertions passed. A selected procedure that completes records its protocol verdict and any limitations in `protocol.log`. Pytest reports failures and skips.
 
 | Result | Meaning |
 |---|---|
-| `PASS` | The checks passed without a declared timing-precision or source-description limitation. |
-| `PARTIAL` | The executed checks passed with a timing-precision or source-description limitation; assess the result alongside the case description. |
-| `FAILED` | Execution or a check failed; inspect the assertion, protocol log and relevant packets. |
-| `SKIPPED` | The case did not run or complete and cannot count as a protocol pass; consult the pytest skip reason. |
+| `PASS` | The checks passed with no timing or source limitation declared. |
+| `PARTIAL` | The executed checks passed with a declared limitation. Read the case description to assess the result. |
+| `FAILED` | A check or execution failed. Inspect the pytest failure, any protocol log, and relevant packets. |
+| `SKIPPED` | The procedure did not run or did not complete. The reason appears in the pytest report. |
 
-`PARTIAL` corresponds to the following markers; a case can have both:
+A successful procedure reports `PARTIAL` when it carries either of these markers. Some cases carry both.
 
-- `limited`: a requirement involves sub-microsecond timing, while the test uses 1-us timestamp resolution.
-- `source_conflict`: interpretation of the source steps, branches or expected outcome remains limited; see the case description for its effect.
+- `limited` marks sub-microsecond timing requirements that the test approximates at 1 µs resolution.
+- `source_conflict` marks unresolved steps, branches, or verdict requirements in the source. The case description explains their effect.
 
-RF cases skip when BabbleSim is not configured, so check both the execution count and skip reasons.
+Controller capabilities and the test environment affect which cases run. RF cases skip when `BSIM_OUT_PATH` is unset. Check the executed case count and skip reasons when reading the results.
 
 ## Logs and limitations
 
-Each case's pytest temporary directory contains `protocol.log`, recording its identifier, description, parameters and protocol verdict. RF cases also provide an HCI capture and Controller/PHY logs. Use pytest's `--basetemp` option to select an output directory.
+Once a selected procedure starts, `protocol.log` records its identifier, description, parameters, and trace. RF cases that start the PHY can also produce `hci.snoop`, `controller.log`, and `phy.log`.
 
-For a failed or partial result, locate the log by case identifier, then consult the case's steps, expected outcome and `Reference`. Necessary specification interpretations are recorded in `Source Correction`.
+Find these files in the per-case pytest temporary directory. Use `--basetemp` to choose its root.
 
-RF cases run in the BabbleSim simulation environment. Interpret timing results at the precision declared in the case description.
+For a failed or partial result, look up the case by identifier and compare its log with the steps, expected result, and `Reference` in the case description. Consult `Source Correction` for any documented interpretation of the test specification. Use the timing precision stated in the case to interpret RF results.
 
 ## License
 
-Copyright 2026 Xiaomi Corporation. Licensed under Apache License 2.0; see [LICENSE](../../LICENSE).
+Copyright 2026 Xiaomi Corporation. Licensed under the [Apache License 2.0](../../LICENSE).

@@ -2,17 +2,17 @@
 
 [English](../artifacts.md) | [简体中文](artifacts.md)
 
-BSWorld 会为每个测试保存框架日志、业务程序日志、HCI 抓包和 RF 空口跟踪文件。这些文件不仅用于查看测试输出，也用于把一次失败还原到业务程序、Host、Controller 和无线链路中的具体位置。
+BSWorld 按用例保存测试产物，便于从 Guest 控制台沿 HCI 和仿真空口定位故障。
 
 ## 输出目录与测试隔离
 
-测试会话启动时，框架会打印本次运行的输出目录：
+测试会话启动时，BSWorld 会打印本次运行的输出目录。
 
 ```text
 [bsworld] log dir: /tmp/run-<timestamp>/<uid>
 ```
 
-默认根目录是 `/tmp`。可以通过命令行参数或环境变量修改：
+输出根目录默认为 `/tmp`，可通过 `--out-dir` 或 `OUT_DIR` 指定。
 
 ```sh
 pytest tests/ --out-dir=/path/to/artifacts
@@ -21,19 +21,19 @@ OUT_DIR=/path/to/artifacts pytest tests/
 
 相对输出目录会在子进程启动前解析为绝对路径，因此子进程切换工作目录后仍能读取 PHY 输入文件。
 
-框架会在指定根目录下继续创建 `run-<timestamp>/<uid>`。同一次 pytest 会话中的 [pytest-xdist](https://pytest-xdist.readthedocs.io/) worker 共享这个会话目录，但每个测试按照 pytest node ID 写入独立子目录，因此并行测试不会覆盖彼此的日志、socket 或抓包文件。
+BSWorld 在输出根目录下创建 `run-<timestamp>/<uid>`。同一次 pytest-xdist 会话的 worker 共用这个目录。各用例根据自己的 pytest node ID 将日志和抓包写入独立子目录。
 
 ## Docker 与 CI 结果
 
-[Docker 命令](../../docker/README.zh-CN.md#运行测试)将主机的 `.cache/docker-results` 挂载到容器的 `/output`。镜像默认命令在其中保存 `pytest.xml`，各测试的日志和抓包文件保存在同级的 `run-<timestamp>/<uid>` 目录下。
+Docker 默认命令将 `pytest.xml` 和 `run-<timestamp>/<uid>` 目录写到容器的 `/output`。若要在主机上保留这些产物，将主机的 `.cache/docker-results` 挂载到 `/output`。挂载方法见 [Docker 测试命令](../../docker/README.zh-CN.md#运行测试)。
 
-GitHub Actions 的 `CI` 工作流并行运行 `Checks`、`BSController` 和 `UML`。`UML` 使用统一镜像运行 Guest 和 BabbleSim 集成测试，并将测试报告、日志、抓包和镜像信息上传到 `bsworld-results-uml-<run-id>-<attempt>`，保留 14 天。
+需要验证特定源码提交或发行版时，按 [Docker 镜像版本说明](../../docker/README.zh-CN.md#选择版本)选择对应标签。
 
-通过 `latest`、源码提交或 Release tag 选择镜像，见 [Docker 使用说明](../../docker/README.zh-CN.md#选择版本)。
+CI 的 UML 作业在同一个镜像中运行 Guest 和 BabbleSim 集成测试。测试报告、日志、抓包和镜像信息上传到 `bsworld-results-uml-<run-id>-<attempt>`，保留 14 天。
 
 ## 目录结构
 
-Bumble 扫描 NuttX Guest 广播时的输出目录如下。
+以 Bumble 扫描 NuttX 广播的用例为例，产物目录如下。
 
 ```text
 /tmp/run-<timestamp>/<uid>/log/tests/integration/uml/nuttx/
@@ -53,93 +53,78 @@ Bumble 扫描 NuttX Guest 广播时的输出目录如下。
 
 | 文件 | 生成者 | 主要内容 |
 |---|---|---|
-| `bsworld.log` | BSWorld | 进程命令、工作目录、PID、socket 与设备锁就绪状态、清理过程、Ellisys 转换命令和框架告警。 |
+| `bsworld.log` | BSWorld | 拓扑启动、清理过程和告警。 |
 | `babblesim/bs_2G4_phy_v1.log` | BabbleSim PHY | PHY 进程的标准输出和标准错误。正常运行时可能为空。 |
-| `<业务程序>/<名称>.log` | 业务程序 | 业务程序合并后的标准输出和标准错误，也是 `wait_log()` 的数据来源。 |
-| `<业务程序>/hciN.snoop` | Controller BTSnoop 文件 | Host 与对应虚拟 Controller 之间的 HCI 命令、事件和 ACL 数据。 |
-| `babblesim/ellisys.bttrp` | BSWorld Python 转换工具 | 同一个 PHY 中所有虚拟设备的 Bluetooth LE 空口交互。 |
+| `uml/<label>/<label>.log` | UML Guest | 控制台的标准输出和标准错误。测试可指定其他日志目录。 |
+| `hciN.snoop` | BSController | Host 与 Controller 之间的 H4 报文。 |
+| `babblesim/ellisys.bttrp` | BSWorld | 由 PHY 导出并按时间排序的 Bluetooth LE 发送记录。 |
 | `babblesim/att_matrix.txt` | BSWorld | 本测试实际传给 `multiatt` 信道模型的静态路径衰减矩阵。 |
 | `babblesim/timed_att_*.txt` | BSWorld | 时变路径的时间点和衰减值。 |
 
-`bsworld.log` 中方括号开头的时间是 Linux 墙钟时间，用于判断进程启动和清理在主机上花费了多久。业务程序日志中的仿真时间戳由对应运行环境生成，表示离散仿真时间。两者用途不同，不应直接相减来计算协议时延。
+`bsworld.log` 使用主机的墙钟时间，可用于分析启动和清理耗时。测量协议时序时，使用同一仿真时钟的时间戳，例如 HCI 抓包中的时间戳。
 
 ## 业务程序日志与 `wait_log()`
 
-每个业务程序的标准输出和标准错误都写入其 `.log` 文件，并以完整行的形式提供给 `UmlGuest.wait_log()` 使用。
+BSWorld 将 Guest 控制台输出写入 `.log` 文件。测试通过 `UmlGuest.wait_log()` 匹配日志。
 
 ```python
 await device.wait_log(r"Bluetooth initialized", timeout=30)
 ```
 
-`wait_log()` 有以下语义：
+`wait_log()` 按到达顺序对完整行做正则匹配。每次调用会消耗已扫描的行。调用前到达且尚未扫描的日志仍可匹配。未收到换行符的内容会先写入文件，形成完整行后才参与匹配。
 
-- 使用正则表达式逐行匹配。
-- `timeout` 使用当前 event loop 的时间；拓扑启动完成后，它表示仿真时间，而不是墙钟时间。
-- 已经到达 FIFO、但尚未被前一次等待消费的完整行仍然可以匹配，因此调用 `wait_log()` 前输出的日志不会自然丢失。
-- 后续等待不能再次匹配已经被前一次等待越过的行。
-- 没有换行符的末尾片段会立即写入 `.log` 文件，但只有收到换行符、形成完整一行后才会参与匹配。
+拓扑启动完成后，`timeout` 以仿真时间计算。
 
-运行过程中可以直接查看业务程序日志：
+将 `TEST_LOG_DIR` 设为上例中该用例的输出目录，即可实时查看 NuttX 控制台。
 
 ```sh
-tail -f /tmp/run-<timestamp>/<uid>/log/tests/.../nuttx.log
+tail -f "${TEST_LOG_DIR:?}/uml/nuttx/nuttx.log"
 ```
 
 ## 框架日志
 
-每个测试只有一个 `bsworld.log`。它从 `topo.start()` 开始记录该测试的框架活动，重点包括：
+从 `topo.start()` 开始，BSWorld 将下列信息写入 `bsworld.log`。
 
 - BabbleSim 实例标识和设备数量。
 - PHY 和 UML Guest 的启动命令。
 - 每个进程的工作目录、日志路径和 PID。
-- Controller HCI socket 和 BabbleSim 设备锁的启动屏障。
-- teardown 时仍在运行的进程及其清理顺序。
+- Controller HCI socket 和 BabbleSim 设备锁的就绪状态。
+- 清理阶段仍在运行的进程及停止顺序。
 - Ellisys 转换使用的输入文件和输出位置。
 
-如果进程在 teardown 前以非零状态退出，框架会在这里记录告警，并附上该进程日志的末尾内容。
+受管理的进程在清理前以非零状态退出时，BSWorld 会记录退出状态和该进程的最后几行输出。
 
 ## HCI BTSnoop 抓包
 
-每个 Controller 在自身收发边界记录 HCI 报文，时间戳采用仿真时间。文件保持 BTSnoop v1、H4 链路类型 1002、完整报文长度和方向标记。
+每个 Controller 记录收发的 HCI 报文，使用仿真时间戳。抓包采用 BTSnoop v1 格式和 H4 链路类型 1002，记录完整报文长度和方向。
 
-可以使用 [Wireshark](https://www.wireshark.org/) 或 `btmon` 查看：
+将 `TEST_LOG_DIR` 设为上例的用例目录后，可用 `btmon` 或 [Wireshark](https://www.wireshark.org/) 打开 Bumble 抓包。
 
 ```sh
-wireshark /tmp/run-<timestamp>/<uid>/log/tests/.../hci1.snoop
-btmon -r /tmp/run-<timestamp>/<uid>/log/tests/.../hci1.snoop
+wireshark "${TEST_LOG_DIR:?}/bumble/scanner/hci1.snoop"
+btmon -r "${TEST_LOG_DIR:?}/bumble/scanner/hci1.snoop"
 ```
 
-与业务程序绑定的 Controller 将抓包写入业务程序目录，其他 Controller 默认写入 `controllers/hciN/`。PHY 上的无线交互记录在共享的 `ellisys.bttrp` 中。
+Controller 默认将抓包写入 `controllers/hciN/`。添加 Controller 时可通过 `log_subdir` 将抓包与 Guest 或 Bumble 的产物放在一起。
 
 ## Ellisys 空口跟踪文件
 
-BabbleSim PHY 会在运行过程中生成每个 RF 设备的 CSV dump。teardown 阶段，BSWorld 在 Python 进程内转换并合并发送记录，生成 `babblesim/ellisys.bttrp`，然后删除临时 BabbleSim state、socket 和原始 results 目录。
+BSWorld 启动仿真时启用 PHY 的设备级 CSV 导出功能。清理时将已有的发送记录合并到 `babblesim/ellisys.bttrp`。
 
-在 [Ellisys](https://www.ellisys.com/products/bex400/) 软件中打开跟踪文件：选择 **File > Import**，选择 **Bluetooth packets**，点击 **Next**，再点击 **Browse** 并选择测试目录中的 `ellisys.bttrp` 文件。
+在 [Ellisys](https://www.ellisys.com/products/bex400/) 中选择 **File > Import** 和 **Bluetooth packets**，再通过 **Next** 和 **Browse** 打开 `ellisys.bttrp`。
 
 <p align="center">
   <img src="../images/ellisys-trace-import.gif" alt="导入 BSWorld Ellisys 跟踪文件" width="760">
-  <br>
-  <sub>将 <code>babblesim/ellisys.bttrp</code> 导入 Ellisys，用于查看 Bluetooth LE 空口报文。</sub>
 </p>
 
-`.bttrp` 展示的是 PHY 侧空口活动，适合判断：
-
-- 广播或连接数据是否真正发送。
-- 接收方所在信道和时间是否匹配。
-- 路径衰减或干扰是否导致丢包。
-- 多个设备的无线事件是否发生碰撞。
-
-PHY dump 与 Ellisys 转换默认始终开启。
+跟踪文件可用于检查已发送的报文、发送信道和时间，以及多个报文的发送时间是否重叠。文件取自发送记录，使用固定的 RSSI。排查接收失败时，应结合接收端的 HCI 抓包和测试配置中的衰减与干扰设置。
 
 ## 失败排查顺序
 
-建议按照数据路径从上到下排查：
+1. 在 `bsworld.log` 中检查启动命令、HCI socket 和设备锁的就绪状态，以及是否有进程提前退出。
+2. 在 Guest 控制台日志中查看程序最后报告的状态，确认 `wait_log()` 等待的日志行是否出现。
+3. 在 `hciN.snoop` 中检查预期的 Host 命令和 Controller 事件。
+4. 在 `ellisys.bttrp` 中检查预期报文及其发送时间。
+5. 无线路径不符合预期时，对照生成的 `att_matrix.txt` 和 `timed_att_*.txt` 检查设备编号、方向和生效时间。
 
-1. 查看 `bsworld.log`，确认所有进程命令、HCI socket 和设备锁是否正常，是否有进程提前退出。
-2. 查看业务程序日志，确认业务状态机停在哪一步，以及 `wait_log()` 等待的文本是否真实出现。
-3. 查看 `hciN.snoop`，确认 Host 是否发送预期命令、Controller 是否返回预期事件。
-4. 查看 `ellisys.bttrp`，确认报文是否进入 RF 环境，以及接收失败是否来自衰减、干扰或碰撞。
-5. RF 场景不符合预期时，对照 `att_matrix.txt` 和 `timed_att_*.txt` 检查实际设备编号、方向和生效时间。
-
-这些文件在测试结束后保留在输出目录中。BSWorld 只删除 `/tmp/bs_*` 下的运行时 socket/state 和 BabbleSim 原始 results，不会自动删除每个测试的日志与抓包。
+BSWorld 在输出目录中保留每个用例的产物，并在清理时删除临时 BabbleSim 状态、socket 和原始结果。

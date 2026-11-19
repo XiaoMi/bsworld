@@ -35,7 +35,9 @@ This Code of Conduct applies to project repositories, issues, pull requests, rev
 
 Report abusive, harassing, or otherwise unacceptable behavior privately by emailing [menglingao@xiaomi.com](mailto:menglingao@xiaomi.com). Do not open a public issue containing personal or sensitive details.
 
-Project maintainers will review reports fairly, protect the privacy and safety of reporters, and take action appropriate to the circumstances. Maintainers may edit or remove comments, commits, code, issues, and other contributions that violate this policy. Depending on the severity and history of the behavior, consequences may include a private correction, formal warning, temporary restriction, or permanent removal from project spaces.
+Project maintainers will review reports fairly, protect the privacy and safety of reporters, and take action appropriate to the circumstances.
+
+Maintainers may edit or remove comments, commits, code, issues, and other contributions that violate this policy. Depending on the severity and history of the behavior, consequences may include a private correction, formal warning, temporary restriction, or permanent removal from project spaces.
 
 Anyone responsible for handling a report must disclose a conflict of interest and withdraw from that case. Retaliation against a person who reports an incident or participates in an investigation is itself a violation of this Code of Conduct.
 

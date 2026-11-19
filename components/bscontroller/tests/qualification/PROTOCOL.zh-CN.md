@@ -2,13 +2,13 @@
 
 [English](PROTOCOL.md) | 简体中文
 
-本测试套件用于验证 BSController 的 HCI 命令、事件和链路层协议行为，参考 HCI.TS.p39、LL.TS.p28 及蓝牙核心规范。测试结果用于开发验证，不代表 Bluetooth SIG 资格认证。
+本套件用于开发验证，检查 BSController 的 HCI 命令、事件及链路层行为。用例依据 HCI.TS.p39、LL.TS.p28 和蓝牙核心规范编写。
 
 ## 测试范围
 
-当前选取 821 个协议用例：162 个 HCI 用例、659 个 LL 用例，分布在 21 个测试文件中。覆盖设备发现、广播、连接、定时、报文编码、跳频、安全及数据传输，也包含隐私、基于决策的广播过滤（DBAF）、BIS 广播和同步接收。
+测试覆盖设备发现、广播、连接、定时、报文编码、跳频、安全和数据传输。选取的用例也覆盖隐私、基于决策的广播过滤（DBAF）、BIS 广播和同步接收。
 
-用例保留测试规范中的编号，可按编号查找和运行。下表的章节号对应测试规范章节。
+下表按测试规范章节列出 21 个文件中的 821 个协议用例，其中 HCI 162 个、LL 659 个。可按测试规范编号查找和运行用例。
 
 | 目录 | 来源章节 | 测试文件 | 选取用例数 |
 |---|---|---|---:|
@@ -34,11 +34,11 @@
 | `ll/` | 4.11 Broadcast Isochronous Streams | [broadcast_isochronous_test.py](ll/broadcast_isochronous_test.py) | 28 |
 | `ll/` | 4.12 Isochronous Testing | [isochronous_testing_test.py](ll/isochronous_testing_test.py) | 2 |
 
-本套件覆盖上述选取用例，不表示对 HCI.TS、LL.TS 或蓝牙核心规范的完整覆盖。实际执行范围还取决于被测 Controller 的能力和测试环境。
-
 ## 运行测试
 
-先按[测试 README](../README.zh-CN.md#运行)准备环境。以下命令在 `components/bscontroller` 目录执行；射频用例需要可用的 BabbleSim PHY。
+在 `components/bscontroller` 目录运行以下命令。射频用例需要可用的 BabbleSim PHY，配置步骤见[测试环境说明](../README.zh-CN.md#运行)。
+
+运行 `tests/qualification` 目录也会执行 4 项 [Lower Tester 回归测试](peer_test.py)。
 
 ```sh
 # 运行全部协议用例。
@@ -51,34 +51,34 @@ python -m pytest tests/qualification/hci -n auto --dist worksteal -v -rs
 python -m pytest tests/qualification -k 'LL/DDI/SCN/BV-88-C' -v -rs
 ```
 
-使用 `-n 4` 可指定并行数量。环境配置和并行运行注意事项见[测试 README](../README.zh-CN.md#并行执行)。
+使用 `-n 4` 可指定 worker 数量。worker 配置及输出目录隔离见[并行执行说明](../README.zh-CN.md#并行执行)。
 
 ## 理解测试结果
 
-pytest 的 `passed` 表示用例执行的断言通过；协议裁决及其限制以该用例的 `protocol.log` 为准。
+pytest 的 `passed` 表示已执行的断言通过。选取的协议用例执行完成后，会把协议裁决和限制写入 `protocol.log`。失败和跳过状态由 pytest 报告。
 
 | 结果 | 含义 |
 |---|---|
-| `PASS` | 用例检查通过，未标记精度或规范描述方面的限制。 |
-| `PARTIAL` | 已执行的检查通过，但存在时间精度或规范描述方面的限制，需结合用例说明评估。 |
-| `FAILED` | 执行或检查失败，需要查看失败断言、协议日志和相关报文。 |
-| `SKIPPED` | 用例未执行或未完成，不能计为协议通过；原因见 pytest 的跳过说明。 |
+| `PASS` | 检查通过，用例未声明时间精度或规范描述方面的限制。 |
+| `PARTIAL` | 已执行的检查通过，存在声明的限制。需结合用例说明评估。 |
+| `FAILED` | 执行或检查失败。查看 pytest 的失败信息、已生成的协议日志和相关报文。 |
+| `SKIPPED` | 用例未执行或未完成。原因见 pytest 报告。 |
 
-`PARTIAL` 对应以下标记，用例可能同时具有两者：
+通过的用例带有以下任一标记时，协议裁决为 `PARTIAL`。用例可以同时带有两种标记。
 
-- `limited`：涉及亚微秒级要求，测试采用 1 微秒时间分辨率，结果带有精度限制。
-- `source_conflict`：测试规范的步骤、分支或预期结果仍存在解释限制；具体影响见用例说明。
+- `limited` 标记需要亚微秒级时间精度的用例。测试以 1 微秒分辨率近似检查。
+- `source_conflict` 标记测试规范中尚未明确的步骤、分支或裁决要求。具体影响见用例说明。
 
-未配置 BabbleSim 时，射频用例会跳过，因此应同时检查执行数量和跳过原因。
+实际执行范围取决于 Controller 能力和测试环境。未设置 `BSIM_OUT_PATH` 时，射频用例会跳过。查看结果时，同时核对执行数量和跳过原因。
 
 ## 查看日志与限制
 
-每个用例的 pytest 临时目录中保存 `protocol.log`，记录用例编号、测试说明、参数和协议裁决。射频用例还提供 HCI 抓包及 Controller、PHY 日志。可通过 pytest 的 `--basetemp` 选项指定输出目录。
+选取的协议用例开始执行后，`protocol.log` 会记录用例编号、说明、参数和执行过程。启动了 PHY 的射频用例也可生成 `hci.snoop`、`controller.log` 和 `phy.log`。
 
-分析失败或部分通过结果时，先按用例编号定位日志，再查看测试说明中的步骤、预期结果和 `Reference`。必要的规范解释记录在 `Source Correction` 中。
+这些文件位于用例的 pytest 临时目录。可通过 `--basetemp` 指定其根目录。
 
-射频用例运行于 BabbleSim 仿真环境，时间相关结果按用例说明中声明的精度解释。
+排查失败或部分通过时，按用例编号找到日志，对照用例说明中的步骤、预期结果和 `Reference`。测试对规范的解释记录在 `Source Correction` 中。按用例声明的时间精度分析射频结果。
 
 ## 许可证
 
-版权所有 2026 Xiaomi Corporation。基于 Apache License 2.0 许可；参见 [LICENSE](../../LICENSE)。
+版权所有 2026 Xiaomi Corporation。采用 [Apache License 2.0](../../LICENSE)。

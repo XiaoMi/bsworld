@@ -1,12 +1,12 @@
 # BSWorld UML Test Image
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+English | [简体中文](README.zh-CN.md)
 
-`ghcr.io/xiaomi/bsworld-linux` includes BSWorld, BabbleSim, and the 32-bit UML Guest environment. The Guest root filesystem includes Ubuntu's i386 BlueZ and D-Bus and the Zephyr, NuttX and NimBLE Host applications. Use a Linux/x86_64 host with [Docker Engine](https://docs.docker.com/engine/install/ubuntu/). See the [UML integration guide](../tests/integration/uml/README.md).
+`ghcr.io/xiaomi/bsworld-linux` packages BSWorld, BabbleSim, and the 32-bit UML test environment. The Guest root filesystem contains Ubuntu's i386 BlueZ and D-Bus packages and the Zephyr, NuttX, and NimBLE executables. For Guest setup and suite details, see the [UML test environment guide](../tests/integration/uml/README.md).
 
 ## Use a Published Image
 
-Run the image's integration tests from the repository root. Pass the [UML seccomp profile](uml-seccomp.json) when Docker runs a suite that boots UML Guests.
+Install [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) on a Linux/x86_64 host. From the repository root, run the integration tests with the [UML seccomp profile](uml-seccomp.json).
 
 ```sh
 sudo docker pull ghcr.io/xiaomi/bsworld-linux:latest
@@ -19,11 +19,11 @@ sudo docker run --rm \
   ghcr.io/xiaomi/bsworld-linux:latest
 ```
 
-The default command runs the integration suites in parallel and requires all selected tests to run. Results go to `.cache/docker-results`, with `pytest.xml` as the report. See [test artifacts](../docs/artifacts.md).
+The default command runs the integration suites in parallel and fails if a selected test is skipped.
+
+Find `pytest.xml`, logs, and captures under `.cache/docker-results`. For the directory layout, see [Test artifacts](../docs/artifacts.md).
 
 ### Select a Version
-
-Replace `latest` with a commit or Release tag to run another version:
 
 | Version | Image tag |
 |---|---|
@@ -31,9 +31,9 @@ Replace `latest` with a commit or Release tag to run another version:
 | Full commit ID | `sha-<40-character-commit>` |
 | Release tag | `v<version>`, e.g. `v1.1.5` |
 
-CI publishes `sha-<commit>` and `latest` once the tests pass on main. A release tags its commit image with the Release tag.
+CI publishes `sha-<commit>` for each tested main commit. It updates `latest` when that commit is still the tip of main. A release adds its Git tag to the tested image for that commit.
 
-Image for the current checkout:
+Pull the tested image for the current checkout.
 
 ```sh
 SOURCE_COMMIT="$(git rev-parse HEAD)"
@@ -42,7 +42,7 @@ sudo docker pull "ghcr.io/xiaomi/bsworld-linux:sha-$SOURCE_COMMIT"
 
 ## Run Tests
 
-Mount your checkout at `/workspace` from the repository root. Use the published image for the checkout's commit if available, or build an image with the matching Guest filesystem and firmware.
+To test your checkout, mount it at `/workspace` and use the image for the same commit. Run the command from the repository root.
 
 ```sh
 TEST_IMAGE="ghcr.io/xiaomi/bsworld-linux:sha-$(git rev-parse HEAD)"
@@ -57,11 +57,11 @@ sudo docker run --rm \
     --out-dir /output --junitxml=/output/pytest.xml
 ```
 
-After changing firmware, its build inputs or a Dockerfile, [build the image](#build) and set `TEST_IMAGE=bsworld-linux:dev`. The pull request's CI builds an image from the change.
+If you change the Guest executables, their build inputs, or the Dockerfile, [build a local image](#build) and set `TEST_IMAGE=bsworld-linux:dev`.
 
 ### Select a Suite
 
-Use the same image when running a single suite. `--require-integration` fails the run if a selected integration test is skipped.
+Select a suite by passing its directory to pytest. `--require-integration` fails the run if any selected integration test is skipped.
 
 ```sh
 sudo docker run --rm \
@@ -82,7 +82,7 @@ sudo docker run --rm \
   ghcr.io/xiaomi/bsworld-linux:latest pytest tests/unit -q -p no:cacheprovider
 ```
 
-Ruff:
+Check the code with Ruff.
 
 ```sh
 sudo docker run --rm \
@@ -92,18 +92,14 @@ sudo docker run --rm \
 
 ## Build
 
-Run the build from the repository root.
-
-Build the UML image with [docker-bake.hcl](docker-bake.hcl).
+Run Buildx Bake from the repository root. `BUILD_UID` and `BUILD_GID` set the image user's IDs. `BUILD_JOBS` controls build parallelism. For the build settings, see the [Bake configuration](docker-bake.hcl).
 
 ```sh
 sudo BUILD_UID="$(id -u)" BUILD_GID="$(id -g)" BUILD_JOBS=4 \
   docker buildx bake -f docker/docker-bake.hcl --load
 ```
 
-The image is tagged `bsworld-linux:dev`. `BUILD_JOBS` sets the compile parallelism.
-
-Run the local image:
+The build tags the image `bsworld-linux:dev`. Run its default integration suites with the following command.
 
 ```sh
 mkdir -p .cache/docker-results
@@ -115,4 +111,4 @@ sudo docker run --rm \
   bsworld-linux:dev
 ```
 
-`BSWORLD_VERSION` defaults to `0+local`. CI sets it from Git. Use `bsworld-linux:dev` in place of the published image in the [test commands](#run-tests).
+Set `BSWORLD_VERSION` to override the package version. Local builds default to `0+local`, and CI derives the version from Git.

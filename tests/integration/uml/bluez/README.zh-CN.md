@@ -2,20 +2,32 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-在 [UML Guest](../README.zh-CN.md) 中运行 Ubuntu i386 软件包中的 `bluetoothd`、`bluetoothctl` 和 `btattach`。每个 Guest 启动自己的 D-Bus 和 `bluetoothd`，[main.conf](main.conf) 安装在 `/opt/bsworld/bluez.conf`。
+测试通过 `bluetoothctl` 操作 Ubuntu 24.04 的 i386 BlueZ。每个 UML Guest 独立运行 D-Bus 和 `bluetoothd`。
 
-## 构建与运行
+## 运行测试
 
-准备 [UML 测试环境](../README.zh-CN.md#准备环境)，然后在仓库根目录选择 BlueZ 套件。
+按[本地 Linux 指南](../README.zh-CN.md#本地-linux)组装根文件系统后，在仓库根目录安装 `bluetoothd` 启动时读取的测试配置。
 
 ```sh
-docker run --rm --security-opt seccomp=docker/uml-seccomp.json \
-  bsworld-linux:dev pytest tests/integration/uml/bluez -q
+install -Dm644 tests/integration/uml/bluez/main.conf \
+  "${BSWORLD_UML_ROOTFS:?}/opt/bsworld/bluez.conf"
 ```
+
+运行 BlueZ 套件。
+
+```sh
+pytest tests/integration/uml/bluez --require-integration -q
+```
+
+在 Docker 中运行时，通过挂载输出目录保留日志和抓包。命令见[选择测试套件](../../../../docker/README.zh-CN.md#选择测试套件)。
+
+## 测试覆盖
 
 | 测试 | 验证内容 |
 |---|---|
-| `test_uml_bluez_guests_advertise_to_bumble_observer` | 两个 Guest 各自注册并上电 `hci0`，同一个 Bumble Observer 收到两者的广播，名称和地址均正确。 |
+| `test_uml_bluez_guests_advertise_to_bumble_observer` | 两个 Guest 各自注册并启用 `hci0`。同一个 Bumble Observer 收到两者的广播，名称和地址均符合预期。 |
 | `test_uml_bluez_scans_and_connects_bumble_peripheral` | BlueZ 发现 Bumble Peripheral，连接后断开。 |
 
-控制台日志和 HCI 抓包位于 `uml/bluez/`。广播测试为每个 Guest 创建一个子目录。[测试产物](../../../../docs/zh-CH/artifacts.md)
+## 测试产物
+
+各用例将控制台日志和 HCI 抓包写入自己的 `uml/bluez/` 目录。广播用例为每个 Guest 再建一个子目录。完整目录结构见[测试产物说明](../../../../docs/zh-CH/artifacts.md)。

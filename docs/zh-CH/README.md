@@ -8,25 +8,20 @@
 
 </div>
 
-BSWorld 是一个在 Linux 上测试 Bluetooth Host 及其业务程序的确定性仿真框架。pytest 场景负责定义设备拓扑和预期行为；BSWorld 让所有参与者共享 BabbleSim 无线环境与仿真时钟，并归档日志和协议跟踪文件。
+BSWorld 是一个在 Linux 上测试蓝牙 Host 和应用的确定性仿真框架。pytest 用例定义拓扑和预期行为。各 Host 通过 H4 HCI 连接 BSController，在同一个 BabbleSim 无线环境中通信。
 
-使用 BSWorld 可以：
-
-- 测试 Zephyr、NuttX、BlueZ、NimBLE、Bumble 等开源 Host 协议栈，无需修改其源码。
-- 无需硬件，Host 通过标准 H4 HCI 连接 BSController。
-- 保留业务程序日志、HCI BTSnoop、PHY 日志和 Ellisys 跟踪文件定位故障。
-- 每个场景里可以同时仿真多台设备，同一场景重复运行，日志及时序均保持一致，不受主机负载和调度影响。
-- 所有设备共享离散仿真时钟；场景之间相互隔离，结合 pytest-xdist 并行运行，最高可达百倍加速。
-- 注入路径衰减、干扰、WLAN 活动和录制的无线信号。
-
+- 直接测试上游 Host 协议栈，无需蓝牙硬件。
+- 同一场景中的多台设备共享仿真时钟。独立场景可用 pytest-xdist 并行运行。
+- 设置路径衰减，注入干扰或 WLAN 活动，也可以回放录制的无线信号。
+- 通过应用日志、HCI BTSnoop 抓包、PHY 日志和 Ellisys 跟踪文件排查问题。
 
 ## 快速开始
 
-BSWorld 运行于 Linux/x86_64。发布的 Docker 镜像内置 BabbleSim、32 位 UML 内核、Guest 根文件系统及对测所需的可执行文件。本地开发见[本地 Linux](#本地-linux)。
+BSWorld 运行于 Linux/x86_64。
 
 ### Docker
 
-安装 [Docker Engine](https://docs.docker.com/engine/install/ubuntu/)，然后从仓库根目录运行 UML 集成测试。
+Docker 镜像包含 BabbleSim、32 位 UML 内核和 Guest 根文件系统。Host 可执行文件随根文件系统提供。安装 [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) 后，在仓库根目录运行集成测试。
 
 ```sh
 sudo docker pull ghcr.io/xiaomi/bsworld-linux:latest
@@ -39,13 +34,11 @@ sudo docker run --rm \
   ghcr.io/xiaomi/bsworld-linux:latest
 ```
 
-测试结果写入 `.cache/docker-results`，包括 `pytest.xml`、进程日志、HCI 抓包和 RF 跟踪文件。选择套件、镜像版本和本地构建方法见 [Docker 使用说明](../../docker/README.zh-CN.md)。
+测试结果写入 `.cache/docker-results`，包括 `pytest.xml`、进程日志、HCI 抓包和 RF 跟踪文件。测试套件、镜像版本和本地构建方式见 [Docker 使用说明](../../docker/README.zh-CN.md)。
 
 ### 本地 Linux
 
-本地环境用自己的工具编译固件、运行测试，修改后可以增量编译。
-
-开发和测试需要 Python 3.12 或更高版本。在 Ubuntu 24.04 上安装所需工具：
+开发和测试需要 Python 3.12 或更高版本。在 Ubuntu 24.04 上安装以下工具。
 
 ```sh
 sudo apt-get update
@@ -55,7 +48,7 @@ sudo apt-get install -y \
   gcc-multilib g++-multilib coreutils findutils grep sed
 ```
 
-获取并安装 BSWorld：
+克隆 BSWorld 并在虚拟环境中安装。
 
 ```sh
 git clone https://github.com/XiaoMi/bsworld.git
@@ -66,7 +59,7 @@ source .venv/bin/activate
 python -m pip install -e components/bscontroller -e '.[test]'
 ```
 
-运行开发检查：
+运行开发检查。
 
 ```sh
 ruff check .
@@ -76,7 +69,7 @@ pytest tests/unit -q
 
 #### 构建与测试
 
-获取 `components/babblesim.xml` 指定的 BabbleSim 版本：
+获取 `components/babblesim.xml` 固定的 BabbleSim 版本。
 
 ```sh
 mkdir -p "$BSWORLD_ROOT/.cache/babblesim"
@@ -85,7 +78,7 @@ repo init --standalone-manifest --depth=1 -u "file://$BSWORLD_ROOT/components/ba
 repo sync -c --no-tags
 ```
 
-设置输出路径并构建全部组件：
+设置构建路径并编译 BabbleSim。
 
 ```sh
 export BSIM_OUT_PATH="$PWD/build"
@@ -94,56 +87,56 @@ export BSIM_BUILD_FAIL_ASAP=1
 make -j"$(nproc)" everything
 ```
 
-每个新开的、用于构建或运行测试的 shell 都要重新导出 `BSWORLD_ROOT`、`BSIM_OUT_PATH` 和 `BSIM_COMPONENTS_PATH`；没有 `BSIM_OUT_PATH` 时，集成测试会报环境配置错误并停止。
-
-运行 BabbleSim 测试。
+在仓库根目录运行 BabbleSim 集成测试。换用新 shell 时，先激活 `.venv`，并重新导出 `BSWORLD_ROOT` 和 `BSIM_OUT_PATH`。
 
 ```sh
 cd "$BSWORLD_ROOT"
 pytest tests/integration/babblesim -n auto
 ```
 
-准备 32 位 Guest 后可运行全部集成套件，参见 [UML 测试环境](../../tests/integration/uml/README.zh-CN.md)。
+本地运行 Host 集成套件需要 32 位 Guest。准备步骤见 [UML 测试环境](../../tests/integration/uml/README.zh-CN.md)。
 
 ## 支持的集成环境
 
-各 Host 运行在 UML Guest 中，与同一仿真拓扑中的 [Bumble 对测 Host](../../tests/integration/uml/bumble_peer.py) 交互。
+各套件在 UML Guest 中运行对应的 Host，并与同一仿真无线环境中的 Bumble 对测。
 
 | Guest 中的 Host | 测试覆盖 |
 |---|---|
-| BlueZ | 多 Guest 广播、扫描、连接与断开 |
-| Zephyr `native_sim` 蓝牙 shell | 广播与扫描、GATT、配对和隐私、链路更新、周期广播及同步转移 |
-| NuttX `sim` BTSak 与 NimBLE | 广播、多广播端扫描、定向干扰恢复、GATT 读写与通知 |
-| Apache NimBLE Linux | 发现、连接 |
+| [BlueZ](../../tests/integration/uml/bluez/README.zh-CN.md) | 多 Guest 广播、扫描、连接与断开 |
+| [Zephyr 蓝牙 shell](../../tests/integration/uml/zephyr/README.zh-CN.md) | 广播与扫描、GATT、配对和隐私、链路更新、周期广播及同步转移 |
+| [NuttX BTSak 与 NimBLE](../../tests/integration/uml/nuttx/README.zh-CN.md) | 广播、多广播端扫描、定向干扰恢复、GATT 读写与通知 |
+| [Apache NimBLE Linux](../../tests/integration/uml/nimble/README.zh-CN.md) | 发现、连接 |
 
 ## 技术架构
 
-每个 Host 通过 H4 HCI 连接自己的 BSController。Bumble 运行在 pytest event loop 中，UML Guest 分别通过 time-travel socket 从同一个 event loop 获得仿真时间。PHY 设备编号分配给 Controller、pytest 时钟以及显式配置的干扰源。
+每个 Host 通过 H4 HCI 连接自己的 BSController。Controller、pytest 时钟和配置的干扰源共用一个 BabbleSim PHY。
+
+Bumble 运行在 pytest 事件循环中。各 UML Guest 独立运行，通过各自的 time-travel socket 从该循环获取仿真时间。同一拓扑可以同时运行多个 Guest。
 
 <div align="center"><img src="../images/babblesim_arch.svg" alt="蓝牙 Host 通过各自的 BSController worker 连接到共享的 BabbleSim PHY" width="80%"><br><em>图 1：BSWorld 架构</em><br><br></div>
 
-同一拓扑可以包含多个 UML Guest。各 Controller 的设备地址、缓冲区大小和蓝牙版本可以单独设置，详见 [BSController 配置](controllers.md)。
+设备地址、缓冲区大小和蓝牙版本均可按 Controller 单独设置。设置方法见 [BSController 配置](controllers.md)。
 
-HCI 交互保存为 `hciN.snoop`，可使用 Wireshark 等支持 BTSnoop 的工具分析；无线交互保存为 `babblesim/ellisys.bttrp`，可使用 Ellisys 分析。文件位置和排查顺序参见[日志、跟踪文件与抓包](artifacts.md)。
+用 Wireshark 或其他支持 BTSnoop 的工具打开 `hciN.snoop`，用 Ellisys 打开 `babblesim/ellisys.bttrp` 查看空口交互。完整目录结构见[日志、跟踪文件与抓包](artifacts.md)。
 
 ### 离散时间调度
 
 | 时间基准 | 含义 |
 |---|---|
-| **仿真时间** | 决定协议定时器、报文时序、RF 事件、asyncio 等待和测试超时。仅在所有参与者完成同步后推进。 |
-| **墙钟时间** | 表示测试在主机上的实际耗时。CPU 负载和 Linux 调度会影响该耗时，但不会改变协议时序。 |
+| **仿真时间** | 在所有 PHY 参与者同步后推进，决定协议定时器、报文时序、RF 事件、asyncio 等待和测试超时。 |
+| **墙钟时间** | 测试在主机上的实际耗时，随 CPU 负载和 Linux 调度变化。 |
 
-BSController、干扰源与 pytest 时钟注册到同一个 PHY，Guest 由这个时钟调度。无论主机负载如何，`T_IFS = 150 μs` 等协议间隔都保持不变。拓扑启动后，标准 `asyncio` 等待和超时使用仿真时间，参见[异步等待与仿真时间](writing-tests.md#异步等待与仿真时间)。
+拓扑启动后，`asyncio` 的等待和超时使用仿真时间。示例见[异步等待与仿真时间](writing-tests.md#异步等待与仿真时间)。
 
 稳定复现要求二进制和输入保持一致，并控制随机源。外部网络、依赖墙钟的服务和未适配的 Host I/O 仍可能引入非确定性。
 
 ## 文档
 
-- [编写测试和 RF 场景](writing-tests.md)：定义拓扑、接入业务程序、使用 asyncio 等待并配置 RF 条件。
-- [BSController 配置](controllers.md)介绍拓扑 API 和 Controller 参数。
-- [日志、跟踪文件与抓包](artifacts.md)：查找和分析测试产物。
-- [开发检查](development.md)：运行单元测试、静态检查和覆盖率统计。
-- [Docker 使用说明](../../docker/README.zh-CN.md)：运行 UML 镜像、选择测试套件和在本地构建镜像。
+- [编写测试和 RF 场景](writing-tests.md)
+- [分配和配置 BSController](controllers.md)
+- [查找日志、跟踪文件与抓包](artifacts.md)
+- [运行单元测试、代码检查和覆盖率统计](development.md)
+- [构建或运行 Docker 测试镜像](../../docker/README.zh-CN.md)
 
 ## 社区协作
 
@@ -153,4 +146,4 @@ BSController、干扰源与 pytest 时钟注册到同一个 PHY，Guest 由这�
 
 ## 开源协议
 
-BSWorld 使用 [Apache License 2.0](../../LICENSE)。第三方组件继续遵循各自的许可证，详见[第三方声明](THIRD_PARTY_NOTICES.md)。
+BSWorld 使用 [Apache License 2.0](../../LICENSE)。第三方组件的许可证见[第三方声明](THIRD_PARTY_NOTICES.md)。

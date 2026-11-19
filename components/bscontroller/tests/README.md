@@ -2,27 +2,23 @@
 
 English | [简体中文](README.zh-CN.md)
 
-The suites separate implementation invariants from Bluetooth protocol behavior. The [component README](../README.md) documents installation, executable API examples, independent HCI service operation, and distribution builds.
-
-| Directory | Scope | BabbleSim Requirement |
+| Directory | Coverage | Test environment |
 |---|---|---|
-| `unit/` | Controller algorithms, state ownership, scheduler and FIFO/thread/clock boundaries, organized by implementation module. | No native PHY is required. |
-| `qualification/hci/`, `qualification/ll/` | All 821 selected HCI/LL cases, organized by their normative source chapters, with independent lower testers. | Required for RF cases; pure HCI checks run without it. |
+| `unit/` | Controller algorithms, state ownership, scheduling, and FIFO, thread, and clock behavior, grouped by implementation module. | Python test environment. |
+| `qualification/hci/`, `qualification/ll/` | 821 selected HCI and Link Layer cases, grouped by specification chapter and exercised with independent testers. | Python test environment for HCI-only cases, plus BabbleSim for RF cases. |
 
-The [protocol chapter map](qualification/PROTOCOL.md) lists the test files, selected case counts, result meaning, and limits. Each unit test file states its scope in its module docstring, and each test documents its purpose, steps and expected result.
-
-These independently implemented tests do not constitute Bluetooth qualification or imply complete LL.TS/HCI.TS coverage.
+See the [protocol test guide](qualification/PROTOCOL.md) for coverage by chapter, log locations, and how to interpret results.
 
 ## Run
 
-From the RadioController checkout:
+Install the test dependencies as described in [Development](../README.md#development). Run the commands from `components/bscontroller/`.
 
 ```sh
 # Self-contained implementation checks.
 python -m pytest tests/unit/ -n auto --dist worksteal -v
 ```
 
-For RF cases, select a BabbleSim build with the 2G4 v1/v2 FIFO protocols, `BLE_simple` modem and `multiatt` channel model:
+For RF cases, select a BabbleSim build with `bin/bs_2G4_phy_v1`, the 2G4 v1 and v2 FIFO protocols, the `BLE_simple` modem, and the `multiatt` channel model.
 
 ```sh
 export BSIM_OUT_PATH=/path/to/bsim/build
@@ -32,20 +28,16 @@ python -m pytest tests/qualification -n auto --dist worksteal -v -rs
 python -m pytest tests/ -n auto --dist worksteal -v
 ```
 
-Native cases have independent simulation IDs and support pytest-xdist. They skip when `BSIM_OUT_PATH` is unset; a configured path without the PHY executable fails. Unit collection needs no native artifact.
+RF cases skip when `BSIM_OUT_PATH` is unset. If a path is set, the fixture requires an executable `bin/bs_2G4_phy_v1` and fails if it is missing or cannot run.
 
 ## Parallel Execution
 
-```sh
-python -m pip install pytest-xdist
-export BSIM_OUT_PATH=/path/to/bsim/build
-python -m pytest tests/ -n auto --dist worksteal -q -rs
-```
+The `[test]` extra includes pytest-xdist. The commands above use `-n auto` to select the worker count. Use `-n 4` for a fixed count. `--dist worksteal` redistributes pending cases to idle workers.
 
-Each native case owns its PHY process, simulation ID, FIFOs and packet dumps. Worker temporary directories and per-case protocol logs are also separate, so simulations do not interfere through equal RF channels or device addresses. If running multiple pytest invocations with explicit `--basetemp` values, give each invocation its own directory.
+Each RF case has its own PHY process, simulation ID, FIFOs, packet dumps, and protocol logs. Separate simulations can reuse RF channels and device addresses.
 
-`--dist worksteal` redistributes pending cases when workers become idle. A single procedure is not split across workers. Use `-n 4` to choose a fixed worker count. Workers share CPU, memory and storage, so more workers do not guarantee a faster run.
+Give each concurrent pytest invocation a distinct directory if you set `--basetemp` explicitly.
 
 ## License
 
-Copyright 2026 Xiaomi Corporation. The independently written tests are licensed under Apache License 2.0; see the repository [LICENSE](../LICENSE).
+Copyright 2026 Xiaomi Corporation. Apache License 2.0 applies to these tests. See the [component license](../LICENSE).
