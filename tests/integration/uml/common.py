@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING
 from tests.integration.applications import require_artifact
 from tests.integration.uml.timetravel import TimeTravelCalendar
 
-from bsworld.devices import Controller
+from bsworld.devices import BSController
 from bsworld.runtime.pipe import LogCapture
 from bsworld.runtime.shell import ProcessShell
 from bsworld.topology import BluetoothTopology
@@ -70,7 +70,7 @@ class UmlGuest:
     def __init__(
         self,
         topo: BluetoothTopology,
-        controller: Controller,
+        controller: BSController,
         *,
         kernel: Path,
         getrandom_library: Path,
@@ -215,7 +215,7 @@ def _artifacts() -> tuple[Path, Path]:
 
 def add_uml_controller(
     topo: BluetoothTopology, address: str, *, log_subdir: Path
-) -> Controller:
+) -> BSController:
     """Allocate a UML guest's Controller, skipping before startup without one."""
     _artifacts()
     return topo.add_controller(public_address=address, log_subdir=log_subdir)
@@ -224,7 +224,7 @@ def add_uml_controller(
 async def open_uml_guest(
     stack: AsyncExitStack,
     topo: BluetoothTopology,
-    controller: Controller,
+    controller: BSController,
     *,
     label: str,
     log_subdir: Path,

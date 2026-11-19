@@ -2,23 +2,11 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-本组测试让两个 Zephyr Bluetooth shell 互相通信。[conftest.py](conftest.py) 中的 `shell_pair` fixture 让每个场景在五种拓扑和角色组合下运行，并完成两个 shell 的初始化；`shell_trio` 在相同组合上再加一个完整固件 shell。[common.py](common.py) 存放连接、断连和 GATT 通知操作。
-
-| 参数 ID | Peripheral | Central |
-|---|---|---|
-| `full-full` | 完整固件 | 完整固件 |
-| `full-host-zephyr-full-peripheral` | 完整固件 | Host-only + ZephyrController |
-| `full-host-zephyr-full-central` | Host-only + ZephyrController | 完整固件 |
-| `full-host-bscontroller-full-peripheral` | 完整固件 | Host-only + BSController |
-| `full-host-bscontroller-full-central` | Host-only + BSController | 完整固件 |
-
-## 准备环境
-
-按 [Bluetooth shell 构建说明](../README.zh-CN.md#构建与运行)编译两个程序并导出路径。`full-full` 只需要 `BSWORLD_ZEPHYR_FULL_SHELL_BIN`；`full-host-zephyr-*` 用例还需要 Zephyr Controller，未构建时跳过。
+[conftest.py](conftest.py) 中的 fixture 为各 Zephyr Bluetooth shell 启动独立的 BSController。`shell_pair` 提供 Peripheral 和 Central，`shell_trio` 再加入一个周期广播设备。
 
 ## 构建与运行
 
-程序已按 Bluetooth shell 构建说明编译。运行测试：
+按 [Bluetooth shell 构建说明](../README.zh-CN.md#构建与运行)编译 shell，然后运行测试。
 
 ```sh
 cd "$BSWORLD_ROOT"
@@ -26,23 +14,15 @@ source .venv/bin/activate
 pytest tests/integration/zephyr/shell/shell_peer -n auto -q
 ```
 
-用参数 ID 选择拓扑：
-
-```sh
-pytest tests/integration/zephyr/shell/shell_peer -k 'full-full or targeted_interference' -q
-pytest tests/integration/zephyr/shell/shell_peer -k full-host-zephyr -q
-pytest tests/integration/zephyr/shell/shell_peer -k full-host-bscontroller -q
-```
-
-| 文件 | 场景 | 拓扑 |
-|---|---|---|
-| [test_scan.py](test_scan.py) | 被动扫描不可连接广播；主动扫描并收到 SCAN_RSP | 全部五种 |
-| [test_gatt.py](test_gatt.py) | 加密、服务发现、订阅、读取和通知 | 全部五种 |
-| [test_link_updates.py](test_link_updates.py) | PHY、数据长度（双向）、Connection Update、Connection Parameters Request 与 Channel Map 更新，之后发送 200 字节通知 | 全部五种 |
-| [test_coded.py](test_coded.py) | Central 仅在 LE Coded 上发起连接（`coded no-1m`）；Peripheral 发起 PHY 更新 | 全部五种 |
-| [test_privacy.py](test_privacy.py) | 绑定、复用 LTK、Controller 解析 RPA，以及 `dir-rpa` 定向广播 | 全部五种 |
-| [test_sync_transfer.py](test_sync_transfer.py) | 由任一角色发起 Periodic Advertising Sync Transfer：Set Info Transfer 发送本机周期广播，Sync Transfer 转交第三个设备的周期广播 | 全部五种；Sync Transfer 另加一个完整固件设备 |
-| [test_radio.py](test_radio.py) | 定向干扰与恢复 | 三个完整固件设备，不参数化 |
+| 文件 | 场景 |
+|---|---|
+| [test_scan.py](test_scan.py) | 被动扫描不可连接广播，主动扫描并收到 SCAN_RSP |
+| [test_gatt.py](test_gatt.py) | 加密、服务发现、订阅、读取和通知 |
+| [test_link_updates.py](test_link_updates.py) | PHY、数据长度（双向）、Connection Update、Connection Parameters Request 与 Channel Map 更新，之后发送 200 字节通知 |
+| [test_coded.py](test_coded.py) | LE Coded 连接（`coded no-1m`）和 Peripheral 发起 PHY 更新 |
+| [test_privacy.py](test_privacy.py) | 绑定、复用 LTK、Controller 解析 RPA，以及 `dir-rpa` 定向广播 |
+| [test_sync_transfer.py](test_sync_transfer.py) | 由任一角色发起 Periodic Advertising Set Info Transfer 和 Sync Transfer |
+| [test_radio.py](test_radio.py) | 一个广播设备与两个扫描设备之间的定向干扰与恢复 |
 
 ## 添加场景
 
@@ -57,7 +37,7 @@ async def test_reconnects(shell_pair):
         await disconnect(peripheral, central)
 ```
 
-`shell_pair` 以 `(peripheral, central)` 返回已启动并初始化的 shell，同一场景只写一次即可在全部拓扑中运行。`connect()` 默认让 Peripheral 用 identity 地址广播，并返回 Peripheral 侧报告的 Central 地址。每个功能新建一个文件，并加入上表。
+`connect()` 默认让 Peripheral 用 identity 地址广播，并返回 Peripheral 报告的 Central 地址。共用的 shell 操作见 [common.py](common.py)。
 
 ## 许可证
 

@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-These tests run the stock NuttX `btsak`. Each process connects to its own BSController, the default [Virtual Controller](../../../../docs/controllers.md), and is driven by pytest through shell commands as an advertiser or a scanner.
+These tests run the stock NuttX `btsak`. Each process connects to its own [BSController](../../../../docs/controllers.md), and is driven by pytest through shell commands as an advertiser or a scanner.
 
 | Executable | Upstream configuration | Executable variable |
 |---|---|---|

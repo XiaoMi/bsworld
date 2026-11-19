@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-在 User Mode Linux（UML）中运行 Linux Guest。UML 是编译成普通主机程序的主线 Linux 内核，Guest 运行主机文件系统中的程序。Guest 的 `/dev/ttyS0` 连接到 BSController（默认的[虚拟 Controller](../../../docs/zh-CH/controllers.md)），Guest 时钟通过 UML time-travel 与 BabbleSim 仿真时间同步。
+在 User Mode Linux（UML）中运行 Linux Guest。UML 是编译成普通主机程序的主线 Linux 内核，Guest 运行主机文件系统中的程序。Guest 的 `/dev/ttyS0` 连接到 [BSController](../../../docs/zh-CH/controllers.md)，Guest 时钟通过 UML time-travel 与 BabbleSim 仿真时间同步。
 
 ## 已验证版本
 

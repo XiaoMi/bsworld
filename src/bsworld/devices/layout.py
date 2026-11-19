@@ -22,7 +22,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
-from .controller import Controller
+from .bscontroller import BSController
 
 if TYPE_CHECKING:
     from .instance import ProcessInstance
@@ -40,20 +40,19 @@ class AppSlot:
     sim_id: str
     phy_id: str
     dev_id: int
-    hci_sock: Path | None = None
+    hci_sock: Path
 
 
 @dataclass(frozen=True)
 class DeviceLayout:
     """The dev_id assignment every participant of one simulation shares.
 
-    PHY device ids are laid out in registration order:
+    PHY device ids are laid out as follows:
 
-        [0 .. C-1]      Virtual Controller processes or worker threads
+        [0 .. C-1]      Controller workers, in registration order
         [C .. C+A-1]    HCI Host processes, in their Controllers' order
-        [C+A .. C+A+F-1] complete firmware processes, with their own radios
-        [C+A+F]         the in-process pytest framework clock
-        [C+A+F+1 ..]    interference devices
+        [C+A]           the in-process pytest framework clock
+        [C+A+1 ..]      interference devices
 
     The layout is derived once from a complete topology, so the ids it
     publishes cannot drift apart from the device count given to the PHY.
@@ -83,11 +82,10 @@ class DeviceLayout:
             raise ValueError(f"unknown interference source index: {index}")
         return self.interference_base + index
 
-    def controller_dev_id(self, controller: Controller) -> int:
+    def controller_dev_id(self, controller: BSController) -> int:
         """Resolve a Controller registered with this simulation, by identity.
 
-        Identity rather than its own dev_id, so a Controller belonging to
-        another topology is rejected instead of aliasing onto the same index.
+        Object identity keeps Controller IDs local to this topology.
         """
         dev_id = self.controller_ids.get(id(controller))
         if dev_id is None:
@@ -98,9 +96,7 @@ class DeviceLayout:
         """Map an RF path endpoint declared by a test onto its PHY dev_id.
 
         Accepts a raw dev_id, an InterferenceRef, a Controller, or a registered
-        process. A Host resolves to its Controller's radio; complete firmware
-        to its own. Every id a test can name is assigned here, so the mapping
-        lives with the assignment.
+        process. A Host resolves to its Controller's radio.
         """
         # Imported here because bsworld.interference and .instance depend on
         # this module.
@@ -123,18 +119,15 @@ class DeviceLayout:
             ):
                 raise ValueError(f"unknown interference source ref: {index}")
             return self.interference_base + index
-        if isinstance(endpoint, Controller):
+        if isinstance(endpoint, BSController):
             return self.controller_dev_id(endpoint)
         if not isinstance(endpoint, ProcessInstance):
             raise TypeError(f"unsupported attenuation endpoint: {endpoint!r}")
-        slot = self.application_slots.get(id(endpoint))
-        if slot is None:
+        if id(endpoint) not in self.application_slots:
             raise ValueError(f"{endpoint.label} does not belong to this topology")
-        # An HCI Host transmits through its Controller; complete firmware
-        # owns its radio.
-        if endpoint.controller is not None:
-            return self.controller_dev_id(endpoint.controller)
-        return slot.dev_id
+        controller = endpoint.controller
+        assert controller is not None
+        return self.controller_dev_id(controller)
 
     def lock_paths(self, sim_dir: Path) -> list[Path]:
         """PHY registration lock files, one per participant."""
@@ -148,36 +141,31 @@ def build_device_layout(
     *,
     phy_id: str,
     sim_id: str,
-    controllers: list[Controller],
+    controllers: list[BSController],
     processes: list[ProcessInstance],
     interference_count: int,
 ) -> DeviceLayout:
     """Assign every PHY device id for a complete topology in one pass.
 
-    Every slot is keyed by its process. HCI Hosts follow their Controllers'
-    order; complete firmware follows registration order.
+    Each Host slot is keyed by its process and follows its Controller's order.
     """
     controller_ids = {
         id(controller): dev_id for dev_id, controller in enumerate(controllers)
     }
     hosts: dict[int, ProcessInstance] = {}
-    firmwares: list[ProcessInstance] = []
     for process in processes:
         controller = process.controller
         if controller is None:
-            if process.requires_controller:
-                raise ValueError(
-                    f"{process.label}: HCI Host has no Controller; "
-                    "call attach(controller) before starting the topology"
-                )
-            firmwares.append(process)
-            continue
+            raise ValueError(
+                f"{process.label}: HCI Host has no Controller. "
+                "Call attach(controller) before starting the topology"
+            )
         controller_dev_id = controller_ids.get(id(controller))
         if controller_dev_id is None:
             raise ValueError(f"{process.label}: Controller does not belong here")
         if controller_dev_id in hosts:
             raise ValueError(
-                "a Virtual Controller can only be attached to one Application process"
+                "a Controller can only be attached to one Application process"
             )
         hosts[controller_dev_id] = process
 
@@ -189,11 +177,8 @@ def build_device_layout(
             sim_id=sim_id,
             phy_id=phy_id,
             dev_id=next_dev_id,
-            hci_sock=host.controller.hci_sock,
+            hci_sock=controllers[controller_dev_id].hci_sock,
         )
-        next_dev_id += 1
-    for firmware in firmwares:
-        slots[id(firmware)] = AppSlot(sim_id=sim_id, phy_id=phy_id, dev_id=next_dev_id)
         next_dev_id += 1
     return DeviceLayout(
         phy_id=phy_id,

@@ -43,10 +43,9 @@ async def test_link_updates(shell_pair):
         await responder.wait_log(rf"LE data len updated: .*RX \(len: {octets} ")
 
     # Connection Update (5.1.1) from the Central and Connection Parameters
-    # Request (5.1.7) from the Peripheral. Values are hexadecimal HCI units and
-    # differ from both Controllers' initial choices (0x0018 for BSController,
-    # 0x0028 for Zephyr): an update that changes nothing is not reported to the
-    # Peripheral's Host (Vol 4, Part E, 7.7.65.3).
+    # Request (5.1.7) from the Peripheral. Select intervals that differ from
+    # the initial 0x0018 so both Hosts receive the update event (Vol 4, Part E,
+    # 7.7.65.3).
     await central.shell.run("bt conn-update 0020 0020 0 0190")
     await wait_both(devices, r"LE conn param updated: int 0x0020 lat 0 to 400")
     await peripheral.shell.run("bt conn-update 0030 0030 1 0190")

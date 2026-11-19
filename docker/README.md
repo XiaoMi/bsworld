@@ -8,7 +8,7 @@ The images hold only the final executables, as CI built and tested them, without
 
 | Image | Firmware | Default suites |
 |---|---|---|
-| `ghcr.io/xiaomi/bsworld-zephyr` | Zephyr Controller and Bluetooth shells | `tests/integration/zephyr` |
+| `ghcr.io/xiaomi/bsworld-zephyr` | Zephyr Bluetooth Host shell | `tests/integration/zephyr` |
 | `ghcr.io/xiaomi/bsworld-nuttx` | NuttX BTSak and NimBLE | `tests/integration/nuttx` |
 | `ghcr.io/xiaomi/bsworld-trouble` | TrouBLE `ble_bas` | `tests/integration/trouble` |
 | `ghcr.io/xiaomi/bsworld-linux` | [User Mode Linux](../tests/integration/uml/README.md) kernel, Ubuntu BlueZ, NimBLE Linux | `tests/integration/uml` |
@@ -146,7 +146,7 @@ The image is tagged `bsworld-zephyr:dev`. `BUILD_JOBS` sets the compile parallel
 | File | Stages |
 |---|---|
 | `base.Dockerfile` | `build-base`, `bsworld` (setuptools-scm, which reads the version), `python-test` (installed project and tests), `babblesim`, `runtime-base` (runtime libraries and BabbleSim) |
-| `zephyr.Dockerfile` | `zephyr-workspace` (Zephyr workspace and SDK), `zephyr-controller`, `zephyr-shell`, `runtime-zephyr` |
+| `zephyr.Dockerfile` | `zephyr-workspace` (Zephyr workspace and SDK), `zephyr-shell`, `runtime-zephyr` |
 | `nuttx.Dockerfile` | `nuttx`, `runtime-nuttx` |
 | `trouble.Dockerfile` | `trouble`, `runtime-trouble` |
 | `linux.Dockerfile` | `uml` (kernel and seed library), `nimble-linux`, `runtime-linux` |

@@ -13,7 +13,7 @@ BSWorld 是一个在 Linux 上测试 Bluetooth Host 及其业务程序的确定�
 使用 BSWorld 可以：
 
 - 测试 Zephyr、NuttX、BlueZ、NimBLE、Bumble、TrouBLE 等开源 Host 协议栈，无需修改其源码。
-- 无需硬件：Host 通过标准 H4 HCI 连接虚拟 Controller，或运行自带 Controller 和无线模型的完整固件。
+- 无需硬件，Host 通过标准 H4 HCI 连接 BSController。
 - 保留业务程序日志、HCI BTSnoop、PHY 日志和 Ellisys 跟踪文件定位故障。
 - 每个场景里可以同时仿真多台设备，同一场景重复运行，日志及时序均保持一致，不受主机负载和调度影响。
 - 所有设备共享离散仿真时钟；场景之间相互隔离，结合 pytest-xdist 并行运行，最高可达百倍加速。
@@ -108,7 +108,7 @@ pytest tests/integration/bumble tests/integration/babblesim -n auto
 
 | 环境 | 已验证行为 | 文档 |
 |---|---|---|
-| Zephyr Bluetooth shell | 广播与扫描、干扰与恢复、连接与 GATT、LL 过程、配对与隐私、周期广播；完整固件与两种 Controller 上的 Host-only shell 互测，以及与 Bumble 互测 | [Zephyr 测试](../../tests/integration/zephyr/README.zh-CN.md) |
+| Zephyr Bluetooth shell | 广播与扫描、干扰与恢复、连接与 GATT、LL 过程、配对与隐私、周期广播与同步转移，以及与 Bumble 互通 | [Zephyr 测试](../../tests/integration/zephyr/README.zh-CN.md) |
 | Bumble Python Host | 广播、扫描、连接、周期广播与同步 | [Bumble 测试](../../tests/integration/bumble/README.zh-CN.md) |
 | User Mode Linux 中的 Linux 与 BlueZ | 通过 Linux Bluetooth 子系统完成 Controller 初始化、广播、扫描、连接和断连 | [BlueZ 测试](../../tests/integration/uml/bluez/README.zh-CN.md) |
 | TrouBLE Rust Host | 广播、连接、Battery Service 发现、读取和通知 | [TrouBLE 测试](../../tests/integration/trouble/README.zh-CN.md) |
@@ -117,11 +117,11 @@ pytest tests/integration/bumble tests/integration/babblesim -n auto
 
 ## 技术架构
 
-BSWorld 保留业务程序和 Host 协议栈的原生接口。每个 Host 都通过标准 HCI 连接独立的 Zephyr Controller 进程或 Python BSController worker。完整 Zephyr 固件自带 Controller 和无线模型，直接接入 PHY，参见[完整固件](writing-tests.md#完整固件)。所有 Controller、完整固件和干扰源共享 BabbleSim PHY 与仿真时钟。原生 Host 同样接入 PHY 的时钟，Bumble 运行在 pytest event loop 中，User Mode Linux Guest 则通过 UML time-travel 从该 event loop 获得时钟。
+BSWorld 保留业务程序和 Host 协议栈的原生接口。每个 Host 通过 H4 HCI 连接独立的 BSController worker。Controller 和干扰源共享 BabbleSim PHY 与仿真时钟。原生 Host 同样接入 PHY 的时钟，Bumble 运行在 pytest event loop 中，User Mode Linux Guest 则通过 UML time-travel 从该 event loop 获得时钟。
 
-<div align="center"><img src="../images/babblesim_arch.svg" alt="BSWorld 参与者通过独立的虚拟 Controller 或以完整固件形式连接到共享的 BabbleSim PHY" width="80%"><br><em>图 1：BSWorld 架构</em><br><br></div>
+<div align="center"><img src="../images/babblesim_arch.svg" alt="蓝牙 Host 通过各自的 BSController worker 连接到共享的 BabbleSim PHY" width="80%"><br><em>图 1：BSWorld 架构</em><br><br></div>
 
-虚拟 Controller 实现 HCI 命令、事件、ACL 数据、Link Layer 流程以及无线收发。同一拓扑可以混用 RTOS、Python、User Mode Linux 和完整 Zephyr 固件参与者，也可以混用两种 Controller。选择和配置方式参见[虚拟 Controller](controllers.md)。
+同一拓扑可以混用 RTOS、Python 和 User Mode Linux Host。各 Controller 的设备地址、缓冲区大小和蓝牙版本可以单独设置，详见 [BSController 配置](controllers.md)。
 
 HCI 交互保存为 `hciN.snoop`，可使用 Wireshark 等支持 BTSnoop 的工具分析；无线交互保存为 `babblesim/ellisys.bttrp`，可使用 Ellisys 分析。文件位置和排查顺序参见[日志、跟踪文件与抓包](artifacts.md)。
 
@@ -139,7 +139,7 @@ BSWorld 将业务程序、Controller、干扰设备和 pytest 注册到同一仿
 ## 文档
 
 - [编写测试和 RF 场景](writing-tests.md)：定义拓扑、接入业务程序、使用 asyncio 等待并配置 RF 条件。
-- [虚拟 Controller](controllers.md)：选择 Zephyr 或 Python Controller、用两种实现运行同一场景、配置 BSController。
+- [BSController 配置](controllers.md)介绍拓扑 API 和 Controller 参数。
 - [日志、跟踪文件与抓包](artifacts.md)：查找和分析测试产物。
 - [开发检查](development.md)：运行单元测试、静态检查和覆盖率统计。
 - [Docker 使用说明](../../docker/README.zh-CN.md)：运行已发布镜像、选择测试套件和构建本地镜像。

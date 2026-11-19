@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-These tests run the [Apache NimBLE](https://github.com/apache/mynewt-nimble) examples from nuttx-apps: `nimble_bleprph` as the Peripheral and `nimble_blecent` as the Central. Each process connects to its own BSController, the default [Virtual Controller](../../../../docs/controllers.md), and is driven by pytest through shell commands.
+These tests run the [Apache NimBLE](https://github.com/apache/mynewt-nimble) examples from nuttx-apps: `nimble_bleprph` as the Peripheral and `nimble_blecent` as the Central. Each process connects to its own [BSController](../../../../docs/controllers.md), and is driven by pytest through shell commands.
 
 | Executable | Upstream configuration | Executable variable |
 |---|---|---|

@@ -7,7 +7,7 @@
 ## 快速索引
 
 - [测试生命周期](#测试生命周期)
-- [选择 Controller](#选择-controller)
+- [添加 Controller](#添加-controller)
 - [异步等待与仿真时间](#异步等待与仿真时间)
 - [接入业务程序进程](#接入业务程序进程)
 - [向进程发送 Shell 命令](#向进程发送-shell-命令)
@@ -27,19 +27,17 @@
 
 每个测试都有独立的仿真标识、Unix socket 目录和日志目录，因此多个虚拟测试可以并行运行，不会共享 Controller 状态、RF 状态或输出文件。
 
-## 选择 Controller
+## 添加 Controller
 
 每个 Host 通过 `topo.add_controller()` 获得自己的虚拟 Controller，在 `topo.start()` 之后连接到它的 `hci_sock`：
 
 ```python
-from bsworld.devices import BSController
-
-ctl = topo.add_controller(controller_type=BSController, public_address="F0:F1:F2:F3:F4:01")
+ctl = topo.add_controller(public_address="F0:F1:F2:F3:F4:01")
 await topo.start()
 # 将 Host 连接到 ctl.hci_sock。
 ```
 
-默认使用 `BSController`，`ZephyrController` 是原生实现的替代选项，同一拓扑可以混用两种。完整 Zephyr 固件自带 Controller，两者都不需要，参见[完整固件](#完整固件)和[虚拟 Controller](controllers.md)。
+可用参数见 [BSController 配置](controllers.md)。
 
 ## 异步等待与仿真时间
 
@@ -68,19 +66,17 @@ result = await asyncio.wait_for(operation(), timeout=5)
 
 ## 接入业务程序进程
 
-各集成测试目录通过自己的创建函数生成业务程序。创建函数以拓扑为第一个参数，并把新进程登记到拓扑中；测试随后选择 Controller，在 `topo.start()` 前通过 `host.attach(controller)` 绑定。Python Host 协议栈在拓扑启动后打开 Controller 的 `hci_sock`，直接运行在测试的 asyncio event loop 中。添加场景时复用所在套件的现有辅助函数，环境准备、初始化和平台命令见对应 README。
+各集成测试套件通过自己的创建函数生成业务程序，并把新进程登记到拓扑中。若由调用方挂载 Controller，在 `topo.start()` 前调用 `host.attach(controller)`。Python Host 协议栈在拓扑启动后打开 Controller 的 `hci_sock`，直接运行在测试的 asyncio event loop 中。添加场景时复用所在套件的辅助函数。
 
 ```python
-from tests.integration.zephyr.shell.devices import create_zephyr_shell
-from bsworld.devices import BSController
+from tests.integration.nuttx.btsak.devices import NUTTX_BTSAK_ADVERTISER
+from tests.integration.nuttx.common import create_nuttx_process
 
-host = create_zephyr_shell(topo, name="host")
-host.attach(topo.add_controller(
-    controller_type=BSController, public_address="F0:F1:F2:F3:F4:02"
-))
+host = create_nuttx_process(topo, NUTTX_BTSAK_ADVERTISER)
+host.attach(topo.add_controller(public_address="F0:F1:F2:F3:F4:02"))
 ```
 
-设备标识发布前都可以修改绑定关系，通常由 `topo.start()` 发布，提前调用 `plan_devices()` 也会冻结。自行构造 `ProcessInstance` 时，需通过 `topo.add_process()` 登记；如果稍后才挂载 Controller，需传入 `requires_controller=True`。这样漏掉 `attach()` 时会在规划设备布局阶段、PHY 启动前报错，而不会被当作完整固件。套件的创建函数已经设置了该参数。
+设备标识发布前都可以修改绑定关系，通常由 `topo.start()` 发布，提前调用 `plan_devices()` 也会冻结。自行构造 `ProcessInstance` 时，通过 `topo.add_process()` 登记，并在规划设备布局前挂载 Controller。
 
 | 平台 | 测试说明 |
 |---|---|
@@ -89,34 +85,6 @@ host.attach(topo.add_controller(
 | TrouBLE | [原生 TrouBLE 测试](../../tests/integration/trouble/README.zh-CN.md#添加场景) |
 | UML Linux | [BlueZ 与 NimBLE](../../tests/integration/uml/README.zh-CN.md#添加场景) |
 | Zephyr | [Bluetooth shell](../../tests/integration/zephyr/shell/README.zh-CN.md#添加场景) |
-
-## 完整固件
-
-自带 Controller 和无线模型的固件（例如 Zephyr `nrf52_bsim` 构建）直接接入 PHY，登记时不挂载 Controller：
-
-```python
-from pathlib import Path
-from bsworld.devices import ProcessInstance
-
-node = topo.add_process(ProcessInstance(
-    command=lambda slot: [
-        Path("/absolute/path/to/zephyr.exe"),
-        f"-s={slot.sim_id}", f"-p={slot.phy_id}", f"-d={slot.dev_id}",
-        "-rs=41", "-mro=1000", "-RealEncryption=1",
-    ],
-    label="node",
-    shell=True,
-    # -RealEncryption=1 loads libCryptov1.so from BabbleSim.
-    env={"LD_LIBRARY_PATH": str(topo.env.bsim_dir / "lib")},
-))
-await topo.start()
-```
-
-- 仅当镜像把 UART 接到 stdin/stdout 时设置 `shell=True`；否则用 `wait_log()` 检查输出。
-- 该进程可直接作为衰减路径的 `tx` 或 `rx`。
-- 没有 `hci_sock` 和 `hciN.snoop`，排查时看控制台日志和 `ellisys.bttrp`。
-
-Zephyr shell 镜像的构建步骤见 [Zephyr 蓝牙 Shell 测试](../../tests/integration/zephyr/shell/README.zh-CN.md#构建与运行)。
 
 ## 向进程发送 Shell 命令
 
@@ -179,7 +147,7 @@ topo.set_channel_attenuation(
 
 路径具有方向性；如果两个方向需要不同的损耗，应分别配置 `tx -> rx` 和 `rx -> tx`。`TimedAttenuation` 的时间点与衰减值必须一一对应，相邻时间点之间采用线性插值。
 
-`tx` 和 `rx` 可以是已经登记的 `ProcessInstance` 或 `Controller`、`add_*_interference()` 返回的 `InterferenceRef`，也可以是原始 BabbleSim 设备编号。HCI Host 进程解析为其虚拟 Controller 的 RF 设备编号；完整固件解析为自身的无线设备编号。
+`tx` 和 `rx` 可以是已经登记的 `ProcessInstance` 或 `BSController`、`add_*_interference()` 返回的 `InterferenceRef`，也可以是原始 BabbleSim 设备编号。Host 进程解析为所挂载 Controller 的 RF 设备编号。
 
 ### 突发干扰
 

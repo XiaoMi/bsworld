@@ -21,7 +21,6 @@ from pathlib import Path
 import pytest
 from tests.integration.applications import create_application, require_artifact
 
-from bsworld.devices import BSController, ZephyrController
 from bsworld.devices.layout import AppSlot
 from bsworld.env import Env
 from bsworld.topology import BluetoothTopology
@@ -34,7 +33,6 @@ def _env(tmp_path: Path) -> Env:
         run_uid="uid",
         out_dir=tmp_path / "out",
         log_dir=tmp_path / "out" / "log",
-        hci_virt_bin=tmp_path / "components" / "hci",
         bsim_dir=tmp_path / "bsim",
         bs_state_dir=tmp_path / "state",
     )
@@ -51,9 +49,8 @@ def _argv(binary: Path, slot: AppSlot) -> list[str | Path]:
     return [binary, f"--dev={slot.dev_id}", f"--sim={slot.sim_id}", slot.hci_sock]
 
 
-@pytest.mark.parametrize("controller_type", [BSController, ZephyrController])
-def test_application_creation_registers_without_selecting_a_controller(
-    tmp_path, monkeypatch, controller_type
+def test_application_can_attach_its_controller_after_registration(
+    tmp_path, monkeypatch
 ):
     binary = _executable(tmp_path)
     monkeypatch.setenv("BSWORLD_TEST_BIN", str(binary))
@@ -70,9 +67,7 @@ def test_application_creation_registers_without_selecting_a_controller(
     assert topo.processes == (process,)
     assert topo.bsim.controllers == []
 
-    controller = topo.add_controller(
-        controller_type=controller_type, public_address="c0:ff:ee:00:00:09"
-    )
+    controller = topo.add_controller(public_address="c0:ff:ee:00:00:09")
     assert process.attach(controller) is process
     assert process.controller is controller
     assert topo.bsim.controllers == [controller]
@@ -105,7 +100,6 @@ def test_host_only_program_without_attachment_fails_before_the_phy_starts(
     process = create_application(
         topo, binary=_executable(tmp_path), argv=_argv, label="host"
     )
-    assert process.requires_controller
     with pytest.raises(ValueError, match="host: HCI Host has no Controller"):
         topo.bsim.plan_devices()
 

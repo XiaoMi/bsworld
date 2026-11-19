@@ -15,11 +15,11 @@
 
 import pytest
 
-from bsworld.devices import ZephyrController
+from bsworld.devices import BSController
 
 
-def _controller(tmp_path, address: str | None = None) -> ZephyrController:
-    return ZephyrController(0, "sim", "2G4", tmp_path, public_address=address)
+def _controller(tmp_path, address: str | None = None) -> BSController:
+    return BSController(0, "sim", tmp_path, public_address=address)
 
 
 def test_controller_normalizes_public_address(tmp_path) -> None:

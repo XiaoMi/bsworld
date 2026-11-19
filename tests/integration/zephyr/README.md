@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-These tests run Zephyr `nrf52_bsim` firmware as native Linux processes. The [Bluetooth shell](shell/README.md) suite runs its scenarios on both the Zephyr Controller and BSController; see [Virtual Controllers](../../../docs/controllers.md#running-a-scenario-against-both-controllers).
+The [Bluetooth shell](shell/README.md) tests run the Zephyr Host as a native `nrf52_bsim` process connected to BSController over HCI.
 
 ## Prepare the Zephyr Workspace
 
@@ -44,22 +44,9 @@ cd "$ZEPHYR_WORKSPACE/zephyr"
 west sdk install --gnu-toolchains x86_64-zephyr-elf
 ```
 
-Build BabbleSim using the [repository instructions](../../../README.md#build-and-test). The [Zephyr Controller](../../../docs/controllers.md#building-the-zephyr-controller) is optional: without it, the Zephyr Controller cases are skipped. Keep `BSWORLD_ROOT`, `BSIM_OUT_PATH` and `BSIM_COMPONENTS_PATH` exported while building Zephyr.
+Build BabbleSim using the [repository instructions](../../../README.md#build-and-test). Keep `BSWORLD_ROOT`, `BSIM_OUT_PATH` and `BSIM_COMPONENTS_PATH` exported while building Zephyr.
 
-## Test Suites
-
-| Suite | Build instructions | Executable variables |
-|---|---|---|
-| Bluetooth shell | [Bluetooth shell tests](shell/README.md#build-and-run) | `BSWORLD_ZEPHYR_FULL_SHELL_BIN`, `BSWORLD_ZEPHYR_SHELL_BIN` |
-| Zephyr Controller, optional | [Building the Zephyr Controller](../../../docs/controllers.md#building-the-zephyr-controller) | `BSWORLD_BT_VIRT_CONTROLLER_BIN` |
-
-Run the suite:
-
-```sh
-cd "$BSWORLD_ROOT"
-source .venv/bin/activate
-pytest tests/integration/zephyr -n auto -q
-```
+Follow the [Bluetooth shell build instructions](shell/README.md#build-and-run) to build and run the suite.
 
 ## License
 

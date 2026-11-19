@@ -4,7 +4,7 @@
 """Controller binding, ownership and layout stability through the public API."""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import Mock
 
 import pytest
 
@@ -29,44 +29,46 @@ def test_attach_rejects_rebinding_without_changing_the_controller(
     assert host.controller is first
 
 
-def test_layout_publication_prevents_a_first_attachment(tmp_path, unit_env):
+@pytest.mark.parametrize("participant", ["host", "controller", "interference"])
+def test_layout_publication_prevents_new_participants(tmp_path, unit_env, participant):
     topo = BluetoothTopology(unit_env, "sim", tmp_path / "log")
     controller = topo.add_controller()
-    firmware = topo.add_process(
-        ProcessInstance(command=["/firmware"], label="firmware")
-    )
     layout = topo.bsim.plan_devices()
     with pytest.raises(RuntimeError, match="layout is frozen"):
-        firmware.attach(controller)
-    assert firmware.controller is None
+        if participant == "host":
+            topo.add_process(
+                ProcessInstance(command=["/host"], label="host", controller=controller)
+            )
+        elif participant == "controller":
+            topo.add_controller()
+        else:
+            topo.add_burst_interference(2402)
+    assert not topo.processes
     assert topo.bsim.plan_devices() is layout
-    assert layout.application_slot(firmware).hci_sock is None
-    assert layout.device_count == 3
+    assert layout.device_count == 2
 
 
 def test_registered_process_cannot_be_owned_by_two_topologies(tmp_path, unit_env):
     first = BluetoothTopology(unit_env, "first", tmp_path / "first")
     second = BluetoothTopology(unit_env, "second", tmp_path / "second")
-    firmware = ProcessInstance(command=["/firmware"], label="firmware")
-    first.add_process(firmware)
+    host = ProcessInstance(command=["/host"], label="host")
+    first.add_process(host)
     with pytest.raises(ValueError, match="already registered"):
-        second.add_process(firmware)
+        second.add_process(host)
     assert not second.processes
 
 
 def test_registered_process_can_attach_before_layout_publication(tmp_path, unit_env):
     topo = BluetoothTopology(unit_env, "sim", tmp_path / "log")
     host = topo.add_process(ProcessInstance(command=["/host"], label="host"))
-    peer = topo.add_process(ProcessInstance(command=["/firmware"], label="peer"))
     controller = topo.add_controller()
     host.attach(controller)
 
     layout = topo.bsim.plan_devices()
-    assert topo.processes == (host, peer)
-    assert layout.device_count == 4  # Controller, Host clock, peer radio, pytest clock
+    assert topo.processes == (host,)
+    assert layout.device_count == 3  # Controller, Host clock, pytest clock
     assert layout.application_slot(host).dev_id == 1
     assert layout.application_slot(host).hci_sock == controller.hci_sock
-    assert layout.application_slot(peer).dev_id == 2
     assert layout.resolve_endpoint(host) == 0
     assert controller.hci_snoop_file == tmp_path / "log" / "host" / "hci0.snoop"
 
@@ -107,37 +109,12 @@ def test_failed_attachment_preserves_registration_and_allows_recovery(
     assert layout.resolve_endpoint(candidate) == 1
 
 
-async def test_started_topology_rejects_late_attachment(
-    tmp_path, unit_env, monkeypatch
-):
-    topo = BluetoothTopology(unit_env, "sim", tmp_path / "log")
-    host = topo.add_process(ProcessInstance(command=["/host"], label="host"))
-    controller = topo.add_controller()
-    monkeypatch.setattr(topo.bsim, "start", AsyncMock())
-    monkeypatch.setattr(topo.bsim, "wait_for_hci_sockets", AsyncMock())
-    monkeypatch.setattr(topo.bsim, "wait_for_devices_registered", lambda: None)
-    monkeypatch.setattr(topo.bsim, "finish", lambda **kwargs: None)
-    start_process = Mock()
-    monkeypatch.setattr(host, "start", start_process)
-
-    try:
-        await topo.start()
-        start_process.assert_called_once()
-        with pytest.raises(RuntimeError, match="after it has started"):
-            host.attach(controller)
-        assert host.controller is None
-    finally:
-        await topo.stop()
-
-
 async def test_unattached_host_fails_start_before_the_phy_is_spawned(
     tmp_path, unit_env, monkeypatch, spawn_recorder
 ):
     topo = BluetoothTopology(unit_env, "sim", tmp_path / "log")
-    topo.add_controller()
-    topo.add_process(
-        ProcessInstance(command=["/host"], label="host", requires_controller=True)
-    )
+    controller = topo.add_controller()
+    host = topo.add_process(ProcessInstance(command=["/host"], label="host"))
     monkeypatch.setattr(topo.bsim, "check_deps_ready", lambda: None)
     monkeypatch.setattr(topo.bsim, "prepare", lambda: None)
     monkeypatch.setattr(topo, "pm", spawn_recorder)
@@ -154,6 +131,8 @@ async def test_unattached_host_fails_start_before_the_phy_is_spawned(
         with pytest.raises(ValueError, match="host: HCI Host has no Controller"):
             await topo.start()
         assert spawn_recorder.calls == []
+        host.attach(controller)
+        assert topo.bsim.plan_devices().application_slot(host).dev_id == 1
     finally:
         await topo.stop()
 
@@ -178,9 +157,12 @@ def test_default_log_directory_does_not_depend_on_how_a_controller_is_bound(
 
 def test_registered_processes_can_only_change_through_registration(tmp_path, unit_env):
     topo = BluetoothTopology(unit_env, "sim", tmp_path / "log")
-    host = topo.add_process(ProcessInstance(command=["/host"], label="host"))
+    controller = topo.add_controller()
+    host = topo.add_process(
+        ProcessInstance(command=["/host"], label="host", controller=controller)
+    )
     for view in (topo.processes, topo.bsim.processes):
         with pytest.raises(AttributeError):
             view.append(ProcessInstance(command=["/rogue"], label="rogue"))
     assert topo.processes == (host,)
-    assert topo.bsim.plan_devices().device_count == 2
+    assert topo.bsim.plan_devices().device_count == 3

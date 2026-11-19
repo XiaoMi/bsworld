@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-本组测试把 Zephyr `nrf52_bsim` 固件作为原生 Linux 进程运行。[Bluetooth shell](shell/README.zh-CN.md) 套件会在 Zephyr Controller 和 BSController 上分别运行各场景，参见[虚拟 Controller](../../../docs/zh-CH/controllers.md#用两种-controller-运行同一场景)。
+[Bluetooth shell](shell/README.zh-CN.md) 测试在原生 `nrf52_bsim` 进程中运行 Zephyr Host，通过 HCI 接入 BSController。
 
 ## 准备 Zephyr 工作区
 
@@ -44,22 +44,9 @@ cd "$ZEPHYR_WORKSPACE/zephyr"
 west sdk install --gnu-toolchains x86_64-zephyr-elf
 ```
 
-先按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim。[Zephyr Controller](../../../docs/zh-CH/controllers.md#编译-zephyr-controller) 是可选的，未编译时跳过 Zephyr Controller 用例。构建 Zephyr 时保留 `BSWORLD_ROOT`、`BSIM_OUT_PATH` 和 `BSIM_COMPONENTS_PATH` 环境变量。
+按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim。构建 Zephyr 时保留 `BSWORLD_ROOT`、`BSIM_OUT_PATH` 和 `BSIM_COMPONENTS_PATH` 环境变量。
 
-## 测试套件
-
-| 套件 | 编译说明 | 可执行文件变量 |
-|---|---|---|
-| Bluetooth shell | [Bluetooth shell 测试](shell/README.zh-CN.md#构建与运行) | `BSWORLD_ZEPHYR_FULL_SHELL_BIN`、`BSWORLD_ZEPHYR_SHELL_BIN` |
-| Zephyr Controller（可选） | [编译 Zephyr Controller](../../../docs/zh-CH/controllers.md#编译-zephyr-controller) | `BSWORLD_BT_VIRT_CONTROLLER_BIN` |
-
-运行该套件：
-
-```sh
-cd "$BSWORLD_ROOT"
-source .venv/bin/activate
-pytest tests/integration/zephyr -n auto -q
-```
+按 [Bluetooth shell 构建说明](shell/README.zh-CN.md#构建与运行)编译并运行测试。
 
 ## 许可证
 

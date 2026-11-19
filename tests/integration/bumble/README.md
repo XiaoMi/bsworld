@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-These tests run the [Bumble](https://github.com/google/bumble) Python Host inside the pytest asyncio event loop, sharing the simulation clock with the test. Each device connects to its own BSController, the default [Virtual Controller](../../../docs/controllers.md). [common/](common/) holds the shared device helpers.
+These tests run the [Bumble](https://github.com/google/bumble) Python Host inside the pytest asyncio event loop, sharing the simulation clock with the test. Each device connects to its own [BSController](../../../docs/controllers.md). [common/](common/) holds the shared device helpers.
 
 | Host | Upstream | Version |
 |---|---|---|

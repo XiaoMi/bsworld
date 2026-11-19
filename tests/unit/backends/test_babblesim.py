@@ -22,7 +22,7 @@ from tests.unit.helpers import SpawnRecorder, make_env
 
 from bsworld.backends import babblesim
 from bsworld.backends.babblesim import BabbleSimBackend
-from bsworld.devices import ProcessInstance, zephyr
+from bsworld.devices import BSController, ProcessInstance
 from bsworld.interference import (
     BurstInterference,
     PlaybackInterference,
@@ -32,17 +32,19 @@ from bsworld.interference import (
 )
 
 
-def _patch_controller_bin(monkeypatch, tmp_path: Path) -> Path:
-    controller = tmp_path / "build" / "hci" / "bt_virt_controller"
-    controller.parent.mkdir(parents=True, exist_ok=True)
-    controller.write_text("#!/bin/sh\n")
-    controller.chmod(0o755)
-    monkeypatch.setattr(zephyr, "controller_bin", lambda env: controller)
-    return controller
+@pytest.fixture
+def controller_starts(monkeypatch):
+    started = []
+
+    async def start(controller):
+        started.append(controller)
+
+    monkeypatch.setattr(BSController, "start", start)
+    return started
 
 
 def _add_process_controller(backend: BabbleSimBackend):
-    controller = backend.add_controller(controller_type=zephyr.ZephyrController)
+    controller = backend.add_controller()
     backend.register_process(
         ProcessInstance(
             command=["/host"],
@@ -146,48 +148,43 @@ def test_check_deps_ready_only_validates_built_artifacts(tmp_path, monkeypatch) 
 async def test_start_rejects_an_empty_simulation(tmp_path) -> None:
     backend = BabbleSimBackend(make_env(tmp_path), "sim")
 
-    with pytest.raises(RuntimeError, match="Virtual Controller or complete firmware"):
+    with pytest.raises(RuntimeError, match="at least one BSController"):
         await backend.start(SpawnRecorder())
 
 
-async def test_add_controller_rejects_started_backend(tmp_path, monkeypatch) -> None:
+async def test_add_controller_rejects_started_backend(
+    tmp_path, monkeypatch, controller_starts
+) -> None:
     backend = BabbleSimBackend(make_env(tmp_path), "sim")
     backend.check_deps_ready = lambda: None
     backend.prepare = lambda: None
-    backend.add_controller(controller_type=zephyr.ZephyrController)
-    _patch_controller_bin(monkeypatch, tmp_path)
+    backend.add_controller()
     monkeypatch.setattr(babblesim, "wait_for_path", lambda *args, **kwargs: None)
     await backend.start(SpawnRecorder(), log_dir=tmp_path / "log")
 
     with pytest.raises(RuntimeError, match="layout is frozen"):
-        backend.add_controller(controller_type=zephyr.ZephyrController)
+        backend.add_controller()
 
 
-async def test_start_spawns_phy_virtual_controllers_and_interference(
-    tmp_path, monkeypatch
+async def test_start_launches_phy_controller_workers_and_interference(
+    tmp_path, monkeypatch, controller_starts
 ) -> None:
     env = make_env(tmp_path)
     backend = BabbleSimBackend(env, "sim")
     backend.check_deps_ready = lambda: None
     backend.prepare = lambda: None
-    _add_process_controller(backend)
-    _add_process_controller(backend)
+    first = _add_process_controller(backend)
+    second = _add_process_controller(backend)
     backend.interference_sources.append(BurstInterference(2402.0))
     recorder = SpawnRecorder()
 
-    _patch_controller_bin(monkeypatch, tmp_path)
     monkeypatch.setattr(babblesim, "wait_for_path", lambda *args, **kwargs: None)
     monkeypatch.setattr(babblesim, "wait_for_paths", lambda *args, **kwargs: None)
 
     await backend.start(recorder, log_dir=tmp_path / "log")
 
-    names = [name for name, _, _ in recorder.calls]
-    assert names == [
-        "bs_2G4_phy_v1",
-        "bt_virt_controller_hci0",
-        "bt_virt_controller_hci1",
-        "interf_5",
-    ]
+    assert controller_starts == [first, second]
+    assert [name for name, _, _ in recorder.calls] == ["bs_2G4_phy_v1", "interf_5"]
     assert "-D=6" in recorder.calls[0][1]
     assert "-defmodem=BLE_simple" in recorder.calls[0][1]
     assert "-dump" in recorder.calls[0][1]
@@ -196,76 +193,25 @@ async def test_start_spawns_phy_virtual_controllers_and_interference(
     assert backend.clock.dev_id == 4
     assert backend.clock.sim_dir == env.sim_dir("sim")
     assert backend.clock.phy_alive()
-    assert "-d=0" in recorder.calls[1][1]
-    # The upstream hci_virt sample relies on -mro for 1 ms PHY resynchronization.
-    assert "-mro=1000" in recorder.calls[1][1]
-    # Real AES-CCM needs libCryptov1, which the HW models load from ../lib.
-    assert "-RealEncryption=1" in recorder.calls[1][1]
-    assert recorder.calls[1][2]["cwd"] == env.bsim_bin_dir
-    assert (
-        f"-hci-socket={tmp_path / 'state' / 'sim' / 'hci0.sock'}"
-        in recorder.calls[1][1]
-    )
-    # Allocated by the backend, so the capture path is known before start.
-    assert (
-        f"-btsnoop-file={env.log_dir / 'controllers' / 'hci0.snoop'}"
-        in recorder.calls[1][1]
-    )
-    assert "-d=1" in recorder.calls[2][1]
-    assert (
-        f"-hci-socket={tmp_path / 'state' / 'sim' / 'hci1.sock'}"
-        in recorder.calls[2][1]
-    )
-    assert (
-        f"-btsnoop-file={env.log_dir / 'controllers' / 'hci1.snoop'}"
-        in recorder.calls[2][1]
-    )
-    assert "-d=5" in recorder.calls[3][1]
+    assert "-d=5" in recorder.calls[1][1]
     log_dirs = {name: kwargs["log_dir"] for name, _, kwargs in recorder.calls}
     assert log_dirs["bs_2G4_phy_v1"] == tmp_path / "log" / "babblesim"
-    assert (
-        log_dirs["bt_virt_controller_hci0"] == tmp_path / "log" / "bt_virt_controller"
-    )
-    assert (
-        log_dirs["bt_virt_controller_hci1"] == tmp_path / "log" / "bt_virt_controller"
-    )
     assert log_dirs["interf_5"] == tmp_path / "log" / "babblesim"
 
 
-async def test_start_passes_public_address_to_virtual_controller(
-    tmp_path, monkeypatch
-) -> None:
-    env = make_env(tmp_path)
-    backend = BabbleSimBackend(env, "sim")
-    backend.check_deps_ready = lambda: None
-    backend.prepare = lambda: None
-    ctl = backend.add_controller(controller_type=zephyr.ZephyrController)
-    ctl.public_address = "C0:FF:EE:00:00:01"
-    recorder = SpawnRecorder()
-
-    _patch_controller_bin(monkeypatch, tmp_path)
-    monkeypatch.setattr(babblesim, "wait_for_path", lambda *args, **kwargs: None)
-
-    await backend.start(recorder, log_dir=tmp_path / "log")
-
-    controller_args = recorder.calls[1][1]
-    assert "-bd-addr=C0:FF:EE:00:00:01" in controller_args
-
-
 async def test_start_places_default_modem_before_channel_plugin_args(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, controller_starts
 ) -> None:
     env = make_env(tmp_path)
     backend = BabbleSimBackend(env, "sim")
     backend.check_deps_ready = lambda: None
     backend.prepare = lambda: None
-    backend.add_controller(controller_type=zephyr.ZephyrController)
+    backend.add_controller()
     backend.channel_attenuation = babblesim.ChannelAttenuation(
         default_attenuation_db=70.0
     )
     recorder = SpawnRecorder()
 
-    _patch_controller_bin(monkeypatch, tmp_path)
     monkeypatch.setattr(babblesim, "wait_for_path", lambda *args, **kwargs: None)
 
     await backend.start(recorder, log_dir=tmp_path / "log")
@@ -299,7 +245,7 @@ def test_registration_connects_clock_before_waiting_for_all_device_locks(
     tmp_path, monkeypatch
 ) -> None:
     backend = BabbleSimBackend(make_env(tmp_path), "sim")
-    backend.add_controller(controller_type=zephyr.ZephyrController)
+    backend.add_controller()
     calls = []
 
     class Clock:
@@ -325,7 +271,7 @@ def test_registration_does_not_wait_for_locks_after_clock_connection_failure(
     tmp_path, monkeypatch
 ) -> None:
     backend = BabbleSimBackend(make_env(tmp_path), "sim")
-    backend.add_controller(controller_type=zephyr.ZephyrController)
+    backend.add_controller()
 
     class Clock:
         dev_id = 1
@@ -347,7 +293,7 @@ def test_allocating_a_controller_assigns_its_capture_path(tmp_path) -> None:
     env = make_env(tmp_path)
     backend = BabbleSimBackend(env, "sim")
 
-    default = backend.add_controller(controller_type=zephyr.ZephyrController)
+    default = backend.add_controller()
     located = backend.add_controller(snoop_dir=tmp_path / "python" / "bumble")
 
     assert default.hci_snoop_file == env.log_dir / "controllers" / "hci0.snoop"
@@ -355,12 +301,12 @@ def test_allocating_a_controller_assigns_its_capture_path(tmp_path) -> None:
 
 
 def test_a_capture_can_be_relocated_until_the_simulation_starts(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, controller_starts
 ) -> None:
     backend = BabbleSimBackend(make_env(tmp_path), "sim")
     backend.check_deps_ready = lambda: None
     backend.prepare = lambda: None
-    controller = backend.add_controller(controller_type=zephyr.ZephyrController)
+    controller = backend.add_controller()
 
     backend.set_snoop_dir(controller, tmp_path / "devices" / "dev0")
     assert controller.hci_snoop_file == tmp_path / "devices" / "dev0" / "hci0.snoop"
@@ -369,7 +315,6 @@ def test_a_capture_can_be_relocated_until_the_simulation_starts(
     with pytest.raises(ValueError, match="does not belong to this BabbleSim backend"):
         backend.set_snoop_dir(foreign, tmp_path / "elsewhere")
 
-    _patch_controller_bin(monkeypatch, tmp_path)
     monkeypatch.setattr(babblesim, "wait_for_path", lambda *args, **kwargs: None)
 
     asyncio.run(backend.start(SpawnRecorder(), log_dir=tmp_path / "log"))
@@ -382,7 +327,7 @@ def test_finish_releases_clock_before_artifacts_even_if_close_fails(
     tmp_path, monkeypatch, close_fails
 ) -> None:
     backend = BabbleSimBackend(make_env(tmp_path), "sim")
-    backend.add_controller(controller_type=zephyr.ZephyrController)
+    backend.add_controller()
     calls = []
     warnings = []
 
@@ -468,29 +413,12 @@ def test_convert_ellisys_warns_when_dumps_are_missing(tmp_path, monkeypatch) -> 
     assert not (env.log_dir / "babblesim" / "ellisys.bttrp").exists()
 
 
-async def test_backend_can_start_with_only_complete_firmware(
-    unit_env, monkeypatch, spawn_recorder
-):
-    backend = BabbleSimBackend(unit_env, "sim")
-    backend.register_process(ProcessInstance(command=["/firmware"], label="device"))
-    monkeypatch.setattr(backend, "check_deps_ready", lambda: None)
-    monkeypatch.setattr(backend, "prepare", lambda: None)
-    monkeypatch.setattr(babblesim, "wait_for_path", lambda *args, **kwargs: None)
-    try:
-        await backend.start(spawn_recorder)
-        await backend.wait_for_hci_sockets()
-        assert [name for name, _, _ in spawn_recorder.calls] == ["bs_2G4_phy_v1"]
-        assert "-D=2" in spawn_recorder.calls[0][1]
-        assert backend.clock.dev_id == 1
-        await backend.stop_controllers()
-    finally:
-        backend.finish()
-
-
 def test_backend_rejects_duplicate_process_registration(unit_env):
     backend = BabbleSimBackend(unit_env, "sim")
-    process = ProcessInstance(command=["/firmware"], label="device")
-    backend.register_process(process)
+    controller = _add_process_controller(backend)
+    process = backend.processes[0]
     with pytest.raises(ValueError, match="already registered"):
         backend.register_process(process)
-    assert backend.plan_devices().device_count == 2
+    layout = backend.plan_devices()
+    assert layout.device_count == 3
+    assert layout.application_slot(process).hci_sock == controller.hci_sock

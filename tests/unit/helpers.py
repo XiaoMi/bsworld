@@ -32,7 +32,6 @@ def make_env(tmp_path: Path) -> Env:
         run_uid="uid",
         out_dir=tmp_path / "out",
         log_dir=tmp_path / "out" / "log",
-        hci_virt_bin=tmp_path / "components" / "hci",
         bsim_dir=bsim_dir,
         bs_state_dir=tmp_path / "state",
     )

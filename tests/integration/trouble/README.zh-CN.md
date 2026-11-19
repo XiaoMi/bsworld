@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-本组测试将两个 [TrouBLE](https://github.com/embassy-rs/trouble) Rust Host 作为原生 Linux 进程运行，每个进程连接自己的 BSController（默认的[虚拟 Controller](../../../docs/zh-CH/controllers.md)），由 pytest 通过日志验证。[`source/src/bsim/`](source/src/bsim) 提供 Unix 传输、执行器和 BabbleSim 时钟。
+本组测试将两个 [TrouBLE](https://github.com/embassy-rs/trouble) Rust Host 作为原生 Linux 进程运行，每个进程连接自己的 [BSController](../../../docs/zh-CH/controllers.md)，由 pytest 通过日志验证。[`source/src/bsim/`](source/src/bsim) 提供 Unix 传输、执行器和 BabbleSim 时钟。
 
 | 程序 | 上游入口 | 可执行文件变量 |
 |---|---|---|

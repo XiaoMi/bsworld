@@ -1,12 +1,12 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-"""Complete Zephyr shell radios: directional interference and RF recovery."""
+"""Directional interference and RF recovery with three Zephyr shells."""
 
 import re
 
 import pytest
-from tests.integration.zephyr.shell.devices import create_zephyr_firmware_shell
+from tests.integration.zephyr.shell.devices import create_zephyr_shell
 from tests.integration.zephyr.shell_common import (
     initialize_shell,
     shell_identity,
@@ -15,10 +15,16 @@ from tests.integration.zephyr.shell_common import (
 from bsworld.interference import StaticAttenuation
 
 
-async def test_full_firmware_targeted_interference_and_recovery(topo):
-    advertiser = create_zephyr_firmware_shell(topo, name="advertiser", seed=51)
-    protected = create_zephyr_firmware_shell(topo, name="protected", seed=52)
-    jammed = create_zephyr_firmware_shell(topo, name="jammed", seed=53)
+async def test_targeted_interference_and_recovery(topo):
+    advertiser = create_zephyr_shell(
+        topo, name="advertiser", public_address="F0:F1:F2:F3:F4:01"
+    )
+    protected = create_zephyr_shell(
+        topo, name="protected", public_address="F0:F1:F2:F3:F4:02"
+    )
+    jammed = create_zephyr_shell(
+        topo, name="jammed", public_address="F0:F1:F2:F3:F4:03"
+    )
     jammers = [
         topo.add_burst_interference(
             frequency, power_dbm=20, windows=[(1, 5_000_000)], rand_seed=1

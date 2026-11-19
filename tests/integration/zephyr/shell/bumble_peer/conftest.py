@@ -1,7 +1,7 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-"""A complete Zephyr shell and an independent Bumble peer on either Controller."""
+"""A Zephyr shell and a Bumble peer on separate BSControllers."""
 
 from contextlib import AsyncExitStack
 from random import Random
@@ -11,12 +11,12 @@ import pytest_asyncio
 from bumble import crypto, pairing
 from bumble.keys import MemoryKeyStore
 from tests.integration.bumble.common import open_bumble_device
-from tests.integration.zephyr.shell.devices import create_zephyr_firmware_shell
+from tests.integration.zephyr.shell.devices import create_zephyr_shell
 from tests.integration.zephyr.shell_common import initialize_shell
 
 
 @pytest_asyncio.fixture
-async def peer(topo, monkeypatch, controller_type):
+async def peer(topo, monkeypatch):
     # Fixed test inputs include Bumble's SMP nonces, IRK and P-256 key.
     random = Random(42)
     monkeypatch.setattr(crypto, "r", lambda: random.randbytes(16))
@@ -25,9 +25,8 @@ async def peer(topo, monkeypatch, controller_type):
         "generate",
         classmethod(lambda cls: cls.from_private_key_bytes(bytes(31) + b"\x01")),
     )
-    shell = create_zephyr_firmware_shell(topo, name="zephyr", seed=41)
+    shell = create_zephyr_shell(topo, name="zephyr", public_address="F0:F1:F2:F3:F4:02")
     controller = topo.add_controller(
-        controller_type=controller_type,
         public_address="F0:F1:F2:F3:F4:01",
         log_subdir="bumble",
     )

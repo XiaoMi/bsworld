@@ -1,7 +1,7 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-"""Complete Zephyr BLE shell interoperates with Bumble on either Controller."""
+"""Exercise Zephyr and Bumble Host interoperability over BSController."""
 
 import asyncio
 

@@ -116,41 +116,7 @@ def test_topo_fixture_derives_identity_and_log_dir_from_the_node(
                 assert topo.test_log_dir == (
                     bsworld_env.log_dir / "test_identity" / "test_identity"
                 )
-                assert topo.default_controller_type is BSController
-        """
-    )
-
-    result = pytester.runpytest_subprocess(
-        *_ISOLATED_PLUGIN_ARGS,
-        "-o",
-        "asyncio_mode=strict",
-        "--out-dir",
-        str(pytester.path / "logs"),
-        "-q",
-        str(test_file),
-    )
-
-    result.assert_outcomes(passed=1)
-
-
-def test_topo_fixture_honours_an_overridden_controller_default(
-    pytester, monkeypatch
-) -> None:
-    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
-    # Exercise an actual override rather than repeating the framework default.
-    test_file = pytester.makepyfile(
-        test_default_controller="""
-            import pytest
-            from bsworld.devices import ZephyrController
-
-            @pytest.fixture
-            def bsworld_default_controller_type():
-                return ZephyrController
-
-            @pytest.mark.asyncio
-            async def test_default_is_used(topo):
-                assert topo.default_controller_type is ZephyrController
-                assert isinstance(topo.add_controller(), ZephyrController)
+                assert isinstance(topo.add_controller(), BSController)
         """
     )
 

@@ -47,10 +47,10 @@ BSWorld uses the public Python and HCI transport APIs without modifying the Bumb
 ## Zephyr Project
 
 - Source: https://github.com/zephyrproject-rtos/zephyr
-- Usage: [Zephyr Controller](docs/controllers.md#using-a-zephyr-controller) and [Bluetooth shells](tests/integration/zephyr/shell/README.md)
+- Usage: [Zephyr Bluetooth shell tests](tests/integration/zephyr/shell/README.md)
 - License: Apache License 2.0
 
-The Zephyr Controller is Zephyr's `samples/bluetooth/hci_virt` with a BSWorld Kconfig overlay. The complete and Host-only shells use external Zephyr sources.
+BSWorld builds the Bluetooth shell from external Zephyr sources using its [Host configuration and HCI overlay](tests/integration/zephyr/shell/source/).
 
 ## Linux
 

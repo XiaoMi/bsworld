@@ -17,13 +17,13 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from bsworld.devices import ProcessInstance, ZephyrController
+from bsworld.devices import BSController, ProcessInstance
 from bsworld.devices.layout import AppSlot, build_device_layout
 from bsworld.interference import InterferenceRef
 
 
 def _controllers(tmp_path):
-    return [ZephyrController(index, "sim", "2G4", tmp_path) for index in range(2)]
+    return [BSController(index, "sim", tmp_path) for index in range(2)]
 
 
 def _host(controller, label="host"):
@@ -41,33 +41,28 @@ def _layout(controllers, processes=(), interference_count=0):
 
 
 def test_layout_assigns_mixed_participants_once(tmp_path) -> None:
-    python_host, native_host = _controllers(tmp_path)
-    native = _host(native_host)
-    firmware = ProcessInstance(command=["/firmware"], label="firmware")
+    standalone, attached = _controllers(tmp_path)
+    host = _host(attached)
 
-    layout = _layout([python_host, native_host], [firmware, native], 1)
+    layout = _layout([standalone, attached], [host], 1)
 
-    assert layout.controller_dev_id(python_host) == 0
-    assert layout.controller_dev_id(native_host) == 1
-    # Hosts come before complete firmware regardless of registration order.
-    assert layout.application_slot(native) == AppSlot(
+    assert layout.controller_dev_id(standalone) == 0
+    assert layout.controller_dev_id(attached) == 1
+    assert layout.application_slot(host) == AppSlot(
         sim_id="sim",
         phy_id="2G4",
         dev_id=2,
         hci_sock=tmp_path / "hci1.sock",
     )
-    assert layout.application_slot(firmware) == AppSlot(
-        sim_id="sim", phy_id="2G4", dev_id=3
-    )
-    assert layout.clock_dev_id == 4
-    assert layout.interference_dev_id(0) == 5
-    assert layout.device_count == 6
+    assert layout.clock_dev_id == 3
+    assert layout.interference_dev_id(0) == 4
+    assert layout.device_count == 5
     assert layout.lock_paths(tmp_path) == [
-        tmp_path / f"2G4.d{index}.lock" for index in range(6)
+        tmp_path / f"2G4.d{index}.lock" for index in range(5)
     ]
 
     with pytest.raises(KeyError, match="no Application device reserved"):
-        layout.application_slot(_host(python_host, "unregistered"))
+        layout.application_slot(_host(standalone, "unregistered"))
     with pytest.raises(FrozenInstanceError):
         layout.clock_dev_id = 9
     with pytest.raises(TypeError):
@@ -86,7 +81,7 @@ def test_layout_orders_hosts_by_their_controllers(tmp_path) -> None:
 
 
 def test_layout_rejects_a_host_waiting_for_its_controller(tmp_path) -> None:
-    host = ProcessInstance(command=["/host"], label="host", requires_controller=True)
+    host = ProcessInstance(command=["/host"], label="host")
 
     with pytest.raises(ValueError, match="host: HCI Host has no Controller"):
         _layout(_controllers(tmp_path), [host])
@@ -109,14 +104,12 @@ def test_layout_rejects_inconsistent_attachments(tmp_path, problem) -> None:
 def test_layout_resolves_declared_rf_endpoints_by_identity(tmp_path) -> None:
     first, second = _controllers(tmp_path)
     process = _host(second, "device")
-    firmware = ProcessInstance(command=["/firmware"], label="firmware")
-    layout = _layout([first, second], [process, firmware], 1)
+    layout = _layout([first, second], [process], 1)
 
     assert layout.resolve_endpoint(7) == 7
     assert layout.resolve_endpoint(first) == 0
     assert layout.resolve_endpoint(process) == 1
-    assert layout.resolve_endpoint(firmware) == 3
-    assert layout.resolve_endpoint(InterferenceRef(0)) == 5
+    assert layout.resolve_endpoint(InterferenceRef(0)) == 4
 
 
 @pytest.mark.parametrize("index", [-1, 1])

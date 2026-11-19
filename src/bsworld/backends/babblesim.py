@@ -12,21 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-"""BabbleSim backend: PHY, independent Controllers, firmware and interference.
+"""BabbleSim backend: PHY, Controllers and interference.
 
 Application command factories receive an AppSlot and select their native
-arguments for joining the PHY. Processes are registered once; Host and complete
-firmware slots are derived from their final attachments when the layout freezes.
+arguments for joining the PHY. Host slots follow their Controller attachments.
 
 Bring-up shape:
     1. verify configured BabbleSim artifacts.
-    2. prepare: kill stragglers for this sim_id, remove stale HCI
+    2. plan_devices: freeze one DeviceLayout covering Controllers, Host
+       processes, the framework clock, then interference.
+    3. prepare: kill stragglers for this sim_id, remove stale HCI
        socket files.
-    3. plan_devices: freeze one DeviceLayout covering Virtual Controllers,
-       Host processes, complete firmware, the framework clock, then interference.
     4. spawn phy (-D = num_devs).
-    5. spawn Virtual Controllers and interference devices. Firmware processes
-       are started by topology.
+    5. start Controller workers and spawn interference devices. The topology
+       starts Host processes separately.
     6. connect the in-process pytest clock after external participants start.
 """
 
@@ -41,7 +40,6 @@ from typing import TYPE_CHECKING
 
 from ..deps import check_babblesim_ready
 from ..devices.bscontroller import BSController
-from ..devices.controller import Controller
 from ..devices.layout import DeviceLayout, build_device_layout
 from ..env import Env
 from ..interference import (
@@ -60,11 +58,12 @@ from ..runtime.wait import wait_for_path, wait_for_paths, wait_for_paths_async
 from .ellisys import convert_tx_csv
 
 if TYPE_CHECKING:
+    from bscontroller import ControllerConfig
+
     from ..devices.instance import ProcessInstance
 
 _RESIDUAL_PATTERNS = (
     "bs_2G4_phy_v1",
-    "bt_virt_controller",
     "bs_device_2G4_",
 )
 
@@ -76,7 +75,7 @@ _DEFAULT_MODEM = "BLE_simple"
 class BabbleSimBackend:
     env: Env
     sim_id: str
-    controllers: list[Controller] = field(default_factory=list)
+    controllers: list[BSController] = field(default_factory=list)
     channel_attenuation: ChannelAttenuation | None = None
     interference_sources: list[InterferenceSource] = field(default_factory=list)
     _processes: list[ProcessInstance] = field(
@@ -102,31 +101,28 @@ class BabbleSimBackend:
     def add_controller(
         self,
         *,
-        controller_type: type[Controller] = BSController,
         public_address: str | None = None,
         snoop_dir: Path | None = None,
-        **options,
-    ) -> Controller:
+        config: ControllerConfig | None = None,
+        max_step_us: int | None = None,
+    ) -> BSController:
         self._ensure_layout_mutable()
         dev_id = len(self.controllers)
-        ctl = controller_type(
+        snoop_dir = snoop_dir or self.env.log_dir / "controllers"
+        ctl = BSController(
             controller_dev_id=dev_id,
             sim_id=self.sim_id,
-            phy_id=_PHY_ID,
             socket_dir=self.env.sim_dir(self.sim_id),
             public_address=public_address,
-            **options,
+            hci_snoop_file=(snoop_dir / f"hci{dev_id}.snoop").resolve(),
+            config=config,
+            max_step_us=max_step_us,
         )
-        # Decided once, here: every Controller knows where its capture goes
-        # before it starts, so no implementation needs a fallback path.
-        ctl.hci_snoop_file = (
-            (snoop_dir or self.env.log_dir / "controllers") / f"hci{dev_id}.snoop"
-        ).resolve()
         self.controllers.append(ctl)
         return ctl
 
     def validate_attachment(
-        self, process: ProcessInstance, controller: Controller
+        self, process: ProcessInstance, controller: BSController
     ) -> None:
         """Check that a Controller can be attached, without changing any state."""
         self._ensure_layout_mutable()
@@ -137,7 +133,7 @@ class BabbleSimBackend:
             for other in self._processes
         ):
             raise ValueError(
-                "a Virtual Controller can only be attached to one Application process"
+                "a Controller can only be attached to one Application process"
             )
 
     def register_process(self, process: ProcessInstance) -> None:
@@ -156,7 +152,7 @@ class BabbleSimBackend:
         self.interference_sources.append(source)
         return len(self.interference_sources) - 1
 
-    def set_snoop_dir(self, controller: Controller, snoop_dir: Path) -> None:
+    def set_snoop_dir(self, controller: BSController, snoop_dir: Path) -> None:
         """Relocate a Controller's capture before it starts."""
         if self._started:
             raise RuntimeError("cannot move an HCI capture after BabbleSim has started")
@@ -219,14 +215,10 @@ class BabbleSimBackend:
         if self._started:
             return
         if not self.controllers and not self._processes:
-            raise RuntimeError(
-                "a BabbleSim simulation requires at least one Virtual Controller "
-                "or complete firmware"
-            )
+            raise RuntimeError("a simulation requires at least one BSController")
         self.check_deps_ready()
-        self.prepare()
-
         layout = self.plan_devices()
+        self.prepare()
         num_devs = layout.device_count
 
         # Spawn phy.
@@ -277,7 +269,7 @@ class BabbleSimBackend:
         )
 
         for ctl in self.controllers:
-            await ctl.start(pm, self.env, log_dir=log_dir)
+            await ctl.start()
 
         for i, src in enumerate(self.interference_sources):
             dev_id = layout.interference_dev_id(i)

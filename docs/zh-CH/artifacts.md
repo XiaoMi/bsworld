@@ -59,16 +59,13 @@ OUT_DIR=/path/to/artifacts pytest tests/
                                             hci1.snoop
 ```
 
-使用 `ZephyrController` 的测试还会生成 `bt_virt_controller/bt_virt_controller_hciN.log`。
-
 ## 各类产物
 
 | 文件 | 生成者 | 主要内容 |
 |---|---|---|
 | `bsworld.log` | BSWorld | 进程命令、工作目录、PID、socket 与设备锁就绪状态、清理过程、Ellisys 转换命令和框架告警。 |
 | `babblesim/bs_2G4_phy_v1.log` | BabbleSim PHY | PHY 进程的标准输出和标准错误。正常运行时可能为空。 |
-| `bt_virt_controller/*.log` | ZephyrController | Controller 启动信息、断言和内部诊断。仅在测试使用 `ZephyrController` 时生成。 |
-| `<业务程序>/<名称>.log` | 业务程序 | 业务程序合并后的标准输出和标准错误，也是 `wait_log()` 的数据来源。完整 Zephyr 固件写在 `zephyr/complete/<名称>/` 下。 |
+| `<业务程序>/<名称>.log` | 业务程序 | 业务程序合并后的标准输出和标准错误，也是 `wait_log()` 的数据来源。 |
 | `<业务程序>/hciN.snoop` | Controller BTSnoop 文件 | Host 与对应虚拟 Controller 之间的 HCI 命令、事件和 ACL 数据。 |
 | `babblesim/ellisys.bttrp` | BSWorld Python 转换工具 | 同一个 PHY 中所有虚拟设备的 Bluetooth LE 空口交互。 |
 | `babblesim/att_matrix.txt` | BSWorld | 本测试实际传给 `multiatt` 信道模型的静态路径衰减矩阵。 |
@@ -103,7 +100,7 @@ tail -f /tmp/run-<timestamp>/<uid>/log/tests/.../nuttx_btsak_advertiser.log
 每个测试只有一个 `bsworld.log`。它从 `topo.start()` 开始记录该测试的框架活动，重点包括：
 
 - BabbleSim 实例标识和设备数量。
-- PHY、虚拟 Controller 和业务程序的完整启动命令。
+- PHY 和业务程序的启动命令。
 - 每个进程的工作目录、日志路径和 PID。
 - Controller HCI socket 和 BabbleSim 设备锁的启动屏障。
 - teardown 时仍在运行的进程及其清理顺序。
@@ -122,7 +119,7 @@ wireshark /tmp/run-<timestamp>/<uid>/log/tests/.../hci1.snoop
 btmon -r /tmp/run-<timestamp>/<uid>/log/tests/.../hci1.snoop
 ```
 
-两种 Controller 实现的 HCI 抓包始终开启。绑定业务程序时抓包位于业务程序目录，否则位于 `controllers/hciN/`。完整 Zephyr 固件没有外部 HCI 抓包。两种 Controller 实现和完整固件的无线交互都记录在共享的 `ellisys.bttrp` 中。
+与业务程序绑定的 Controller 将抓包写入业务程序目录，其他 Controller 默认写入 `controllers/hciN/`。PHY 上的无线交互记录在共享的 `ellisys.bttrp` 中。
 
 ## Ellisys 空口跟踪文件
 
@@ -151,7 +148,7 @@ PHY dump 与 Ellisys 转换默认始终开启。
 
 1. 查看 `bsworld.log`，确认所有进程命令、HCI socket 和设备锁是否正常，是否有进程提前退出。
 2. 查看业务程序日志，确认业务状态机停在哪一步，以及 `wait_log()` 等待的文本是否真实出现。
-3. 查看 `hciN.snoop`，使用 `ZephyrController` 时再查看 `bt_virt_controller/*.log`，确认 Host 是否发送预期命令、Controller 是否返回预期事件。
+3. 查看 `hciN.snoop`，确认 Host 是否发送预期命令、Controller 是否返回预期事件。
 4. 查看 `ellisys.bttrp`，确认报文是否进入 RF 环境，以及接收失败是否来自衰减、干扰或碰撞。
 5. RF 场景不符合预期时，对照 `att_matrix.txt` 和 `timed_att_*.txt` 检查实际设备编号、方向和生效时间。
 

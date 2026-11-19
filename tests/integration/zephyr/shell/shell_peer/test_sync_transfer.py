@@ -47,13 +47,6 @@ async def connect_roles(peripheral, central, sender):
     line = await roles[0].wait_log(r"LE Features: 0x[0-9a-f]{16}")
     features = int(re.search(r"0x([0-9a-f]{16})", line)[1], 16)
     assert features & PAST_RECIPIENT, "peer lacks the PAST Recipient feature"
-    # The Zephyr Controller receives a Control PDU only up to its effective
-    # maximum RX octets, while LL_PERIODIC_SYNC_IND has 34 octets of CtrData.
-    # Core Vol 6, Part B, 4.5.10 limits only LL Data PDUs, so this Data Length
-    # Update is an interoperability precondition, not a PAST requirement.
-    await roles[0].shell.run("bt data-len-update 251")
-    await roles[0].wait_log(r"LE data len updated: TX \(len: 251 ")
-    await roles[1].wait_log(r"LE data len updated: .*RX \(len: 251 ")
     return roles
 
 

@@ -59,16 +59,13 @@ A typical NuttX scanning test produces this layout:
                                             hci1.snoop
 ```
 
-A test that uses `ZephyrController` also writes `bt_virt_controller/bt_virt_controller_hciN.log`.
-
 ## Artifact Reference
 
 | File | Producer | Contents |
 |---|---|---|
 | `bsworld.log` | BSWorld | Process commands, working directories, PIDs, socket and device-lock barriers, teardown, Ellisys conversion, and framework warnings. |
 | `babblesim/bs_2G4_phy_v1.log` | BabbleSim PHY | PHY process stdout and stderr. It can be empty during a normal run. |
-| `bt_virt_controller/*.log` | ZephyrController | Controller startup output, assertions, and internal diagnostics. Written only when the test uses `ZephyrController`. |
-| `<Application>/<name>.log` | Application | Combined Application stdout and stderr, also used as the source for `wait_log()`. Complete Zephyr firmware writes it under `zephyr/complete/<name>/`. |
+| `<Application>/<name>.log` | Application | Combined Application stdout and stderr, also used as the source for `wait_log()`. |
 | `<Application>/hciN.snoop` | Controller BTSnoop file | HCI commands, events, and ACL data between the Host and its Virtual Controller. |
 | `babblesim/ellisys.bttrp` | BSWorld Python converter | Bluetooth LE over-the-air activity for every virtual device on the shared PHY. |
 | `babblesim/att_matrix.txt` | BSWorld | Static path-attenuation matrix passed to the `multiatt` channel model. |
@@ -103,7 +100,7 @@ tail -f /tmp/run-<timestamp>/<uid>/log/tests/.../nuttx_btsak_advertiser.log
 Every test has one `bsworld.log`, beginning when `topo.start()` starts framework activity for that test. It records:
 
 - The BabbleSim instance ID and device count.
-- Full commands for the PHY, Virtual Controllers, and Applications.
+- PHY and Application startup commands.
 - Working directory, log path, and PID for every process.
 - Startup barriers for Controller HCI sockets and BabbleSim device locks.
 - Processes still running during teardown and their cleanup order.
@@ -122,7 +119,7 @@ wireshark /tmp/run-<timestamp>/<uid>/log/tests/.../hci1.snoop
 btmon -r /tmp/run-<timestamp>/<uid>/log/tests/.../hci1.snoop
 ```
 
-HCI capture is always enabled for both Controller implementations. Application-bound Controllers save the capture under the Application directory; otherwise it goes under `controllers/hciN/`. Complete Zephyr firmware has no external HCI capture. Radio traffic from both Controller implementations and from complete firmware is included in the shared `ellisys.bttrp` trace.
+An Application-bound Controller saves its capture in the Application directory. Other Controllers use `controllers/hciN/` by default. The shared `ellisys.bttrp` trace records radio traffic from the PHY.
 
 ## Ellisys Over-the-Air Trace
 
@@ -151,7 +148,7 @@ Follow the data path from top to bottom:
 
 1. Check `bsworld.log` for process commands, HCI socket and device-lock barriers, or an early process exit.
 2. Check the Application logs to locate the last business state and verify whether the text expected by `wait_log()` appeared.
-3. Check `hciN.snoop`, and with `ZephyrController` also `bt_virt_controller/*.log`, to verify Host commands and Controller events.
+3. Check `hciN.snoop` to verify Host commands and Controller events.
 4. Check `ellisys.bttrp` to determine whether packets reached the RF environment and whether attenuation, interference, or collisions explain a receive failure.
 5. For an unexpected RF topology, compare the resolved device IDs, directions, and activation times in `att_matrix.txt` and `timed_att_*.txt`.
 
