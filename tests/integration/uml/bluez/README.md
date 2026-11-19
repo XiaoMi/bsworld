@@ -2,34 +2,20 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Runs the host's BlueZ in the [UML Linux guest](../README.md) and drives it through `bluetoothctl`. Bumble is the peer.
-
-| Program | Source | Executable variable |
-|---|---|---|
-| `bluetoothd`, `bluetoothctl`, `btattach` | Installed on the host; validated with `bluetoothd` 5.86 and `bluetoothctl` 5.64, and in CI with Ubuntu 24.04's BlueZ 5.72 | None |
-
-## Prepare the Environment
-
-Build the kernel and seed library using the [UML test environment](../README.md#prepare-the-environment), which also installs BlueZ. [init.sh](../source/init.sh) starts `/usr/libexec/bluetooth/bluetoothd`, or `/usr/lib/bluetooth/bluetoothd` when the first is missing.
+The tests run Ubuntu's i386 `bluetoothd`, `bluetoothctl` and `btattach` in a [UML guest](../README.md). Each guest starts its own D-Bus and `bluetoothd`, with [main.conf](main.conf) installed at `/opt/bsworld/bluez.conf`.
 
 ## Build and Run
 
-BlueZ is not built for these tests. Run them:
+Prepare the [UML test environment](../README.md#prepare-the-environment), then select BlueZ tests from the repository root.
 
 ```sh
-cd "$BSWORLD_ROOT"
-source .venv/bin/activate
-pytest tests/integration/uml/bluez -q
+docker run --rm --security-opt seccomp=docker/uml-seccomp.json \
+  bsworld-linux:dev pytest tests/integration/uml/bluez -q
 ```
 
 | Test | Verified behavior |
 |---|---|
-| `test_uml_bluez_initializes_virtual_controller` | `hci0` registers with the expected public address and powers on. |
-| `test_uml_bluez_advertises_to_bumble_observer` | A Bumble observer receives BlueZ's connectable advertising with the expected name and address. |
+| `test_uml_bluez_guests_advertise_to_bumble_observer` | Two guests each register and power on their own `hci0`. One Bumble observer receives advertising from both at the expected names and addresses. |
 | `test_uml_bluez_scans_and_connects_bumble_peripheral` | BlueZ discovers a Bumble peripheral, connects and disconnects. |
 
-BlueZ uses `hci0` through `bluetoothd`. The guest console is under `uml/bluez/uml_bluez.log`; see [artifacts](../../../../docs/artifacts.md) for the rest.
-
-## License
-
-The tests in this directory use Apache License 2.0. See the [parent license notes](../README.md#license).
+Find the console and HCI captures under `uml/bluez/`. The advertising test writes a subdirectory for each guest. [Test artifacts](../../../../docs/artifacts.md)

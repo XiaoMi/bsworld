@@ -35,7 +35,7 @@ BSWorld 自有代码使用 Apache License 2.0。引入或复用的第三方组�
 ```sh
 ruff check --no-cache .
 ruff format --check --no-cache .
-pytest tests/unit tests/integration/support
+pytest tests/unit
 ```
 
 遵循仓库的 Python [代码格式](development.md#代码格式)约定。`Checks` 工作流属于 `CI`，会在每个 pull request 和推送到 main 时检查全部 Python 代码并运行单元测试。
@@ -43,10 +43,7 @@ pytest tests/unit tests/integration/support
 修改进程启动、调度、HCI、RF 行为、平台配置或测试业务程序时，还需要运行受影响的虚拟系统测试，例如：
 
 ```sh
-pytest tests/integration/nuttx/btsak -n auto
-pytest tests/integration/nuttx/nimble -n auto
-pytest tests/integration/zephyr/shell -n auto
-pytest tests/integration/bumble -n auto
+pytest tests/integration -n auto
 ```
 
 修改跨越多个子系统时，运行完整测试：

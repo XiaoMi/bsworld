@@ -12,22 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-"""BluetoothTopology: declarative wiring for one test case.
+"""Run Bluetooth Hosts on a shared PHY and simulation clock.
 
-Lifecycle (driven by the `topo` fixture):
-    1. test code registers controllers, processes, and RF conditions. These
-       calls only record the topology; nothing has been spawned yet.
-    2. test code calls topology.start()
-       — BabbleSim backend brings up the PHY/controllers/interference devices,
-       then every registered process starts and joins the PHY directly.
-    3. pytest joins the PHY through its FIFO clock and binds the event loop.
-    4. fixture teardown calls topology.stop() — the process manager stops
-       child processes and the backend releases its clock and artifacts.
+Tests register their Controllers and RF conditions, then start the topology
+before opening H4 connections or booting UML guests.
 """
 
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -36,12 +30,12 @@ from bsworld.runtime.scheduler import BsimEventLoop
 
 from .backends.babblesim import BabbleSimBackend
 from .devices.bscontroller import BSController
-from .devices.instance import ProcessInstance
 from .env import Env
 from .interference import (
     BurstInterference,
     ChannelAttenuation,
     InterferenceRef,
+    InterferenceSource,
     InterfType,
     PlaybackInterference,
     StaticAttenuation,
@@ -55,6 +49,9 @@ from .runtime.proc import ProcessManager
 if TYPE_CHECKING:
     from bscontroller import ControllerConfig
 
+    from .runtime.scheduler import BsimClock
+    from .uml import UmlGuest
+
 
 @dataclass
 class BluetoothTopology:
@@ -64,23 +61,27 @@ class BluetoothTopology:
     pm: ProcessManager = field(default_factory=ProcessManager)
     bsim: BabbleSimBackend = field(init=False)
     _event_loop: BsimEventLoop | None = field(default=None, init=False, repr=False)
-    _started: bool = False
+    _uml_guests: list[UmlGuest] = field(default_factory=list, init=False, repr=False)
+    _lifecycle_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock, init=False, repr=False
+    )
+    _started: bool = field(default=False, init=False)
+    _stopped: bool = field(default=False, init=False)
 
     def __post_init__(self) -> None:
         self.bsim = BabbleSimBackend(self.env, self.sim_id)
         self.env.out_dir.mkdir(parents=True, exist_ok=True)
         self.test_log_dir.mkdir(parents=True, exist_ok=True)
 
-    @property
-    def processes(self) -> tuple[ProcessInstance, ...]:
-        """Registered processes, read-only; register through add_process()."""
-        return self.bsim.processes
-
-    # ------------- process registration -------------
+    # ------------- controller registration -------------
 
     def _ensure_configurable(self) -> None:
         if self._started:
             raise RuntimeError("cannot modify a topology after it has started")
+        if self._stopped or self._lifecycle_lock.locked():
+            raise RuntimeError(
+                "cannot modify a topology during or after a state change"
+            )
 
     def add_controller(
         self,
@@ -104,34 +105,28 @@ class BluetoothTopology:
             max_step_us=max_step_us,
         )
 
-    def add_process(self, process: ProcessInstance) -> ProcessInstance:
-        """Register an Application process that will be started with the topology."""
-        self._ensure_configurable()
-        if process._topology is not None:
-            raise ValueError("process is already registered with a topology")
-        if any(existing.label == process.label for existing in self.processes):
+    def _claim_uml_guest(self, guest: UmlGuest) -> BsimClock:
+        clock = self.bsim.clock
+        if (
+            clock is None
+            or not self._started
+            or self._event_loop is not asyncio.get_running_loop()
+        ):
+            raise RuntimeError(f"{guest.label}: start the topology before the guest")
+        if guest.controller not in self.bsim.controllers:
             raise ValueError(
-                f"Application process label is already registered: {process.label}"
+                f"{guest.label}: Controller does not belong to this topology"
             )
-        # The backend validates the whole registration before recording it, so
-        # the capture is only moved once registration can no longer fail.
-        self.bsim.register_process(process)
-        process._topology = self
-        if process.controller is not None:
-            self._move_capture(process, process.controller)
-        return process
+        if any(other.label == guest.label for other in self._uml_guests):
+            raise ValueError(f"{guest.label}: UML guest label is already in use")
+        if any(other.controller is guest.controller for other in self._uml_guests):
+            raise ValueError(f"{guest.label}: Controller is already attached to a Host")
+        self._uml_guests.append(guest)
+        return clock
 
-    def _attach_process_controller(
-        self, process: ProcessInstance, controller: BSController
-    ) -> None:
-        """Validate a late attachment of a registered process before it is recorded."""
-        self._ensure_configurable()
-        self.bsim.validate_attachment(process, controller)
-        self._move_capture(process, controller)
-
-    def _move_capture(self, process: ProcessInstance, controller: BSController) -> None:
-        # An Application keeps its Controller's capture beside its own logs.
-        self.bsim.set_snoop_dir(controller, self.test_log_dir / process.log_subdir)
+    def _release_uml_guest(self, guest: UmlGuest) -> None:
+        if guest in self._uml_guests:
+            self._uml_guests.remove(guest)
 
     # ------------- interference -------------
 
@@ -154,8 +149,8 @@ class BluetoothTopology:
             default_attenuation_db=default_db,
             extra_attenuation_db=extra_db,
             matrix_file=matrix_file,
-            static_paths=static_paths or [],
-            timed_paths=timed_paths or [],
+            static_paths=list(static_paths or ()),
+            timed_paths=list(timed_paths or ()),
         )
 
     def add_burst_interference(
@@ -219,67 +214,71 @@ class BluetoothTopology:
             PlaybackInterference(input_file=Path(input_file))
         )
 
-    def _add_interference_source(self, source) -> InterferenceRef:
+    def _add_interference_source(self, source: InterferenceSource) -> InterferenceRef:
         self._ensure_configurable()
-        return InterferenceRef(self.bsim.add_interference_source(source))
+        return self.bsim.add_interference_source(source)
 
     # ------------- start / stop -------------
 
     async def start(self) -> None:
-        if self._started:
-            return
-        open_log_file(self.test_log_dir / "bsworld.log")
-        self.pm.install_signal_handlers()
-        self._resolve_channel_attenuation()
-        await self.bsim.start(self.pm, log_dir=self.test_log_dir)
-        await self.bsim.wait_for_hci_sockets()
-        layout = self.bsim.plan_devices()
-        for process in self.processes:
-            process.start(
-                self.pm,
-                self.test_log_dir,
-                layout.application_slot(process),
-            )
-        await asyncio.to_thread(self.bsim.wait_for_devices_registered)
-        if self.bsim.clock is not None:
-            loop = asyncio.get_running_loop()
-            if not isinstance(loop, BsimEventLoop):
-                raise RuntimeError("the active asyncio event loop is not BSIM-aware")
-            # Registration alone does not mean every device has yielded to PHY.
-            self.bsim.clock.synchronize()
-            self._event_loop = loop
-            self._event_loop.bind_clock(self.bsim.clock)
-        self._started = True
+        """Start the simulation once and bind the test loop to its clock."""
+        async with self._lifecycle_lock:
+            if self._stopped:
+                raise RuntimeError("cannot start a stopped topology")
+            if self._started:
+                return
+            try:
+                open_log_file(self.test_log_dir / "bsworld.log")
+                self.pm.install_signal_handlers()
+                await self.bsim.start(self.pm, log_dir=self.test_log_dir)
+                await self.bsim.wait_for_hci_sockets()
+                await self._wait_for_registration()
+                if self.bsim.clock is not None:
+                    loop = asyncio.get_running_loop()
+                    if not isinstance(loop, BsimEventLoop):
+                        raise RuntimeError(
+                            "the active asyncio event loop is not BSIM-aware"
+                        )
+                    # Registration alone does not mean every device has yielded to PHY.
+                    self.bsim.clock.synchronize()
+                    self._event_loop = loop
+                    self._event_loop.bind_clock(self.bsim.clock)
+            except BaseException as exc:
+                try:
+                    await self._shutdown()
+                except Exception as cleanup_error:
+                    exc.add_note(f"topology cleanup failed: {cleanup_error}")
+                raise
+            self._started = True
 
-    def _resolve_channel_attenuation(self) -> None:
-        ca = self.bsim.channel_attenuation
-        if ca is None:
-            return
-        if ca.matrix_file is not None:
-            return
-
-        layout = self.bsim.plan_devices()
-        static_paths = [
-            StaticAttenuation(
-                tx=layout.resolve_endpoint(path.tx),
-                rx=layout.resolve_endpoint(path.rx),
-                attenuation_db=path.attenuation_db,
-            )
-            for path in ca.static_paths
-        ]
-        timed_paths = [
-            TimedAttenuation(
-                tx=layout.resolve_endpoint(path.tx),
-                rx=layout.resolve_endpoint(path.rx),
-                times_us=path.times_us,
-                attenuation_db=path.attenuation_db,
-            )
-            for path in ca.timed_paths
-        ]
-        ca.static_paths[:] = static_paths
-        ca.timed_paths[:] = timed_paths
+    async def _wait_for_registration(self) -> None:
+        # The worker owns the clock while connecting. Let its bounded wait
+        # finish before startup cancellation can close the clock.
+        registration = asyncio.create_task(
+            asyncio.to_thread(self.bsim.wait_for_devices_registered)
+        )
+        try:
+            await asyncio.shield(registration)
+        except asyncio.CancelledError:
+            with suppress(Exception):
+                await registration
+            raise
 
     async def stop(self) -> None:
+        """Stop Guests before releasing their Controllers and clock."""
+        async with self._lifecycle_lock:
+            if not self._stopped:
+                await self._shutdown()
+
+    async def _shutdown(self) -> None:
+        self._stopped = True
+        self._started = False
+        failures: list[Exception] = []
+        for guest in reversed(tuple(self._uml_guests)):
+            try:
+                guest.stop()
+            except Exception as exc:
+                failures.append(exc)
         if self._event_loop is not None:
             try:
                 self._event_loop.unbind_clock()
@@ -288,18 +287,16 @@ class BluetoothTopology:
             finally:
                 self._event_loop = None
         try:
-            try:
+            async with AsyncExitStack() as cleanup:
+                cleanup.callback(close_log_file)
+                cleanup.callback(self.bsim.finish, log_dir=self.test_log_dir)
+                cleanup.callback(self.pm.restore_signal_handlers)
+                cleanup.push_async_callback(asyncio.to_thread, self.pm.cleanup)
                 await self.bsim.stop_controllers()
-            finally:
-                await asyncio.to_thread(self.pm.cleanup)
-        finally:
-            self.pm.restore_signal_handlers()
-            for process in self.processes:
-                try:
-                    process.stop_capture()
-                except Exception as exc:
-                    warn(f"{process.label}: failed to stop log capture: {exc}")
-            try:
-                self.bsim.finish(log_dir=self.test_log_dir)
-            finally:
-                close_log_file()
+        except Exception as exc:
+            failures.append(exc)
+
+        if len(failures) == 1:
+            raise failures[0]
+        if failures:
+            raise ExceptionGroup("topology teardown failed", failures)

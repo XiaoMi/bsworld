@@ -27,36 +27,26 @@ OUT_DIR=/path/to/artifacts pytest tests/
 
 [Docker 命令](../../docker/README.zh-CN.md#运行测试)将主机的 `.cache/docker-results` 挂载到容器的 `/output`。镜像默认命令在其中保存 `pytest.xml`，各测试的日志和抓包文件保存在同级的 `run-<timestamp>/<uid>` 目录下。
 
-在 GitHub Actions 中，`CI` 工作流在 pull request 和推送到 main 时并行运行全部检查：`Checks`（Ruff 和单元测试）、`BSController`、`Bumble`（Bumble 和 BabbleSim 套件，直接在 runner 上运行，不构建镜像），以及 `Zephyr`、`NuttX`、`Linux` 平台工作流，后者各自构建平台镜像并在镜像内运行集成测试。只有全部通过时 `CI result` 才通过。打开 **Actions → CI → 运行记录** 查看结果；每个工作流也可以在 Actions 页面单独运行。每个平台运行上传 `bsworld-results-<platform>-<run-id>-<attempt>` 附件，包含 `integration.xml`、`integration.log`、镜像标签和信息，以及 `integration/` 下各测试的日志和抓包。失败时也会上传报告与日志，保留 14 天。
+GitHub Actions 的 `CI` 工作流并行运行 `Checks`、`BSController` 和 `UML`。`UML` 使用统一镜像运行 Guest 和 BabbleSim 集成测试，并将测试报告、日志、抓包和镜像信息上传到 `bsworld-results-uml-<run-id>-<attempt>`，保留 14 天。
 
 通过 `latest`、源码提交或 Release tag 选择镜像，见 [Docker 使用说明](../../docker/README.zh-CN.md#选择版本)。
 
 ## 目录结构
 
-下面是一项 NuttX 扫描测试的典型目录：
+Bumble 扫描 NuttX Guest 广播时的输出目录如下。
 
 ```text
-/tmp/run-<timestamp>/<uid>/
-    log/
-        tests/
-            integration/
-                nuttx/
-                    btsak/
-                        test_btsak_scan_advertise/
-                            test_nuttx_btsak_scanner_finds_advertiser/
-                                bsworld.log
-                                babblesim/
-                                    bs_2G4_phy_v1.log
-                                    ellisys.bttrp
-                                nuttx/
-                                    scanners/
-                                        nuttx_btsak_scanner/
-                                            nuttx_btsak_scanner.log
-                                            hci0.snoop
-                                    advertisers/
-                                        nuttx_btsak_advertiser/
-                                            nuttx_btsak_advertiser.log
-                                            hci1.snoop
+/tmp/run-<timestamp>/<uid>/log/tests/integration/uml/nuttx/
+    test_btsak/test_bumble_scans_nuttx_advertising/
+        bsworld.log
+        babblesim/
+            bs_2G4_phy_v1.log
+            ellisys.bttrp
+        uml/nuttx/
+            nuttx.log
+            hci0.snoop
+        bumble/scanner/
+            hci1.snoop
 ```
 
 ## 各类产物
@@ -75,7 +65,7 @@ OUT_DIR=/path/to/artifacts pytest tests/
 
 ## 业务程序日志与 `wait_log()`
 
-每个业务程序的标准输出和标准错误都写入其 `.log` 文件，并以完整行的形式提供给 `ProcessInstance.wait_log()` 使用。
+每个业务程序的标准输出和标准错误都写入其 `.log` 文件，并以完整行的形式提供给 `UmlGuest.wait_log()` 使用。
 
 ```python
 await device.wait_log(r"Bluetooth initialized", timeout=30)
@@ -92,7 +82,7 @@ await device.wait_log(r"Bluetooth initialized", timeout=30)
 运行过程中可以直接查看业务程序日志：
 
 ```sh
-tail -f /tmp/run-<timestamp>/<uid>/log/tests/.../nuttx_btsak_advertiser.log
+tail -f /tmp/run-<timestamp>/<uid>/log/tests/.../nuttx.log
 ```
 
 ## 框架日志
@@ -100,7 +90,7 @@ tail -f /tmp/run-<timestamp>/<uid>/log/tests/.../nuttx_btsak_advertiser.log
 每个测试只有一个 `bsworld.log`。它从 `topo.start()` 开始记录该测试的框架活动，重点包括：
 
 - BabbleSim 实例标识和设备数量。
-- PHY 和业务程序的启动命令。
+- PHY 和 UML Guest 的启动命令。
 - 每个进程的工作目录、日志路径和 PID。
 - Controller HCI socket 和 BabbleSim 设备锁的启动屏障。
 - teardown 时仍在运行的进程及其清理顺序。

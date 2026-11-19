@@ -22,23 +22,24 @@ BSWorld 是一个在 Linux 上测试 Bluetooth Host 及其业务程序的确定�
 
 ## 快速开始
 
-BSWorld 运行于 Linux/x86_64。开发请使用[本地 Linux](#本地-linux) 环境，已发布的 Docker 镜像用于运行和验证测试。每个平台的镜像包含 BSWorld 和经 CI 测试的该平台可执行程序，不含工具链和固件源码，列表见 [Docker 使用说明](../../docker/README.zh-CN.md)。
+BSWorld 运行于 Linux/x86_64。发布的 Docker 镜像内置 BabbleSim、32 位 UML 内核、Guest 根文件系统及对测所需的可执行文件。本地开发见[本地 Linux](#本地-linux)。
 
 ### Docker
 
-安装 [Docker Engine](https://docs.docker.com/engine/install/ubuntu/)，然后运行镜像内的集成测试，以 Zephyr 镜像为例：
+安装 [Docker Engine](https://docs.docker.com/engine/install/ubuntu/)，然后从仓库根目录运行 UML 集成测试。
 
 ```sh
-sudo docker pull ghcr.io/xiaomi/bsworld-zephyr:latest
+sudo docker pull ghcr.io/xiaomi/bsworld-linux:latest
 mkdir -p .cache/docker-results
 # 已发布镜像以 UID/GID 1000 运行。
 sudo chown 1000:1000 .cache/docker-results
 sudo docker run --rm \
+  --security-opt seccomp=docker/uml-seccomp.json \
   --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  ghcr.io/xiaomi/bsworld-zephyr:latest
+  ghcr.io/xiaomi/bsworld-linux:latest
 ```
 
-测试结果写入 `.cache/docker-results`，包括 `pytest.xml`、进程日志、HCI 抓包和 RF 跟踪文件。NuttX 和 Linux 镜像、选择测试套件、测试当前检出版本、选择镜像版本或自行构建镜像，参见 [Docker 使用说明](../../docker/README.zh-CN.md)。
+测试结果写入 `.cache/docker-results`，包括 `pytest.xml`、进程日志、HCI 抓包和 RF 跟踪文件。选择套件、镜像版本和本地构建方法见 [Docker 使用说明](../../docker/README.zh-CN.md)。
 
 ### 本地 Linux
 
@@ -70,7 +71,7 @@ python -m pip install -e components/bscontroller -e '.[test]'
 ```sh
 ruff check .
 ruff format --check .
-pytest tests/unit tests/integration/support -q
+pytest tests/unit -q
 ```
 
 #### 构建与测试
@@ -95,32 +96,33 @@ make -j"$(nproc)" everything
 
 每个新开的、用于构建或运行测试的 shell 都要重新导出 `BSWORLD_ROOT`、`BSIM_OUT_PATH` 和 `BSIM_COMPONENTS_PATH`；没有 `BSIM_OUT_PATH` 时，集成测试会报环境配置错误并停止。
 
-运行 Bumble 和 BabbleSim 场景，不需要其他二进制：
+运行 BabbleSim 测试。
 
 ```sh
 cd "$BSWORLD_ROOT"
-pytest tests/integration/bumble tests/integration/babblesim -n auto
+pytest tests/integration/babblesim -n auto
 ```
 
-其他套件运行各平台的可执行程序。按[支持的集成环境](#支持的集成环境)中的说明编译，说明中会给出每个程序要导出的变量。
+准备 32 位 Guest 后可运行全部集成套件，参见 [UML 测试环境](../../tests/integration/uml/README.zh-CN.md)。
 
 ## 支持的集成环境
 
-| 环境 | 已验证行为 | 文档 |
-|---|---|---|
-| Zephyr Bluetooth shell | 广播与扫描、干扰与恢复、连接与 GATT、LL 过程、配对与隐私、周期广播与同步转移，以及与 Bumble 互通 | [Zephyr 测试](../../tests/integration/zephyr/README.zh-CN.md) |
-| Bumble Python Host | 广播、扫描、连接、周期广播与同步 | [Bumble 测试](../../tests/integration/bumble/README.zh-CN.md) |
-| User Mode Linux 中的 Linux 与 BlueZ | 通过 Linux Bluetooth 子系统完成 Controller 初始化、广播、扫描、连接和断连 | [BlueZ 测试](../../tests/integration/uml/bluez/README.zh-CN.md) |
-| NuttX BTSak | 广播、扫描、多广播设备、干扰与恢复 | [BTSak 测试](../../tests/integration/nuttx/btsak/README.zh-CN.md) |
-| Apache NimBLE | 在 NuttX 上完成发现、连接、GATT 和订阅；在 User Mode Linux 中完成发现和连接 | [NuttX 测试](../../tests/integration/nuttx/nimble/README.zh-CN.md) · [UML 测试](../../tests/integration/uml/nimble/README.zh-CN.md) |
+各 Host 运行在 UML Guest 中，与同一仿真拓扑中的 [Bumble 对测 Host](../../tests/integration/uml/bumble_peer.py) 交互。
+
+| Guest 中的 Host | 测试覆盖 |
+|---|---|
+| BlueZ | 多 Guest 广播、扫描、连接与断开 |
+| Zephyr `native_sim` 蓝牙 shell | 广播与扫描、GATT、配对和隐私、链路更新、周期广播及同步转移 |
+| NuttX `sim` BTSak 与 NimBLE | 广播、多广播端扫描、定向干扰恢复、GATT 读写与通知 |
+| Apache NimBLE Linux | 发现、连接 |
 
 ## 技术架构
 
-BSWorld 保留业务程序和 Host 协议栈的原生接口。每个 Host 通过 H4 HCI 连接独立的 BSController worker。Controller 和干扰源共享 BabbleSim PHY 与仿真时钟。原生 Host 同样接入 PHY 的时钟，Bumble 运行在 pytest event loop 中，User Mode Linux Guest 则通过 UML time-travel 从该 event loop 获得时钟。
+每个 Host 通过 H4 HCI 连接自己的 BSController。Bumble 运行在 pytest event loop 中，UML Guest 分别通过 time-travel socket 从同一个 event loop 获得仿真时间。PHY 设备编号分配给 Controller、pytest 时钟以及显式配置的干扰源。
 
 <div align="center"><img src="../images/babblesim_arch.svg" alt="蓝牙 Host 通过各自的 BSController worker 连接到共享的 BabbleSim PHY" width="80%"><br><em>图 1：BSWorld 架构</em><br><br></div>
 
-同一拓扑可以混用 RTOS、Python 和 User Mode Linux Host。各 Controller 的设备地址、缓冲区大小和蓝牙版本可以单独设置，详见 [BSController 配置](controllers.md)。
+同一拓扑可以包含多个 UML Guest。各 Controller 的设备地址、缓冲区大小和蓝牙版本可以单独设置，详见 [BSController 配置](controllers.md)。
 
 HCI 交互保存为 `hciN.snoop`，可使用 Wireshark 等支持 BTSnoop 的工具分析；无线交互保存为 `babblesim/ellisys.bttrp`，可使用 Ellisys 分析。文件位置和排查顺序参见[日志、跟踪文件与抓包](artifacts.md)。
 
@@ -131,7 +133,7 @@ HCI 交互保存为 `hciN.snoop`，可使用 Wireshark 等支持 BTSnoop 的工�
 | **仿真时间** | 决定协议定时器、报文时序、RF 事件、asyncio 等待和测试超时。仅在所有参与者完成同步后推进。 |
 | **墙钟时间** | 表示测试在主机上的实际耗时。CPU 负载和 Linux 调度会影响该耗时，但不会改变协议时序。 |
 
-BSWorld 将业务程序、Controller、干扰设备和 pytest 注册到同一仿真中，并通过共享同步屏障沿同一时间轴推进。因此，无论主机负载如何，`T_IFS = 150 μs` 等协议间隔都保持不变。拓扑启动后，标准 `asyncio` 等待和超时使用仿真时间，参见[异步等待与仿真时间](writing-tests.md#异步等待与仿真时间)。
+BSController、干扰源与 pytest 时钟注册到同一个 PHY，Guest 由这个时钟调度。无论主机负载如何，`T_IFS = 150 μs` 等协议间隔都保持不变。拓扑启动后，标准 `asyncio` 等待和超时使用仿真时间，参见[异步等待与仿真时间](writing-tests.md#异步等待与仿真时间)。
 
 稳定复现要求二进制和输入保持一致，并控制随机源。外部网络、依赖墙钟的服务和未适配的 Host I/O 仍可能引入非确定性。
 
@@ -141,7 +143,7 @@ BSWorld 将业务程序、Controller、干扰设备和 pytest 注册到同一仿
 - [BSController 配置](controllers.md)介绍拓扑 API 和 Controller 参数。
 - [日志、跟踪文件与抓包](artifacts.md)：查找和分析测试产物。
 - [开发检查](development.md)：运行单元测试、静态检查和覆盖率统计。
-- [Docker 使用说明](../../docker/README.zh-CN.md)：运行已发布镜像、选择测试套件和构建本地镜像。
+- [Docker 使用说明](../../docker/README.zh-CN.md)：运行 UML 镜像、选择测试套件和在本地构建镜像。
 
 ## 社区协作
 

@@ -15,6 +15,9 @@
 from __future__ import annotations
 
 import asyncio
+import errno
+import os
+from pathlib import Path
 
 import pytest
 from tests.unit.runtime.scheduler.support import ManualClock, run_on_clock
@@ -24,6 +27,34 @@ from bsworld.runtime.pipe import LogCapture
 
 def open_capture(tmp_path) -> LogCapture:  # noqa: ANN001
     return LogCapture.open(tmp_path / "device.log")
+
+
+def test_capture_open_failure_releases_fifo_and_descriptors(
+    tmp_path, monkeypatch
+) -> None:
+    log_path = tmp_path / "device.log"
+    log_path.mkdir()
+    fifo_path = log_path.with_suffix(".log.fifo")
+    descriptors = []
+    open_fd = os.open
+
+    def track_fifo(path, flags, *args, **kwargs):
+        fd = open_fd(path, flags, *args, **kwargs)
+        if Path(path) == fifo_path:
+            descriptors.append(fd)
+        return fd
+
+    monkeypatch.setattr(os, "open", track_fifo)
+
+    with pytest.raises(IsADirectoryError):
+        LogCapture.open(log_path)
+
+    assert len(descriptors) == 2
+    assert not fifo_path.exists()
+    for descriptor in descriptors:
+        with pytest.raises(OSError) as exc_info:
+            os.fstat(descriptor)
+        assert exc_info.value.errno == errno.EBADF
 
 
 async def test_wait_log_returns_matching_complete_line(tmp_path) -> None:

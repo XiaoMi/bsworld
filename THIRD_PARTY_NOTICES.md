@@ -15,7 +15,7 @@ BSWorld does not modify the upstream BabbleSim sources. Each component retains i
 ## Apache NuttX
 
 - Source: https://github.com/apache/nuttx
-- Usage: [NuttX test applications](tests/integration/nuttx/README.md)
+- Usage: [NuttX test applications](tests/integration/uml/README.md)
 - License: Apache License 2.0
 
 NuttX source is obtained externally and is not vendored in this repository.
@@ -23,7 +23,7 @@ NuttX source is obtained externally and is not vendored in this repository.
 ## Apache NimBLE
 
 - Source: https://github.com/apache/mynewt-nimble
-- Usage: Bluetooth Host stack for [NuttX](tests/integration/nuttx/README.md) and [Linux Guest tests](tests/integration/uml/nimble/README.md)
+- Usage: Bluetooth Host stack for [NuttX](tests/integration/uml/README.md) and [Linux Guest tests](tests/integration/uml/nimble/README.md)
 - License: Apache License 2.0
 
 NimBLE source is obtained externally and is not vendored in this repository.
@@ -31,7 +31,7 @@ NimBLE source is obtained externally and is not vendored in this repository.
 ## Bumble
 
 - Source: https://github.com/google/bumble
-- Usage: Python Bluetooth Host stack for [Bumble tests](tests/integration/bumble/README.md) and [BSController samples](components/bscontroller/samples/README.md)
+- Usage: Python Bluetooth Host stack for [Bumble test peers](tests/integration/uml/bumble_peer.py) and [BSController samples](components/bscontroller/samples/README.md)
 - License: Apache License 2.0
 
 BSWorld uses the public Python and HCI transport APIs without modifying the Bumble Host stack.
@@ -39,10 +39,10 @@ BSWorld uses the public Python and HCI transport APIs without modifying the Bumb
 ## Zephyr Project
 
 - Source: https://github.com/zephyrproject-rtos/zephyr
-- Usage: [Zephyr Bluetooth shell tests](tests/integration/zephyr/shell/README.md)
+- Usage: [Zephyr Bluetooth shell tests](tests/integration/uml/README.md)
 - License: Apache License 2.0
 
-BSWorld builds the Bluetooth shell from external Zephyr sources using its [Host configuration and HCI overlay](tests/integration/zephyr/shell/source/).
+BSWorld builds the Bluetooth shell from external Zephyr sources using its [native_sim configuration](tests/integration/uml/zephyr/prj.conf).
 
 ## Linux
 
@@ -50,7 +50,11 @@ BSWorld builds the Bluetooth shell from external Zephyr sources using its [Host 
 - Usage: [Linux Guest execution](tests/integration/uml/README.md) as User Mode Linux, with time-travel synchronized to BabbleSim
 - License: GNU General Public License version 2; individual files may carry compatible licenses, as described by the upstream `COPYING` file
 
-Linux is not vendored in this repository. The Guest kernel is built from an unmodified upstream commit with BSWorld's [configuration fragment](tests/integration/uml/source/linux.fragment).
+The Guest kernel is built from an unmodified upstream commit with BSWorld's [configuration fragment](src/bsworld/uml/linux.fragment).
+
+## Moby seccomp profile
+
+The [UML container profile](docker/uml-seccomp.json) uses Moby `seccomp/v0.2.4` with permission added for `personality(ADDR_NO_RANDOMIZE)`. [Upstream profile](https://github.com/moby/profiles/blob/245180c51918481c0525424b3ee025d2b435d46c/seccomp/default.json)
 
 ## BlueZ
 
@@ -58,4 +62,4 @@ Linux is not vendored in this repository. The Guest kernel is built from an unmo
 - Usage: Bluetooth Host stack and tools for [Linux Guest tests](tests/integration/uml/bluez/README.md)
 - License: GNU General Public License version 2 or later and GNU Lesser General Public License version 2.1 or later, depending on the component
 
-Natively, the Guest runs BlueZ, D-Bus and other programs installed on the host, which keep the licenses of the host's packages. The `bsworld-linux` image includes Ubuntu 24.04's `bluez`, `dbus`, `psmisc` and mbedTLS packages under their Debian package licenses, listed in `/usr/share/doc/<package>/copyright` in the image.
+The UML Guest root filesystem is assembled from Ubuntu 24.04 i386 packages. Their licenses are available in the Guest at `/usr/share/doc/<package>/copyright`.

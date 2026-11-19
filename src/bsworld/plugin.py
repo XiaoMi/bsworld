@@ -129,8 +129,8 @@ def _sim_id_for_node(nodeid: str, run_uid: str) -> str:
 
 
 def _test_log_dir_for_node(nodeid: str, log_dir: Path) -> Path:
-    # nodeid: tests/integration/nuttx/btsak/test_foo.py::test_bar
-    # -> log_dir / tests/integration/nuttx/btsak/test_foo/test_bar
+    # nodeid: tests/integration/uml/nuttx/test_foo.py::test_bar
+    # -> log_dir / tests/integration/uml/nuttx/test_foo/test_bar
     file_part, _, func_part = nodeid.partition("::")
     parts = Path(file_part).with_suffix("").parts
     func_safe = re.sub(r"[^A-Za-z0-9_]+", "_", func_part).strip("_") or "test"

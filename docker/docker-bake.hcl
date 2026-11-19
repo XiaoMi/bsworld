@@ -1,10 +1,9 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 #
-# Links the platform Dockerfiles to the stages they share in base.Dockerfile.
-# Build one platform image from the repository root:
+# Build the UML test image from the repository root:
 #
-#   docker buildx bake -f docker/docker-bake.hcl zephyr
+#   docker buildx bake -f docker/docker-bake.hcl
 #
 # Each variable below can be set from the environment of that command.
 
@@ -25,7 +24,7 @@ variable "BSWORLD_VERSION" {
   default = "0+local"
 }
 
-# Platform images are tagged bsworld-<platform>:<TAG>.
+# The UML image is tagged bsworld-linux:<TAG>.
 variable "TAG" {
   default = "dev"
 }
@@ -60,90 +59,24 @@ function "cache_to" {
 }
 
 group "default" {
-  targets = ["zephyr", "nuttx", "linux"]
+  targets = ["linux"]
 }
 
-target "_common" {
-  context   = "."
-  platforms = ["linux/amd64"]
+target "linux" {
+  context    = "."
+  dockerfile = "docker/linux.Dockerfile"
+  target     = "runtime-linux"
+  platforms  = ["linux/amd64"]
   args = {
     BUILD_UID       = BUILD_UID
     BUILD_GID       = BUILD_GID
     BUILD_JOBS      = BUILD_JOBS
     BSWORLD_VERSION = BSWORLD_VERSION
   }
-}
-
-target "_platform" {
-  inherits = ["_common"]
   labels = merge(
     SOURCE == "" ? {} : { "org.opencontainers.image.source" = SOURCE },
     REVISION == "" ? {} : { "org.opencontainers.image.revision" = REVISION },
   )
-}
-
-# Stages of base.Dockerfile that the platform Dockerfiles build on.
-
-target "build-base" {
-  inherits   = ["_common"]
-  dockerfile = "docker/base.Dockerfile"
-  target     = "build-base"
-  cache-from = cache_from("build-base")
-  cache-to   = cache_to("build-base")
-}
-
-target "babblesim" {
-  inherits   = ["_common"]
-  dockerfile = "docker/base.Dockerfile"
-  target     = "babblesim"
-  cache-from = cache_from("babblesim")
-  cache-to   = cache_to("babblesim")
-}
-
-target "runtime-base" {
-  inherits   = ["_common"]
-  dockerfile = "docker/base.Dockerfile"
-  target     = "runtime-base"
-  cache-from = cache_from("runtime-base")
-  cache-to   = cache_to("runtime-base")
-}
-
-# Platform images, one per CI workflow.
-
-target "zephyr" {
-  inherits   = ["_platform"]
-  dockerfile = "docker/zephyr.Dockerfile"
-  target     = "runtime-zephyr"
-  contexts = {
-    babblesim    = "target:babblesim"
-    runtime-base = "target:runtime-base"
-  }
-  tags       = ["bsworld-zephyr:${TAG}"]
-  cache-from = cache_from("zephyr")
-  cache-to   = cache_to("zephyr")
-}
-
-target "nuttx" {
-  inherits   = ["_platform"]
-  dockerfile = "docker/nuttx.Dockerfile"
-  target     = "runtime-nuttx"
-  contexts = {
-    babblesim    = "target:babblesim"
-    runtime-base = "target:runtime-base"
-  }
-  tags       = ["bsworld-nuttx:${TAG}"]
-  cache-from = cache_from("nuttx")
-  cache-to   = cache_to("nuttx")
-}
-
-target "linux" {
-  inherits   = ["_platform"]
-  dockerfile = "docker/linux.Dockerfile"
-  target     = "runtime-linux"
-  contexts = {
-    build-base   = "target:build-base"
-    runtime-base = "target:runtime-base"
-  }
   tags       = ["bsworld-linux:${TAG}"]
   cache-from = cache_from("linux")
   cache-to   = cache_to("linux")

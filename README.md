@@ -21,23 +21,24 @@ Use BSWorld to:
 
 ## Quick Start
 
-BSWorld runs on Linux/x86_64. Develop in a [local Linux](#local-linux) environment, and use the published Docker images to run and verify the tests. Each platform's image holds BSWorld and that platform's compiled executables as CI tested them, without toolchains or firmware sources; the [Docker guide](docker/README.md) lists them.
+BSWorld runs on Linux/x86_64. The published Docker image includes BabbleSim, a 32-bit UML kernel, its Guest root filesystem, and the test Host executables. See [Local Linux](#local-linux) for development setup.
 
 ### Docker
 
-Install [Docker Engine](https://docs.docker.com/engine/install/ubuntu/), then run an image's integration tests, taking the Zephyr image as an example:
+Install [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) and run the UML integration suite from the repository root.
 
 ```sh
-sudo docker pull ghcr.io/xiaomi/bsworld-zephyr:latest
+sudo docker pull ghcr.io/xiaomi/bsworld-linux:latest
 mkdir -p .cache/docker-results
-# The published images run as UID/GID 1000.
+# The image runs as UID/GID 1000.
 sudo chown 1000:1000 .cache/docker-results
 sudo docker run --rm \
+  --security-opt seccomp=docker/uml-seccomp.json \
   --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
-  ghcr.io/xiaomi/bsworld-zephyr:latest
+  ghcr.io/xiaomi/bsworld-linux:latest
 ```
 
-Results are written to `.cache/docker-results`, including `pytest.xml`, process logs, HCI captures, and RF traces. See the [Docker guide](docker/README.md) for the NuttX and Linux images, to run a selected suite, test the current checkout, choose an image version, or build an image.
+Results are written to `.cache/docker-results`, including `pytest.xml`, process logs, HCI captures, and RF traces. See the [Docker guide](docker/README.md) to select a suite or image version and to build the image locally.
 
 ### Local Linux
 
@@ -69,7 +70,7 @@ Run the development checks:
 ```sh
 ruff check .
 ruff format --check .
-pytest tests/unit tests/integration/support -q
+pytest tests/unit -q
 ```
 
 #### Build and Test
@@ -94,32 +95,33 @@ make -j"$(nproc)" everything
 
 Export `BSWORLD_ROOT`, `BSIM_OUT_PATH` and `BSIM_COMPONENTS_PATH` again in every new shell that builds or runs tests; without `BSIM_OUT_PATH`, the integration tests stop with a setup error.
 
-Run the Bumble and BabbleSim scenarios, which need no other binaries:
+Run the BabbleSim tests.
 
 ```sh
 cd "$BSWORLD_ROOT"
-pytest tests/integration/bumble tests/integration/babblesim -n auto
+pytest tests/integration/babblesim -n auto
 ```
 
-The other suites run a platform's executables. Build them with the guides in [Supported Integrations](#supported-integrations), which name the variable to export for each executable.
+For the full integration suite, prepare a 32-bit Guest using the [UML test environment](tests/integration/uml/README.md).
 
 ## Supported Integrations
 
-| Environment | Validated behavior | Guide |
-|---|---|---|
-| Zephyr Bluetooth shell | Advertising and scanning, interference and recovery, connections and GATT, LL procedures, pairing and privacy, periodic advertising and sync transfer, and interoperability with Bumble | [Zephyr tests](tests/integration/zephyr/README.md) |
-| Bumble Python Host | Advertising, scanning, connections, periodic advertising and synchronization | [Bumble tests](tests/integration/bumble/README.md) |
-| Linux and BlueZ under User Mode Linux | Controller setup, advertising, scanning, connection and disconnection through the Linux Bluetooth subsystem | [BlueZ tests](tests/integration/uml/bluez/README.md) |
-| NuttX BTSak | Advertising, scanning, multiple advertisers, interference and recovery | [BTSak tests](tests/integration/nuttx/btsak/README.md) |
-| Apache NimBLE | Discovery, connection, GATT and subscription on NuttX; discovery and connection under User Mode Linux | [NuttX tests](tests/integration/nuttx/nimble/README.md) · [UML tests](tests/integration/uml/nimble/README.md) |
+Each Host runs in a UML Guest and interoperates with a [Bumble test peer](tests/integration/uml/bumble_peer.py) on the same simulated radio.
+
+| Guest Host | Coverage |
+|---|---|
+| BlueZ | Multi-Guest advertising, scanning, connection and disconnection |
+| Zephyr `native_sim` Bluetooth shell | Advertising, scanning, GATT, pairing, privacy, link updates, periodic advertising and sync transfer |
+| NuttX `sim` BTSak and NimBLE | Advertising, multi-device scanning, interference recovery, GATT reads, writes and notifications |
+| Apache NimBLE Linux | Discovery and connection |
 
 ## Technical Architecture
 
-BSWorld keeps each Application and Host stack on its native interface. Each Host connects over H4 HCI to its own BSController worker. The Controllers and interference sources share the BabbleSim PHY and simulation clock. Native Hosts also join the PHY's clock, Bumble runs on the pytest event loop, and a User Mode Linux guest receives its clock from that loop through UML time-travel.
+Each Host connects to its own BSController over H4 HCI. Bumble runs in the pytest event loop, and each UML Guest gets simulation time from that loop over its own time-travel socket. The PHY assigns device IDs to the Controllers, the pytest clock and any configured interference sources.
 
 <div align="center"><img src="docs/images/babblesim_arch.svg" alt="Bluetooth Hosts connected through BSController workers to a shared BabbleSim PHY" width="80%"><br><em>Figure 1: BSWorld architecture</em><br><br></div>
 
-A topology can mix RTOS, Python, and User Mode Linux Hosts. See [BSController configuration](docs/controllers.md) for per-instance settings such as device address, buffer sizes, and Bluetooth version.
+A topology can run several UML Guests at once. See [BSController configuration](docs/controllers.md) for per-instance settings such as device address, buffer sizes, and Bluetooth version.
 
 HCI traffic is saved as `hciN.snoop` for Wireshark or another BTSnoop-capable tool. Radio traffic is saved as `babblesim/ellisys.bttrp` for Ellisys. See [Logs, traces, and captures](docs/artifacts.md) for locations and a recommended investigation order.
 
@@ -130,7 +132,7 @@ HCI traffic is saved as `hciN.snoop` for Wireshark or another BTSnoop-capable to
 | **Simulation time** | Defines protocol timers, packet timing, RF events, asyncio waits, and test timeouts. It advances only after all participants synchronize. |
 | **Wall-clock time** | Measures how long the test takes on the host. CPU load and Linux scheduling affect this duration but not protocol timing. |
 
-BSWorld registers Applications, Controllers, interference devices, and pytest in the same simulation. A shared synchronization barrier keeps them on one timeline, so a protocol interval such as `T_IFS = 150 μs` remains 150 μs regardless of host load. After topology startup, standard `asyncio` waits and timeouts use simulation time; see [Async waiting and simulation time](docs/writing-tests.md#async-waiting-and-simulation-time).
+BSController workers, interference sources and the pytest clock register with the same PHY. The clock schedules the Guests so a protocol interval such as `T_IFS = 150 μs` remains 150 μs regardless of host load. After topology startup, standard `asyncio` waits and timeouts use simulation time; see [Async waiting and simulation time](docs/writing-tests.md#async-waiting-and-simulation-time).
 
 Repeatability assumes identical binaries and inputs and controlled random sources. External networks, wall-clock-driven services, and other unadapted Host I/O can still introduce nondeterminism.
 
@@ -140,7 +142,7 @@ Repeatability assumes identical binaries and inputs and controlled random source
 - [BSController configuration](docs/controllers.md) covers the topology API and Controller settings.
 - [Logs, traces, and captures](docs/artifacts.md): locate and analyze test artifacts.
 - [Development checks](docs/development.md): run unit tests, lint, and coverage.
-- [Docker guide](docker/README.md): run published images, select suites, and build local images.
+- [Docker guide](docker/README.md): run the UML image, select suites and build the image locally.
 
 ## Community
 

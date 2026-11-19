@@ -17,12 +17,9 @@
 from __future__ import annotations
 
 from .bscontroller import BSController
-from .instance import ProcessInstance
-from .layout import AppSlot, DeviceLayout
+from .layout import DeviceLayout
 
 __all__ = [
-    "AppSlot",
     "BSController",
     "DeviceLayout",
-    "ProcessInstance",
 ]

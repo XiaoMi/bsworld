@@ -11,7 +11,7 @@ With the local virtual environment:
 ```sh
 cd "$BSWORLD_ROOT"
 source .venv/bin/activate
-pytest tests/unit tests/integration/support -q
+pytest tests/unit -q
 ```
 
 With Docker:
@@ -20,10 +20,10 @@ With Docker:
 sudo docker run --rm \
   --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
   --env PYTHONDONTWRITEBYTECODE=1 \
-  ghcr.io/xiaomi/bsworld-zephyr:latest pytest tests/unit -q -p no:cacheprovider
+  ghcr.io/xiaomi/bsworld-linux:latest pytest tests/unit -q -p no:cacheprovider
 ```
 
-The unit suite covers environment and artifact resolution, topology and Controller lifecycle, BabbleSim command generation, RF configuration, simulation-time scheduling, FIFO clock communication, and log collection. End-to-end Bluetooth behavior is covered by `tests/integration/`.
+The unit suite covers topology and Controller lifecycle, RF configuration, simulation-time scheduling, FIFO clock communication, UML Guest lifecycle and time-travel, and log collection. End-to-end Bluetooth coverage is in `tests/integration/`.
 
 ## Code Style
 
@@ -72,11 +72,11 @@ The coverage report includes the complete `bsworld` Python package, including th
 
 ## Verifying Changes
 
-A published image runs the checkout mounted at `/workspace` with the executables it was built with:
+A published image runs the checkout mounted at `/workspace` with the executables it was built with. Pass the [UML seccomp profile](../docker/uml-seccomp.json) when running the UML integration suites in Docker.
 
 | Change | Verify with |
 |---|---|
-| Python framework, tests or scenarios | The published image that contains the suite's firmware, with the checkout mounted; see [Run Tests](../docker/README.md#run-tests) |
+| Python framework, tests or scenarios | The image for the checkout's commit, with the checkout mounted. See [Run Tests](../docker/README.md#run-tests). |
 | Firmware or its build inputs, such as the Zephyr shell configuration or the UML kernel fragment, or a Dockerfile | An image [built](../docker/README.md#build) from the checkout, or the pull request's CI, which builds the images from it |
 
-The published images are the environment CI tested. Native results can differ from them when local tools or packages differ, for example the compiler, Python, or the BlueZ and D-Bus that the UML guest runs from the host. When a local result differs from CI, first reproduce it in the image of the same commit, `sha-<commit>`, then compare the local versions with the image's, for example `gcc --version`, or for the UML suite `bluetoothctl --version` in the Linux image.
+The published images are the environment CI tested. Native results can differ from them when local tools or packages differ, for example the compiler, Python, or the Guest root filesystem's BlueZ and D-Bus packages. When a local result differs from CI, first reproduce it in the image of the same commit, `sha-<commit>`, then compare the local versions with the image's, for example `gcc --version`, or the version of the BlueZ package in the Guest root filesystem.

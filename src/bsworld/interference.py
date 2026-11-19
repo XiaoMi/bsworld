@@ -26,7 +26,7 @@ from numbers import Real
 from pathlib import Path
 from typing import Final, Literal, get_args
 
-from .devices import BSController, ProcessInstance
+from .devices import BSController
 
 InterfType = Literal[
     "CW",
@@ -176,14 +176,14 @@ def _validate_channel_attenuation(name: str, value: object) -> None:
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class InterferenceRef:
     """Stable reference to an interference source registered on a topology."""
 
     index: int
 
 
-PathEndpoint = int | ProcessInstance | BSController | InterferenceRef
+PathEndpoint = int | BSController | InterferenceRef
 
 
 @dataclass
@@ -285,7 +285,7 @@ class TimedAttenuation:
     changes over simulation time. The PHY linearly interpolates between
     consecutive (time, attenuation) points.
 
-    tx / rx: BabbleSim dev_id, a registered ProcessInstance or Controller, or
+    tx / rx: BabbleSim dev_id, a registered Controller, or
         InterferenceRef.
     times_us: simulation timestamps in microseconds, strictly ascending.
     attenuation_db: attenuation value at the corresponding timestamp.
@@ -320,7 +320,7 @@ class TimedAttenuation:
 class StaticAttenuation:
     """Fixed per-path attenuation for lib_2G4Channel_multiatt.
 
-    tx / rx: BabbleSim dev_id, a registered ProcessInstance or Controller, or
+    tx / rx: BabbleSim dev_id, a registered Controller, or
         InterferenceRef.
     attenuation_db: fixed attenuation for that directed path.
     """

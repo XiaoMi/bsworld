@@ -14,7 +14,6 @@
 #
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 import pytest
@@ -22,7 +21,7 @@ from tests.unit.helpers import SpawnRecorder, make_env
 
 from bsworld.backends import babblesim
 from bsworld.backends.babblesim import BabbleSimBackend
-from bsworld.devices import BSController, ProcessInstance
+from bsworld.devices import BSController
 from bsworld.interference import (
     BurstInterference,
     PlaybackInterference,
@@ -41,18 +40,6 @@ def controller_starts(monkeypatch):
 
     monkeypatch.setattr(BSController, "start", start)
     return started
-
-
-def _add_process_controller(backend: BabbleSimBackend):
-    controller = backend.add_controller()
-    backend.register_process(
-        ProcessInstance(
-            command=["/host"],
-            label=f"host{controller.controller_dev_id}",
-            controller=controller,
-        )
-    )
-    return controller
 
 
 def test_interference_argv_builders_cover_burst_wlan_and_playback(tmp_path) -> None:
@@ -99,12 +86,14 @@ def test_interference_argv_builders_cover_burst_wlan_and_playback(tmp_path) -> N
 
 
 def test_write_timed_matrix_keeps_partial_paths_inspectable(tmp_path) -> None:
+    backend = BabbleSimBackend(make_env(tmp_path), "sim")
     matrix = babblesim._write_attenuation_matrix(
         static_paths=[],
         timed_paths=[
             TimedAttenuation(tx=0, rx=1, times_us=[0, 10], attenuation_db=[40.0, 80.0])
         ],
         out_dir=tmp_path,
+        layout=backend.plan_devices(),
     )
 
     timed_file = tmp_path / "timed_att_0_1_0.txt"
@@ -113,20 +102,33 @@ def test_write_timed_matrix_keeps_partial_paths_inspectable(tmp_path) -> None:
 
 
 def test_write_attenuation_matrix_supports_static_and_timed_paths(tmp_path) -> None:
+    backend = BabbleSimBackend(make_env(tmp_path), "sim")
+    first = backend.add_controller()
+    second = backend.add_controller()
+    jammer = backend.add_interference_source(BurstInterference(2402.0))
+    static = [
+        StaticAttenuation(tx=jammer, rx=second, attenuation_db=20.0),
+        StaticAttenuation(tx=jammer, rx=first, attenuation_db=120.0),
+    ]
+    timed = [
+        TimedAttenuation(
+            tx=first, rx=second, times_us=[0, 10], attenuation_db=[40.0, 80.0]
+        ),
+    ]
     matrix = babblesim._write_attenuation_matrix(
-        static_paths=[
-            StaticAttenuation(tx=2, rx=1, attenuation_db=20.0),
-            StaticAttenuation(tx=2, rx=0, attenuation_db=120.0),
-        ],
-        timed_paths=[
-            TimedAttenuation(tx=0, rx=1, times_us=[0, 10], attenuation_db=[40.0, 80.0]),
-        ],
+        static_paths=static,
+        timed_paths=timed,
         out_dir=tmp_path,
+        layout=backend.plan_devices(),
     )
 
     timed_file = tmp_path / "timed_att_0_1_0.txt"
-    assert matrix.read_text() == (f"2 1 : 20.0\n2 0 : 120.0\n0 1 : \"{timed_file}\"\n")
+    assert matrix.read_text() == (f"3 1 : 20.0\n3 0 : 120.0\n0 1 : \"{timed_file}\"\n")
     assert timed_file.read_text() == "0    40.0\n10    80.0\n"
+    assert static[0].tx is jammer
+    assert static[0].rx is second
+    assert timed[0].tx is first
+    assert timed[0].rx is second
 
 
 def test_check_deps_ready_only_validates_built_artifacts(tmp_path, monkeypatch) -> None:
@@ -173,9 +175,9 @@ async def test_start_launches_phy_controller_workers_and_interference(
     backend = BabbleSimBackend(env, "sim")
     backend.check_deps_ready = lambda: None
     backend.prepare = lambda: None
-    first = _add_process_controller(backend)
-    second = _add_process_controller(backend)
-    backend.interference_sources.append(BurstInterference(2402.0))
+    first = backend.add_controller()
+    second = backend.add_controller()
+    backend.add_interference_source(BurstInterference(2402.0))
     recorder = SpawnRecorder()
 
     monkeypatch.setattr(babblesim, "wait_for_path", lambda *args, **kwargs: None)
@@ -184,19 +186,19 @@ async def test_start_launches_phy_controller_workers_and_interference(
     await backend.start(recorder, log_dir=tmp_path / "log")
 
     assert controller_starts == [first, second]
-    assert [name for name, _, _ in recorder.calls] == ["bs_2G4_phy_v1", "interf_5"]
-    assert "-D=6" in recorder.calls[0][1]
+    assert [name for name, _, _ in recorder.calls] == ["bs_2G4_phy_v1", "interf_3"]
+    assert "-D=4" in recorder.calls[0][1]
     assert "-defmodem=BLE_simple" in recorder.calls[0][1]
     assert "-dump" in recorder.calls[0][1]
     assert "-dump_imm" in recorder.calls[0][1]
     assert backend.clock is not None
-    assert backend.clock.dev_id == 4
+    assert backend.clock.dev_id == 2
     assert backend.clock.sim_dir == env.sim_dir("sim")
     assert backend.clock.phy_alive()
-    assert "-d=5" in recorder.calls[1][1]
+    assert "-d=3" in recorder.calls[1][1]
     log_dirs = {name: kwargs["log_dir"] for name, _, kwargs in recorder.calls}
     assert log_dirs["bs_2G4_phy_v1"] == tmp_path / "log" / "babblesim"
-    assert log_dirs["interf_5"] == tmp_path / "log" / "babblesim"
+    assert log_dirs["interf_3"] == tmp_path / "log" / "babblesim"
 
 
 async def test_start_places_default_modem_before_channel_plugin_args(
@@ -222,22 +224,20 @@ async def test_start_places_default_modem_before_channel_plugin_args(
     assert "-argsmain" in phy_args
 
 
-def test_device_lock_paths_cover_applications_and_interference_devices(
+def test_device_lock_paths_cover_controllers_clock_and_interference(
     tmp_path,
 ) -> None:
     env = make_env(tmp_path)
     backend = BabbleSimBackend(env, "sim")
-    _add_process_controller(backend)
-    _add_process_controller(backend)
-    backend.interference_sources.append(BurstInterference(2402.0))
+    backend.add_controller()
+    backend.add_controller()
+    backend.add_interference_source(BurstInterference(2402.0))
 
     assert backend.device_lock_paths() == [
         tmp_path / "state" / "sim" / "2G4.d0.lock",
         tmp_path / "state" / "sim" / "2G4.d1.lock",
         tmp_path / "state" / "sim" / "2G4.d2.lock",
         tmp_path / "state" / "sim" / "2G4.d3.lock",
-        tmp_path / "state" / "sim" / "2G4.d4.lock",
-        tmp_path / "state" / "sim" / "2G4.d5.lock",
     ]
 
 
@@ -298,28 +298,6 @@ def test_allocating_a_controller_assigns_its_capture_path(tmp_path) -> None:
 
     assert default.hci_snoop_file == env.log_dir / "controllers" / "hci0.snoop"
     assert located.hci_snoop_file == tmp_path / "python" / "bumble" / "hci1.snoop"
-
-
-def test_a_capture_can_be_relocated_until_the_simulation_starts(
-    tmp_path, monkeypatch, controller_starts
-) -> None:
-    backend = BabbleSimBackend(make_env(tmp_path), "sim")
-    backend.check_deps_ready = lambda: None
-    backend.prepare = lambda: None
-    controller = backend.add_controller()
-
-    backend.set_snoop_dir(controller, tmp_path / "devices" / "dev0")
-    assert controller.hci_snoop_file == tmp_path / "devices" / "dev0" / "hci0.snoop"
-
-    foreign = BabbleSimBackend(make_env(tmp_path), "sim1").add_controller()
-    with pytest.raises(ValueError, match="does not belong to this BabbleSim backend"):
-        backend.set_snoop_dir(foreign, tmp_path / "elsewhere")
-
-    monkeypatch.setattr(babblesim, "wait_for_path", lambda *args, **kwargs: None)
-
-    asyncio.run(backend.start(SpawnRecorder(), log_dir=tmp_path / "log"))
-    with pytest.raises(RuntimeError, match="after BabbleSim has started"):
-        backend.set_snoop_dir(controller, tmp_path / "too-late")
 
 
 @pytest.mark.parametrize("close_fails", [False, True])
@@ -411,14 +389,3 @@ def test_convert_ellisys_warns_when_dumps_are_missing(tmp_path, monkeypatch) -> 
     assert len(warnings) == 1
     assert "no BabbleSim Tx CSV dumps" in warnings[0]
     assert not (env.log_dir / "babblesim" / "ellisys.bttrp").exists()
-
-
-def test_backend_rejects_duplicate_process_registration(unit_env):
-    backend = BabbleSimBackend(unit_env, "sim")
-    controller = _add_process_controller(backend)
-    process = backend.processes[0]
-    with pytest.raises(ValueError, match="already registered"):
-        backend.register_process(process)
-    layout = backend.plan_devices()
-    assert layout.device_count == 3
-    assert layout.application_slot(process).hci_sock == controller.hci_sock

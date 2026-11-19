@@ -19,10 +19,7 @@ import io
 from pathlib import Path
 from types import SimpleNamespace
 
-from bsworld.devices.instance import ProcessInstance
-from bsworld.devices.layout import AppSlot
 from bsworld.env import Env
-from bsworld.topology import BluetoothTopology
 
 
 def make_env(tmp_path: Path) -> Env:
@@ -35,34 +32,6 @@ def make_env(tmp_path: Path) -> Env:
         bsim_dir=bsim_dir,
         bs_state_dir=tmp_path / "state",
     )
-
-
-def register_process(
-    topo: BluetoothTopology,
-    *,
-    exe: str | Path,
-    label: str = "device",
-    args: tuple[str, ...] = (),
-    shell: bool = False,
-    log_subdir: Path | str | None = None,
-    public_address: str | None = None,
-) -> ProcessInstance:
-    """Register a process through the same public topology API used by scenarios."""
-    binary = Path(exe).absolute()
-    process = topo.add_process(
-        ProcessInstance(
-            command=[binary, *args],
-            label=label,
-            shell=shell,
-            log_subdir=log_subdir,
-        )
-    )
-    process.attach(topo.add_controller(public_address=public_address))
-    return process
-
-
-def slot_for(topo: BluetoothTopology, process: ProcessInstance) -> AppSlot:
-    return topo.bsim.plan_devices().application_slot(process)
 
 
 class SpawnRecorder:

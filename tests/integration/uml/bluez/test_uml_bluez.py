@@ -18,21 +18,24 @@ import asyncio
 from contextlib import AsyncExitStack
 from pathlib import Path
 
-from tests.integration.bumble.common import (
+from tests.integration.uml.bumble_peer import (
     AdvertisingData,
-    AdvertisingType,
-    OwnAddressType,
     add_bumble_controller,
+    advertising,
     advertising_data,
     open_bumble_device,
 )
-from tests.integration.uml.common import UmlGuest, add_uml_controller, open_uml_guest
+from tests.integration.uml.common import (
+    add_uml_controller,
+    attach_hci_uart,
+    open_uml_guest,
+)
 
 from bsworld.devices import BSController
 from bsworld.topology import BluetoothTopology
+from bsworld.uml import UmlGuest
 
 _CONTROLLER_ADDRESS = "AA:BB:CC:DD:EE:FF"
-_BLUEZ_ADVERTISING_NAME = "BSWorld-BlueZ"
 _BUMBLE_OBSERVER_ADDRESS = "F0:F1:F2:F3:F4:10"
 _BUMBLE_PERIPHERAL_ADDRESS = "F0:F1:F2:F3:F4:11"
 _BUMBLE_PERIPHERAL_NAME = "BSWorld-Peer"
@@ -40,54 +43,68 @@ _LOG_SUBDIR = Path("uml") / "bluez"
 _TIMEOUT = 20.0
 
 
-def _add_bluez_controller(topo: BluetoothTopology) -> BSController:
-    return add_uml_controller(topo, _CONTROLLER_ADDRESS, log_subdir=_LOG_SUBDIR)
+def _add_bluez_controller(
+    topo: BluetoothTopology,
+    address: str = _CONTROLLER_ADDRESS,
+    *,
+    log_subdir: Path = _LOG_SUBDIR,
+) -> BSController:
+    return add_uml_controller(topo, address, log_subdir=log_subdir)
 
 
 async def _open_bluez(
-    stack: AsyncExitStack, topo: BluetoothTopology, controller: BSController
+    stack: AsyncExitStack,
+    topo: BluetoothTopology,
+    controller: BSController,
+    *,
+    label: str = "uml_bluez",
+    log_subdir: Path = _LOG_SUBDIR,
 ) -> UmlGuest:
     guest = await open_uml_guest(
-        stack, topo, controller, label="uml_bluez", log_subdir=_LOG_SUBDIR
+        stack, topo, controller, label=label, log_subdir=log_subdir
     )
-    await guest.shell.run("btattach -B /dev/ttyS0 -P h4 &")
-    await guest.wait_log(r"Device index 0 attached", timeout=10)
+    await guest.shell.run_many(
+        (
+            "mount -t tmpfs tmpfs /var/lib/bluetooth && mkdir /run/dbus && "
+            "dbus-daemon --system --fork",
+            "/usr/libexec/bluetooth/bluetoothd --nodetach "
+            "--configfile=/opt/bsworld/bluez.conf &",
+        )
+    )
+    await attach_hci_uart(guest)
 
     await guest.shell.run("bluetoothctl")
     await guest.wait_log(r"Agent registered", timeout=10)
     await guest.shell.run("list")
+    address = controller.public_address
     await guest.wait_log(
-        rf"Controller {_CONTROLLER_ADDRESS} BlueZ \d+\.\d+ \[default\]", timeout=10
+        rf"Controller {address} BlueZ \d+\.\d+ \[default\]", timeout=10
     )
     # The adapter may already be powered when bluetoothctl discovers it, so
     # query its state rather than requiring a power-change notification.
     await guest.shell.run("show")
     await guest.wait_log(
-        rf"^Controller {_CONTROLLER_ADDRESS} \(public\)$",
+        rf"^Controller {address} \(public\)$",
         timeout=10,
     )
     await guest.wait_log(
-        rf"(?:^\s*Powered: yes|Controller {_CONTROLLER_ADDRESS} Powered: yes)$",
+        rf"(?:^\s*Powered: yes|Controller {address} Powered: yes)$",
         timeout=10,
     )
     return guest
 
 
-async def test_uml_bluez_initializes_virtual_controller(
+async def test_uml_bluez_guests_advertise_to_bumble_observer(
     topo: BluetoothTopology,
 ) -> None:
-    controller = _add_bluez_controller(topo)
-    await topo.start()
-
-    async with AsyncExitStack() as stack:
-        guest = await _open_bluez(stack, topo, controller)
-        await guest.shell.run("quit")
-
-
-async def test_uml_bluez_advertises_to_bumble_observer(
-    topo: BluetoothTopology,
-) -> None:
-    controller = _add_bluez_controller(topo)
+    advertisers = {
+        "BSWorld-BlueZ-A": _CONTROLLER_ADDRESS,
+        "BSWorld-BlueZ-B": "AA:BB:CC:DD:EE:FD",
+    }
+    controllers = {
+        name: _add_bluez_controller(topo, address, log_subdir=_LOG_SUBDIR / name)
+        for name, address in advertisers.items()
+    }
     observer_ctl = add_bumble_controller(
         topo, "bluez_observer", _BUMBLE_OBSERVER_ADDRESS
     )
@@ -95,7 +112,12 @@ async def test_uml_bluez_advertises_to_bumble_observer(
     await topo.start()
 
     async with AsyncExitStack() as stack:
-        guest = await _open_bluez(stack, topo, controller)
+        guests = {
+            name: await _open_bluez(
+                stack, topo, controller, label=name, log_subdir=_LOG_SUBDIR / name
+            )
+            for name, controller in controllers.items()
+        }
         observer = await open_bumble_device(
             stack,
             "bluez_observer",
@@ -103,35 +125,28 @@ async def test_uml_bluez_advertises_to_bumble_observer(
             observer_ctl.hci_sock,
         )
         found = asyncio.get_running_loop().create_future()
+        addresses = {}
 
         def on_advertisement(advertisement) -> None:  # noqa: ANN001
-            name = advertisement.data.get(AdvertisingData.COMPLETE_LOCAL_NAME)
-            if not found.done() and name == _BLUEZ_ADVERTISING_NAME:
-                found.set_result(advertisement)
+            name = advertisement.data.get(AdvertisingData.Type.COMPLETE_LOCAL_NAME)
+            if found.done() or name not in advertisers:
+                return
+            addresses[name] = advertisement.address.to_string(with_type_qualifier=False)
+            if addresses.keys() == advertisers.keys():
+                found.set_result(addresses)
 
         observer.on("advertisement", on_advertisement)
         await observer.start_scanning(active=True, filter_duplicates=False)
         try:
-            await guest.shell.run("menu advertise")
-            await guest.shell.run(f"name {_BLUEZ_ADVERTISING_NAME}")
-            await guest.shell.run("name")
-            await guest.wait_log(
-                rf"LocalName: {_BLUEZ_ADVERTISING_NAME}", timeout=_TIMEOUT
-            )
-            await guest.shell.run("back")
-            await guest.shell.run("advertise on")
-            await guest.wait_log(r"Advertising object registered", timeout=_TIMEOUT)
-
-            advertisement = await asyncio.wait_for(found, timeout=_TIMEOUT)
-            assert (
-                advertisement.address.to_string(with_type_qualifier=False)
-                == _CONTROLLER_ADDRESS
-            )
+            for name, guest in guests.items():
+                await guest.shell.run_many(
+                    ("menu advertise", f"name {name}", "back", "advertise on")
+                )
+                await guest.wait_log(r"Advertising object registered", timeout=_TIMEOUT)
+            assert await asyncio.wait_for(found, timeout=_TIMEOUT) == advertisers
         finally:
             observer.remove_listener("advertisement", on_advertisement)
             await observer.stop_scanning()
-            await guest.shell.run("advertise off")
-            await guest.shell.run("quit")
 
 
 async def test_uml_bluez_scans_and_connects_bumble_peripheral(
@@ -154,12 +169,13 @@ async def test_uml_bluez_scans_and_connects_bumble_peripheral(
         )
         connected = asyncio.get_running_loop().create_future()
         peripheral.on("connection", lambda connection: connected.set_result(connection))
-        await peripheral.start_advertising(
-            advertising_type=AdvertisingType.UNDIRECTED_CONNECTABLE_SCANNABLE,
-            own_address_type=OwnAddressType.PUBLIC,
-            advertising_data=advertising_data(_BUMBLE_PERIPHERAL_NAME),
-            advertising_interval_min=20.0,
-            advertising_interval_max=20.0,
+        await stack.enter_async_context(
+            advertising(
+                peripheral,
+                data=advertising_data(_BUMBLE_PERIPHERAL_NAME),
+                interval_min=20.0,
+                interval_max=20.0,
+            )
         )
         connection = None
         try:
@@ -189,5 +205,4 @@ async def test_uml_bluez_scans_and_connects_bumble_peripheral(
                     r"Disconnection successful|Successful disconnected",
                     timeout=_TIMEOUT,
                 )
-            await peripheral.stop_advertising()
             await guest.shell.run("quit")

@@ -27,36 +27,26 @@ BSWorld appends `run-<timestamp>/<uid>` beneath the selected root. [pytest-xdist
 
 The [Docker commands](../docker/README.md#run-tests) bind-mount `.cache/docker-results` on the host at `/output` in the container. The default image command saves `pytest.xml` there, alongside the `run-<timestamp>/<uid>` directories containing per-test logs and captures.
 
-In GitHub Actions, the `CI` workflow runs every check in parallel for pull requests and pushes to main: `Checks` (Ruff and the unit tests), `BSController`, `Bumble` (the Bumble and BabbleSim suites, run on the runner without an image), and the `Zephyr`, `NuttX`, and `Linux` platform workflows, which each build their image and run its integration tests inside it. `CI result` passes only when all of them pass. Open **Actions → CI → the run** to view a result; each workflow can also be run alone from the Actions tab. Each platform run uploads a `bsworld-results-<platform>-<run-id>-<attempt>` artifact with `integration.xml`, `integration.log`, the image tag and metadata, and per-test logs and captures under `integration/`. Reports and logs are uploaded on failure too and retained for 14 days.
+GitHub Actions runs `Checks`, `BSController`, and `UML` in parallel. The `UML` workflow uses the same image for the Guest and BabbleSim integration tests and uploads reports, logs, captures and image metadata to `bsworld-results-uml-<run-id>-<attempt>` for 14 days.
 
 See the [Docker guide](../docker/README.md#select-a-version) to select an image by `latest`, source commit, or Release tag.
 
 ## Directory Layout
 
-A typical NuttX scanning test produces this layout:
+The Bumble scanner and NuttX Guest advertising test produces the following output.
 
 ```text
-/tmp/run-<timestamp>/<uid>/
-    log/
-        tests/
-            integration/
-                nuttx/
-                    btsak/
-                        test_btsak_scan_advertise/
-                            test_nuttx_btsak_scanner_finds_advertiser/
-                                bsworld.log
-                                babblesim/
-                                    bs_2G4_phy_v1.log
-                                    ellisys.bttrp
-                                nuttx/
-                                    scanners/
-                                        nuttx_btsak_scanner/
-                                            nuttx_btsak_scanner.log
-                                            hci0.snoop
-                                    advertisers/
-                                        nuttx_btsak_advertiser/
-                                            nuttx_btsak_advertiser.log
-                                            hci1.snoop
+/tmp/run-<timestamp>/<uid>/log/tests/integration/uml/nuttx/
+    test_btsak/test_bumble_scans_nuttx_advertising/
+        bsworld.log
+        babblesim/
+            bs_2G4_phy_v1.log
+            ellisys.bttrp
+        uml/nuttx/
+            nuttx.log
+            hci0.snoop
+        bumble/scanner/
+            hci1.snoop
 ```
 
 ## Artifact Reference
@@ -75,7 +65,7 @@ Timestamps at the start of lines in `bsworld.log` use Linux wall-clock time and 
 
 ## Application Logs and `wait_log()`
 
-Each Application's stdout and stderr are written to its `.log` file and made available to `ProcessInstance.wait_log()` as complete lines.
+Each Application's stdout and stderr are written to its `.log` file and made available to `UmlGuest.wait_log()` as complete lines.
 
 ```python
 await device.wait_log(r"Bluetooth initialized", timeout=30)
@@ -92,7 +82,7 @@ await device.wait_log(r"Bluetooth initialized", timeout=30)
 Tail an Application log while a test is running:
 
 ```sh
-tail -f /tmp/run-<timestamp>/<uid>/log/tests/.../nuttx_btsak_advertiser.log
+tail -f /tmp/run-<timestamp>/<uid>/log/tests/.../nuttx.log
 ```
 
 ## Framework Log
@@ -100,7 +90,7 @@ tail -f /tmp/run-<timestamp>/<uid>/log/tests/.../nuttx_btsak_advertiser.log
 Every test has one `bsworld.log`, beginning when `topo.start()` starts framework activity for that test. It records:
 
 - The BabbleSim instance ID and device count.
-- PHY and Application startup commands.
+- PHY and UML Guest startup commands.
 - Working directory, log path, and PID for every process.
 - Startup barriers for Controller HCI sockets and BabbleSim device locks.
 - Processes still running during teardown and their cleanup order.

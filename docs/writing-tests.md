@@ -9,21 +9,19 @@ The repository [README](../README.md#technical-architecture) introduces the Virt
 - [Test Lifecycle](#test-lifecycle)
 - [Adding Controllers](#adding-controllers)
 - [Async Waiting and Simulation Time](#async-waiting-and-simulation-time)
-- [Integrating Application Processes](#integrating-application-processes)
+- [Running Hosts in UML](#running-hosts-in-uml)
 - [Process Shell Commands](#process-shell-commands)
 - [RF Conditions and Interference](#rf-conditions-and-interference)
 - [Topology as a pytest Test](#topology-as-a-pytest-test)
 
 ## Test Lifecycle
 
-The `topo` fixture gives each test a `BluetoothTopology`. Tests declare participants, connectivity, and RF conditions instead of orchestrating operating-system processes directly. Suite-local factories describe native Applications as `ProcessInstance` objects with log waiting and optional shell input, and register them with the supplied topology; asyncio-based Python Host stacks register Virtual Controllers directly and open their HCI sockets after topology startup. A User Mode Linux guest likewise registers only its Controller beforehand and boots after startup.
+The `topo` fixture gives each test a `BluetoothTopology`.
 
-The topology moves through four phases:
-
-1. Test fixtures use program factories, `attach()`, `topo.add_process()`, `topo.add_controller()`, and RF configuration methods to record the intended topology without spawning processes or advancing simulation time.
-2. `await topo.start()` assigns device identities, prepares isolated socket and log paths, and starts the PHY, Virtual Controllers, interference sources, and Application processes. It returns once every participant has registered and the event loop is running on simulation time.
-3. Tests drive behavior and evaluate results through `ProcessInstance`, in-process Host stack APIs, shell commands, and standard asyncio APIs. The event loop advances shared simulation time only after all callbacks and I/O at the current timestamp have been processed.
-4. Fixture teardown stops Controllers and processes, flushes logs and capture files, generates the Ellisys trace, and removes temporary simulation files.
+1. Register one Controller per Host with `topo.add_controller()` and configure RF conditions.
+2. Call `await topo.start()` to start the PHY, Controllers, interference sources and simulation clock.
+3. Boot UML Guests and verify behavior through their consoles. Python Hosts such as Bumble connect directly to their HCI sockets from the test's asyncio event loop.
+4. Teardown stops the Guests, Controllers and PHY and saves the logs and captures.
 
 Every test receives its own simulation ID, Unix socket directory, and log directory. Virtual tests can therefore run concurrently without sharing Controller state, RF state, or output files.
 
@@ -59,35 +57,41 @@ Simulation time only advances once every callback and I/O event at the current t
 
 <div align="center"><img src="images/bluetooth-diagram.svg" alt="One BSWorld discrete-time step" width="80%"><br><em>Figure 1: One deterministic simulation-time step</em><br><br></div>
 
-`ProcessInstance.wait_log()` uses the same asynchronous clock, so its `timeout` is also measured in simulation time. It applies a regular expression to complete buffered and newly arriving lines in arrival order. A fragment is not eligible until its terminating newline arrives, and a later call does not revisit lines that have already been scanned. Write consecutive log assertions in the expected event order.
+`UmlGuest.wait_log()` uses the same asynchronous clock, so its `timeout` is also measured in simulation time. It applies a regular expression to complete buffered and newly arriving lines in arrival order. A fragment is not eligible until its terminating newline arrives, and a later call does not revisit lines that have already been scanned. Write consecutive log assertions in the expected event order.
 
 > [!WARNING]
 > Do not call blocking functions such as `time.sleep()` inside an async test because they block the event loop thread. Prefer asynchronous APIs; host-side blocking work that does not participate in protocol timing can be moved to `asyncio.to_thread()` when unavoidable.
 
-## Integrating Application Processes
+## Running Hosts in UML
 
-Each integration suite owns the factories that create its Applications. A factory registers a new process with the topology. If it leaves the Controller attachment to the caller, use `host.attach(controller)` before `topo.start()`. Python Host stacks open their Controller's `hci_sock` after startup and run in the test's asyncio event loop. Use the suite's existing helpers when adding a scenario.
+Add one Controller per Guest before starting the topology. After startup, open each Guest with `bsworld.uml.UmlGuest`. It runs the supplied kernel with a read-only root filesystem and connects the Controller's H4 socket to `/dev/ttyS0`. The `init` path is relative to the Guest root.
 
 ```python
-from tests.integration.nuttx.btsak.devices import NUTTX_BTSAK_ADVERTISER
-from tests.integration.nuttx.common import create_nuttx_process
+from bsworld.uml import UmlGuest
 
-host = create_nuttx_process(topo, NUTTX_BTSAK_ADVERTISER)
-host.attach(topo.add_controller(public_address="F0:F1:F2:F3:F4:02"))
+controller = topo.add_controller(log_subdir="uml/host")
+await topo.start()
+
+with UmlGuest(
+    topo,
+    controller,
+    kernel=kernel,
+    rootfs=rootfs,
+    init="/init",
+    label="host",
+    log_subdir="uml/host",
+    getrandom_library=seed_library,
+) as guest:
+    await guest.wait_log(r"^BSWORLD_UML_READY$")
+    await guest.shell.run("btattach -B /dev/ttyS0 -P h4 &")
+    await guest.wait_log(r"Device index 0 attached")
 ```
 
-Attachments can change until device identities are published, normally by `topo.start()`; an earlier `plan_devices()` call also freezes them. If you construct a `ProcessInstance` yourself, register it with `topo.add_process()` and attach its Controller before planning the layout.
-
-| Platform | Test guide |
-|---|---|
-| Bumble | [Bumble integration tests](../tests/integration/bumble/README.md#adding-scenarios) |
-| NuttX | [BTSak and NimBLE](../tests/integration/nuttx/README.md#adding-scenarios) |
-| UML Linux | [BlueZ and NimBLE](../tests/integration/uml/README.md#adding-scenarios) |
-| Zephyr | [Bluetooth shell](../tests/integration/zephyr/shell/README.md#adding-scenarios) |
+Use distinct labels and Controllers for multiple Guests in one test. Each Guest has a separate console and time-travel socket. They share the topology's clock and use no PHY device IDs of their own. See the [UML test environment](../tests/integration/uml/README.md) for the kernel, root filesystem, and seed library.
 
 ## Process Shell Commands
 
-For a `ProcessInstance` registered with shell support, send commands after `await topo.start()` and the platform's initialization. Given an initialized `dev`, the basic pattern is:
+Wait for the Guest console before sending commands.
 
 ```python
 await dev.shell.run("...")
@@ -146,7 +150,7 @@ topo.set_channel_attenuation(
 
 Paths are directional. Configure both `tx -> rx` and `rx -> tx` when the two directions require distinct loss values. A `TimedAttenuation` curve pairs each timestamp with one attenuation value and linearly interpolates between adjacent points.
 
-`tx` and `rx` can be registered `ProcessInstance` or `BSController` objects, `InterferenceRef` objects returned by `add_*_interference()`, or raw BabbleSim device IDs. A Host process resolves to the radio device ID of its attached Controller.
+`tx` and `rx` accept registered `BSController` objects, `InterferenceRef` objects from `add_*_interference()`, and raw BabbleSim device IDs.
 
 ### Burst Interference
 
@@ -202,21 +206,4 @@ BSWorld validates RF inputs before spawning BabbleSim processes:
 
 ## Topology as a pytest Test
 
-The `topo` fixture keeps topology declarations, RF conditions, Application actions, and assertions in one Python test. In this example, suite-local `peripheral` and `central` fixtures register their Application processes before the test starts. RF configuration calls record the desired state; `await topo.start()` materializes it as a running simulation.
-
-```python
-async def test_central_receives_notification(topo, peripheral, central):
-    topo.set_channel_attenuation(default_db=45.0)
-
-    await topo.start()
-
-    await peripheral.wait_log(r"Advertising successfully started")
-    await central.wait_log(r"Connected")
-    await central.wait_log(r"\[NOTIFICATION\]")
-```
-
-Figure 2 maps the example to its runtime behavior. Test fixtures register the Host processes and attach their Controllers. The `set_channel_attenuation()` call configures RF paths on their shared PHY. Phase 1 corresponds to `topo.start()`, which returns only after the HCI sockets and all BabbleSim participants are ready. The remaining phases correspond to the three `wait_log()` calls as the event loop advances simulation time through advertising, connection establishment, and notification delivery.
-
-<div align="center"><img src="images/pytest-topology-execution.svg" alt="A pytest topology expanded into deterministic Bluetooth LE execution" width="80%"><br><em>Figure 2: From a pytest topology to deterministic Bluetooth LE execution</em><br><br></div>
-
-The lower half of the figure relates each log assertion to its HCI commands, events, and simulated over-the-air packets. The test states observable outcomes; BSWorld owns device and socket allocation, process lifecycles, time advancement, and persistence of logs and protocol traces.
+The [BlueZ multi-Guest test](../tests/integration/uml/bluez/test_uml_bluez.py) boots two Guests and checks that Bumble receives advertising from both. The [NuttX interference test](../tests/integration/uml/nuttx/test_btsak.py) assigns directional attenuation to the Guest Controllers and checks that scanning recovers after interference ends.

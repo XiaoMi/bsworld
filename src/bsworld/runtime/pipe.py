@@ -20,6 +20,7 @@ import asyncio
 import os
 import re
 from collections import deque
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO
@@ -56,18 +57,29 @@ class LogCapture:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         fifo_path = log_path.with_name(f"{log_path.name}.fifo")
         fifo_path.unlink(missing_ok=True)
-        os.mkfifo(fifo_path, 0o600)
-        read_fd = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)
-        write_fd = os.open(fifo_path, os.O_WRONLY | os.O_NONBLOCK)
-        log_fh = os.fdopen(write_fd, "wb", buffering=0)
-        artifact_fh = open(log_path, "wb", buffering=0)
-        return cls(
-            log_path=log_path,
-            log_fh=log_fh,
-            _fifo_path=fifo_path,
-            _fifo_read_fd=read_fd,
-            _artifact_fh=artifact_fh,
-        )
+        with ExitStack() as rollback:
+            os.mkfifo(fifo_path, 0o600)
+            rollback.callback(fifo_path.unlink, missing_ok=True)
+            read_fd = os.open(fifo_path, os.O_RDONLY | os.O_NONBLOCK)
+            rollback.callback(os.close, read_fd)
+            log_fh = rollback.enter_context(
+                open(
+                    fifo_path,
+                    "wb",
+                    buffering=0,
+                    opener=lambda path, flags: os.open(path, flags | os.O_NONBLOCK),
+                )
+            )
+            artifact_fh = rollback.enter_context(log_path.open("wb", buffering=0))
+            capture = cls(
+                log_path=log_path,
+                log_fh=log_fh,
+                _fifo_path=fifo_path,
+                _fifo_read_fd=read_fd,
+                _artifact_fh=artifact_fh,
+            )
+            rollback.pop_all()
+            return capture
 
     @property
     def write_fd(self) -> int:
