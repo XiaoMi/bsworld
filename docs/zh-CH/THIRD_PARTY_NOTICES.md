@@ -28,14 +28,6 @@ NuttX 源码通过外部依赖获取，不复制到本仓库。
 
 NimBLE 源码通过外部依赖获取，不复制到本仓库。
 
-## TrouBLE
-
-- 源码：https://github.com/embassy-rs/trouble
-- 用途：[原生 Linux 测试](../../tests/integration/trouble/README.zh-CN.md)使用的 Rust Bluetooth Host 协议栈和 Battery Service 应用
-- 许可证：MIT 或 Apache License 2.0
-
-上游协议栈和应用作为外部 Cargo 依赖使用，保持原样。BSWorld 维护原生传输与执行器，适配层保留原有的 MIT OR Apache-2.0 许可。
-
 ## Bumble
 
 - 源码：https://github.com/google/bumble

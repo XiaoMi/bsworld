@@ -77,6 +77,6 @@ A published image runs the checkout mounted at `/workspace` with the executables
 | Change | Verify with |
 |---|---|
 | Python framework, tests or scenarios | The published image that contains the suite's firmware, with the checkout mounted; see [Run Tests](../docker/README.md#run-tests) |
-| Firmware or its build inputs, such as the Zephyr shell configuration, the TrouBLE source or the UML kernel fragment, or a Dockerfile | An image [built](../docker/README.md#build) from the checkout, or the pull request's CI, which builds the images from it |
+| Firmware or its build inputs, such as the Zephyr shell configuration or the UML kernel fragment, or a Dockerfile | An image [built](../docker/README.md#build) from the checkout, or the pull request's CI, which builds the images from it |
 
 The published images are the environment CI tested. Native results can differ from them when local tools or packages differ, for example the compiler, Python, or the BlueZ and D-Bus that the UML guest runs from the host. When a local result differs from CI, first reproduce it in the image of the same commit, `sha-<commit>`, then compare the local versions with the image's, for example `gcc --version`, or for the UML suite `bluetoothctl --version` in the Linux image.

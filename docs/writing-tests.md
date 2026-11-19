@@ -82,7 +82,6 @@ Attachments can change until device identities are published, normally by `topo.
 |---|---|
 | Bumble | [Bumble integration tests](../tests/integration/bumble/README.md#adding-scenarios) |
 | NuttX | [BTSak and NimBLE](../tests/integration/nuttx/README.md#adding-scenarios) |
-| TrouBLE | [Native TrouBLE tests](../tests/integration/trouble/README.md#adding-scenarios) |
 | UML Linux | [BlueZ and NimBLE](../tests/integration/uml/README.md#adding-scenarios) |
 | Zephyr | [Bluetooth shell](../tests/integration/zephyr/shell/README.md#adding-scenarios) |
 

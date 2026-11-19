@@ -82,7 +82,6 @@ host.attach(topo.add_controller(public_address="F0:F1:F2:F3:F4:02"))
 |---|---|
 | Bumble | [Bumble 集成测试](../../tests/integration/bumble/README.zh-CN.md#添加场景) |
 | NuttX | [BTSak 与 NimBLE](../../tests/integration/nuttx/README.zh-CN.md#添加场景) |
-| TrouBLE | [原生 TrouBLE 测试](../../tests/integration/trouble/README.zh-CN.md#添加场景) |
 | UML Linux | [BlueZ 与 NimBLE](../../tests/integration/uml/README.zh-CN.md#添加场景) |
 | Zephyr | [Bluetooth shell](../../tests/integration/zephyr/shell/README.zh-CN.md#添加场景) |
 

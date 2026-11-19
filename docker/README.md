@@ -10,7 +10,6 @@ The images hold only the final executables, as CI built and tested them, without
 |---|---|---|
 | `ghcr.io/xiaomi/bsworld-zephyr` | Zephyr Bluetooth Host shell | `tests/integration/zephyr` |
 | `ghcr.io/xiaomi/bsworld-nuttx` | NuttX BTSak and NimBLE | `tests/integration/nuttx` |
-| `ghcr.io/xiaomi/bsworld-trouble` | TrouBLE `ble_bas` | `tests/integration/trouble` |
 | `ghcr.io/xiaomi/bsworld-linux` | [User Mode Linux](../tests/integration/uml/README.md) kernel, Ubuntu BlueZ, NimBLE Linux | `tests/integration/uml` |
 
 ## Use a Published Image
@@ -133,7 +132,7 @@ sudo docker run --rm --env PYTHONDONTWRITEBYTECODE=1 \
   bsworld:python-test python -m pytest tests/unit -q -p no:cacheprovider
 ```
 
-Build a platform image with [docker-bake.hcl](docker-bake.hcl), which links its Dockerfile to the stages it shares in [base.Dockerfile](base.Dockerfile). The targets are `zephyr`, `nuttx`, `trouble` and `linux`:
+Build a platform image with [docker-bake.hcl](docker-bake.hcl), which links its Dockerfile to the stages it shares in [base.Dockerfile](base.Dockerfile). Choose the `zephyr`, `nuttx`, or `linux` target.
 
 ```sh
 sudo BUILD_UID="$(id -u)" BUILD_GID="$(id -g)" BUILD_JOBS=4 \
@@ -148,7 +147,6 @@ The image is tagged `bsworld-zephyr:dev`. `BUILD_JOBS` sets the compile parallel
 | `base.Dockerfile` | `build-base`, `bsworld` (setuptools-scm, which reads the version), `python-test` (installed project and tests), `babblesim`, `runtime-base` (runtime libraries and BabbleSim) |
 | `zephyr.Dockerfile` | `zephyr-workspace` (Zephyr workspace and SDK), `zephyr-shell`, `runtime-zephyr` |
 | `nuttx.Dockerfile` | `nuttx`, `runtime-nuttx` |
-| `trouble.Dockerfile` | `trouble`, `runtime-trouble` |
 | `linux.Dockerfile` | `uml` (kernel and seed library), `nimble-linux`, `runtime-linux` |
 
 Run the local image:
