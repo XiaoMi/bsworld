@@ -38,4 +38,6 @@ python -m samples.advertise_scan
 
 ## 日志
 
-使用 `--log-dir /tmp/bscontroller-samples` 保留日志。每次运行会创建独立的子目录，其中保存 `phy.log`、各设备的 `.snoop` 抓包和 `air/` 下的 PHY 收发记录。通过 `devices.json` 可按 PHY 设备编号查找名称、地址和 HCI 抓包。运行成功时还会保存 `result.json`。
+使用 `--log-dir /tmp/bscontroller-samples` 为每次运行保留独立的产物目录。`phy.log` 保存 PHY 进程输出。各设备的 `.snoop` 记录 HCI 报文，`.pcapng` 记录空口报文。共用的 `ellisys.bttrp` 汇总所有 Controller 的发射记录。
+
+可通过 `devices.json` 按 PHY 设备编号查找名称、地址和抓包文件。运行成功时还会保存 `result.json`。

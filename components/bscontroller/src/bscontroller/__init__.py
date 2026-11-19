@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from .radio.base import Phy as Phy
     from .radio.base import Radio as Radio
     from .radio.base import Received as Received
+    from .runtime.capture import EllisysCapture as EllisysCapture
     from .runtime.event_loop import RadioEventLoop as RadioEventLoop
     from .runtime.session import BabbleSimSession as RadioSession
     from .runtime.worker import RadioControllerWorker as RadioController
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
 _EXPORTS = {
     'hci': ('.hci', None),
     'ControllerConfig': ('.config', 'ControllerConfig'),
+    'EllisysCapture': ('.runtime.capture', 'EllisysCapture'),
     'Phy': ('.radio.base', 'Phy'),
     'Radio': ('.radio.base', 'Radio'),
     'Received': ('.radio.base', 'Received'),
@@ -47,6 +49,7 @@ except PackageNotFoundError:
     __version__ = '0+unknown'
 
 __all__ = [
+    'EllisysCapture',
     'Phy',
     'Radio',
     'RadioController',
