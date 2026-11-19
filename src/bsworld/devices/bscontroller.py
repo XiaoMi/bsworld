@@ -22,7 +22,7 @@ from string import hexdigits
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from bscontroller import ControllerConfig, RadioController
+    from bscontroller import ControllerConfig, EllisysCapture, RadioController
 
 
 def _normalize_controller_address(address: str) -> str:
@@ -51,6 +51,7 @@ class BSController:
     hci_snoop_file: Path | None = None
     max_step_us: int | None = None
     config: ControllerConfig | None = None
+    rf_pcap_file: Path | None = None
     _worker: RadioController | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -71,7 +72,7 @@ class BSController:
     def hci_sock(self) -> Path:
         return self.socket_dir / f"hci{self.controller_dev_id}.sock"
 
-    async def start(self) -> None:
+    async def start(self, *, ellisys_capture: EllisysCapture | None = None) -> None:
         """Launch the worker while the backend brings up other PHY participants."""
         from bscontroller import RadioController
 
@@ -83,6 +84,10 @@ class BSController:
             )
         name = f"hci{self.controller_dev_id}"
         options = {"hci_snoop_file": self.hci_snoop_file, "hci_socket": self.hci_sock}
+        if self.rf_pcap_file is not None:
+            options["rf_pcap_file"] = self.rf_pcap_file
+        if ellisys_capture is not None:
+            options["ellisys_capture"] = ellisys_capture
         if self.max_step_us is not None:
             options["max_step_us"] = self.max_step_us
         if self.config is not None:

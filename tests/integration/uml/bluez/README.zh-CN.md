@@ -30,4 +30,4 @@ pytest tests/integration/uml/bluez --require-integration -q
 
 ## 测试产物
 
-各用例将控制台日志和 HCI 抓包写入自己的 `uml/bluez/` 目录。广播用例为每个 Guest 再建一个子目录。完整目录结构见[测试产物说明](../../../../docs/zh-CH/artifacts.md)。
+各用例将控制台日志、HCI BTSnoop 和 Controller 的空口 PCAPNG 抓包写入 `uml/bluez/`。广播用例为每个 Guest 再建一个子目录。完整目录结构见[测试产物说明](../../../../docs/zh-CH/artifacts.md)。

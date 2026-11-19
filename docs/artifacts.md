@@ -45,8 +45,10 @@ For example, the test where Bumble scans for NuttX advertising produces this dir
         uml/nuttx/
             nuttx.log
             hci0.snoop
+            radio0.pcapng
         bumble/scanner/
             hci1.snoop
+            radio1.pcapng
 ```
 
 ## Artifact Reference
@@ -57,7 +59,8 @@ For example, the test where Bumble scans for NuttX advertising produces this dir
 | `babblesim/bs_2G4_phy_v1.log` | BabbleSim PHY | PHY process stdout and stderr. It can be empty during a normal run. |
 | `uml/<label>/<label>.log` | UML Guest | Combined console stdout and stderr. A test can set a different log directory. |
 | `hciN.snoop` | BSController | H4 traffic between the Host and its Controller. |
-| `babblesim/ellisys.bttrp` | BSWorld | Time-sorted Bluetooth LE transmissions from the PHY dumps. |
+| `radioN.pcapng` | BSController | Packets transmitted by this Controller and packets returned by the PHY during reception. |
+| `babblesim/ellisys.bttrp` | BSController | Time-sorted Bluetooth LE transmissions from all BSController workers in the test. |
 | `babblesim/att_matrix.txt` | BSWorld | Static path-attenuation matrix passed to the `multiatt` channel model. |
 | `babblesim/timed_att_*.txt` | BSWorld | Time points and attenuation values for time-varying paths. |
 
@@ -90,7 +93,6 @@ Starting with `topo.start()`, BSWorld writes the following details to `bsworld.l
 - The working directory, log path, and PID of each process.
 - Readiness of Controller HCI sockets and BabbleSim device locks.
 - Which processes were still running at teardown and the order they were stopped.
-- Inputs and output used for Ellisys conversion.
 
 If a managed process exits with a nonzero status before cleanup, BSWorld logs the exit and the final lines of its output.
 
@@ -105,11 +107,21 @@ wireshark "${TEST_LOG_DIR:?}/bumble/scanner/hci1.snoop"
 btmon -r "${TEST_LOG_DIR:?}/bumble/scanner/hci1.snoop"
 ```
 
-Controllers write to `controllers/hciN/` by default. Set `log_subdir` when adding a Controller to put its capture alongside the Guest or Bumble artifacts.
+Controllers write both capture files to `controllers/hciN/` by default. Set `log_subdir` when adding a Controller to put its captures alongside the Guest or Bumble artifacts.
+
+## Controller Radio Capture
+
+`radioN.pcapng` records the Controller's transmissions and the frames the PHY returns during reception. Each record uses a simulation timestamp and identifies its direction. Received frames carry the reported RSSI and CRC result when available.
+
+Open the capture in Wireshark to compare the Controller's transmit and receive activity.
+
+```sh
+wireshark "${TEST_LOG_DIR:?}/bumble/scanner/radio1.pcapng"
+```
 
 ## Ellisys Over-the-Air Trace
 
-BSWorld enables per-device PHY CSV dumps at startup. At teardown, it merges the available transmission records into `babblesim/ellisys.bttrp`.
+BSWorld starts the PHY with `-nodump`. Each BSController supplies its own transmission records, which the shared capture writes in timestamp order to `babblesim/ellisys.bttrp` at teardown.
 
 In [Ellisys](https://www.ellisys.com/products/bex400/), select **File > Import**, choose **Bluetooth packets**, then use **Next** and **Browse** to open `ellisys.bttrp`.
 
@@ -117,14 +129,14 @@ In [Ellisys](https://www.ellisys.com/products/bex400/), select **File > Import**
   <img src="images/ellisys-trace-import.gif" alt="Import a BSWorld Ellisys trace" width="760">
 </p>
 
-Use the trace to check which packets were transmitted, their channels and times, and whether transmissions overlap. It contains transmit records and a fixed RSSI value. To investigate a receive failure, compare it with the receiving Controller's HCI capture and the test's attenuation and interference settings.
+Use the trace to check which packets the Controllers transmitted, their channels and times, and whether transmissions overlap. The Ellisys records use a fixed RSSI value. To investigate a receive failure, compare the trace with the receiving Controller's `radioN.pcapng` and the test's attenuation and interference settings.
 
 ## Failure Investigation Order
 
 1. Check `bsworld.log` for startup commands, missing sockets or device locks, and early process exits.
 2. Check the Guest console for its last reported state and the line expected by `wait_log()`.
 3. Check `hciN.snoop` for the expected Host commands and Controller events.
-4. Check `ellisys.bttrp` for the expected transmissions and their timing.
+4. Check `radioN.pcapng` for a Controller's transmit and receive activity. Use `ellisys.bttrp` for the shared transmission timeline.
 5. For an unexpected RF path, compare the device IDs, directions, and times in the generated `att_matrix.txt` and `timed_att_*.txt` files.
 
-BSWorld keeps the per-test artifacts in the output directory and removes temporary BabbleSim state, sockets, and raw results during teardown.
+BSWorld keeps per-test logs and captures in the output directory. Teardown removes temporary BabbleSim state, sockets, and any raw results.

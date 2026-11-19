@@ -30,4 +30,4 @@ pytest tests/integration/uml/nimble --require-integration -q
 
 ## 测试产物
 
-用例将控制台日志 `uml_nimble.log` 和 Controller 的 HCI 抓包写入其日志目录下的 `uml/nimble/`。完整目录结构见[测试产物说明](../../../../docs/zh-CH/artifacts.md)。
+用例将控制台日志 `uml_nimble.log`、Controller 的 HCI BTSnoop 和空口 PCAPNG 抓包写入 `uml/nimble/`。完整目录结构见[测试产物说明](../../../../docs/zh-CH/artifacts.md)。

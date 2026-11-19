@@ -17,8 +17,10 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
+from bscontroller import EllisysCapture
 from tests.unit.helpers import make_env
 
 from bsworld.devices import BSController
@@ -75,8 +77,15 @@ def test_controller_rejects_invalid_worker_interval(tmp_path, interval):
 
 
 async def test_controller_delegates_h4_and_capture_to_worker(tmp_path, worker):
-    ctl = _controller(tmp_path, public_address="c0:ff:ee:00:00:01", max_step_us=250)
-    await ctl.start()
+    rf_capture = tmp_path / "bscontroller" / "radio0.pcapng"
+    ellisys_capture = EllisysCapture(tmp_path / "babblesim" / "ellisys.bttrp")
+    ctl = _controller(
+        tmp_path,
+        public_address="c0:ff:ee:00:00:01",
+        rf_pcap_file=rf_capture,
+        max_step_us=250,
+    )
+    await ctl.start(ellisys_capture=ellisys_capture)
     instance = worker.instances[0]
     await instance.started.wait()
     assert instance.identity == ("sim", 0)
@@ -84,6 +93,8 @@ async def test_controller_delegates_h4_and_capture_to_worker(tmp_path, worker):
     assert instance.max_step_us == 250
     assert instance.options["hci_snoop_file"] == ctl.hci_snoop_file
     assert instance.options["hci_socket"] == ctl.hci_sock
+    assert instance.options["rf_pcap_file"] == rf_capture
+    assert instance.options["ellisys_capture"] is ellisys_capture
     assert ctl.hci_snoop_file == tmp_path / "bscontroller" / "hci0.snoop"
     await ctl.stop()
     assert instance.closed
@@ -179,10 +190,10 @@ async def test_stop_releases_other_controllers_and_phy_after_worker_failure(
     monkeypatch.setattr(first, "stop", fail_stop)
     monkeypatch.setattr(second, "stop", stop_second)
     monkeypatch.setattr(topo.pm, "cleanup", lambda: events.append("processes"))
-    monkeypatch.setattr(topo.bsim, "finish", lambda **kwargs: events.append("finish"))
+    topo.bsim._ellisys_capture = SimpleNamespace(close=lambda: events.append("capture"))
     with pytest.raises(RuntimeError, match="worker failed"):
         await topo.stop()
-    assert events == ["first", "second", "processes", "finish"]
+    assert events == ["first", "second", "processes", "capture"]
 
 
 async def test_controller_passes_its_config_to_the_worker(tmp_path, worker):

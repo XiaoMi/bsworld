@@ -44,4 +44,4 @@ pytest tests/integration/uml/zephyr --require-integration -q
 
 ## 测试产物
 
-各用例的 `uml/zephyr/` 目录包含控制台日志 `zephyr.log` 和对应 Controller 的 HCI 抓包。输出路径和文件格式见[日志、跟踪文件与抓包](../../../../docs/zh-CH/artifacts.md)。
+各用例的 `uml/zephyr/` 目录包含控制台日志 `zephyr.log`、Controller 的 HCI BTSnoop 和空口 PCAPNG 抓包。输出路径和文件格式见[日志、跟踪文件与抓包](../../../../docs/zh-CH/artifacts.md)。

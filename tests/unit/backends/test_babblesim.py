@@ -35,8 +35,8 @@ from bsworld.interference import (
 def controller_starts(monkeypatch):
     started = []
 
-    async def start(controller):
-        started.append(controller)
+    async def start(controller, *, ellisys_capture):
+        started.append((controller, ellisys_capture))
 
     monkeypatch.setattr(BSController, "start", start)
     return started
@@ -185,12 +185,16 @@ async def test_start_launches_phy_controller_workers_and_interference(
 
     await backend.start(recorder, log_dir=tmp_path / "log")
 
-    assert controller_starts == [first, second]
+    assert [controller for controller, _ in controller_starts] == [first, second]
+    capture = controller_starts[0][1]
+    assert controller_starts[1][1] is capture
+    assert capture.path == tmp_path / "log" / "babblesim" / "ellisys.bttrp"
     assert [name for name, _, _ in recorder.calls] == ["bs_2G4_phy_v1", "interf_3"]
     assert "-D=4" in recorder.calls[0][1]
     assert "-defmodem=BLE_simple" in recorder.calls[0][1]
-    assert "-dump" in recorder.calls[0][1]
-    assert "-dump_imm" in recorder.calls[0][1]
+    assert "-nodump" in recorder.calls[0][1]
+    assert "-dump" not in recorder.calls[0][1]
+    assert "-dump_imm" not in recorder.calls[0][1]
     assert backend.clock is not None
     assert backend.clock.dev_id == 2
     assert backend.clock.sim_dir == env.sim_dir("sim")
@@ -221,7 +225,7 @@ async def test_start_places_default_modem_before_channel_plugin_args(
     phy_args = recorder.calls[0][1]
     assert phy_args.index("-defmodem=BLE_simple") < phy_args.index("-argschannel")
     assert "-channel=multiatt" in phy_args
-    assert "-argsmain" in phy_args
+    assert phy_args.index("-argsmain") < phy_args.index("-nodump")
 
 
 def test_device_lock_paths_cover_controllers_clock_and_interference(
@@ -289,7 +293,7 @@ def test_registration_does_not_wait_for_locks_after_clock_connection_failure(
         backend.wait_for_devices_registered(timeout=0)
 
 
-def test_allocating_a_controller_assigns_its_capture_path(tmp_path) -> None:
+def test_allocating_a_controller_assigns_its_capture_paths(tmp_path) -> None:
     env = make_env(tmp_path)
     backend = BabbleSimBackend(env, "sim")
 
@@ -297,12 +301,14 @@ def test_allocating_a_controller_assigns_its_capture_path(tmp_path) -> None:
     located = backend.add_controller(snoop_dir=tmp_path / "python" / "bumble")
 
     assert default.hci_snoop_file == env.log_dir / "controllers" / "hci0.snoop"
+    assert default.rf_pcap_file == env.log_dir / "controllers" / "radio0.pcapng"
     assert located.hci_snoop_file == tmp_path / "python" / "bumble" / "hci1.snoop"
+    assert located.rf_pcap_file == tmp_path / "python" / "bumble" / "radio1.pcapng"
 
 
-@pytest.mark.parametrize("close_fails", [False, True])
-def test_finish_releases_clock_before_artifacts_even_if_close_fails(
-    tmp_path, monkeypatch, close_fails
+@pytest.mark.parametrize("failing_resource", [None, "clock", "capture"])
+def test_finish_releases_clock_and_capture_before_removing_simulation_state(
+    tmp_path, monkeypatch, failing_resource
 ) -> None:
     backend = BabbleSimBackend(make_env(tmp_path), "sim")
     backend.add_controller()
@@ -311,30 +317,40 @@ def test_finish_releases_clock_before_artifacts_even_if_close_fails(
 
     class Clock:
         def close(self):
-            calls.append("close")
-            if close_fails:
+            calls.append("clock")
+            if failing_resource == "clock":
                 raise RuntimeError("close failed")
 
+    class Capture:
+        def close(self):
+            calls.append("capture")
+            if failing_resource == "capture":
+                raise OSError("write failed")
+
     backend.clock = Clock()
+    backend._ellisys_capture = Capture()
     monkeypatch.setattr(babblesim, "warn", warnings.append)
-    monkeypatch.setattr(
-        backend, "convert_ellisys", lambda **kwargs: calls.append("convert")
-    )
     monkeypatch.setattr(
         backend, "cleanup_sim_artifacts", lambda: calls.append("cleanup")
     )
-    backend.finish(log_dir=tmp_path / "log")
+    backend.finish()
 
-    assert calls == ["close", "convert", "cleanup"]
+    assert calls == ["clock", "capture", "cleanup"]
     assert backend.clock is None
-    assert warnings == (
-        ["simulation clock close failed: close failed"] if close_fails else []
+    assert backend._ellisys_capture is None
+    assert (
+        warnings
+        == {
+            None: [],
+            "clock": ["simulation clock close failed: close failed"],
+            "capture": ["Ellisys capture failed for sim: write failed"],
+        }[failing_resource]
     )
-    backend.finish(log_dir=tmp_path / "log")
-    assert calls.count("close") == 1
+    backend.finish()
+    assert calls == ["clock", "capture", "cleanup", "cleanup"]
 
 
-def test_finish_releases_clock_after_partial_start_without_controllers(
+def test_finish_releases_clock_and_keeps_capture_after_partial_start(
     tmp_path,
 ) -> None:
     backend = BabbleSimBackend(make_env(tmp_path), "sim")
@@ -345,47 +361,9 @@ def test_finish_releases_clock_after_partial_start_without_controllers(
             calls.append("close")
 
     backend.clock = Clock()
+    trace_path = tmp_path / "log" / "babblesim" / "ellisys.bttrp"
+    backend._ellisys_capture = babblesim.EllisysCapture(trace_path)
     backend.finish()
     assert calls == ["close"]
     assert backend.clock is None
-
-
-def test_convert_ellisys_writes_trace_without_a_subprocess(
-    tmp_path, monkeypatch
-) -> None:
-    env = make_env(tmp_path)
-    results_dir = env.bsim_dir / "results" / "sim"
-    results_dir.mkdir(parents=True)
-    tx_file = results_dir / "d_2G4_0.Tx.csv"
-    tx_file.write_text(
-        "start_time,end_time,center_freq,phy_address,modulation,power_level,"
-        "abort_time,recheck_time,packet_size,packet\n"
-        "100,139,2.000000,0x8E89BED6,16,0,0,0,5,01 00 00 00 00\n"
-    )
-    backend = BabbleSimBackend(env, "sim")
-
-    def unexpected_subprocess(*args, **kwargs):
-        pytest.fail("Ellisys conversion must run in process")
-
-    monkeypatch.setattr(babblesim.subprocess, "run", unexpected_subprocess)
-
-    backend.convert_ellisys(log_dir=tmp_path / "log")
-
-    assert (tmp_path / "log" / "babblesim" / "ellisys.bttrp").read_text() == (
-        "FileFormat:Bluetooth\n                version=1.0\n\nItemFormat:LE "
-        "version=1.1\n"
-        'Item time=100000 aa=0x8E89BED6 rssi=-40 rfchannel=0 phy=1Mbps rawdata="01 '
-        '00 00 00 00"\n'
-    )
-
-
-def test_convert_ellisys_warns_when_dumps_are_missing(tmp_path, monkeypatch) -> None:
-    env = make_env(tmp_path)
-    warnings = []
-    monkeypatch.setattr(babblesim, "warn", warnings.append)
-
-    BabbleSimBackend(env, "sim").convert_ellisys()
-
-    assert len(warnings) == 1
-    assert "no BabbleSim Tx CSV dumps" in warnings[0]
-    assert not (env.log_dir / "babblesim" / "ellisys.bttrp").exists()
+    assert trace_path.is_file()
