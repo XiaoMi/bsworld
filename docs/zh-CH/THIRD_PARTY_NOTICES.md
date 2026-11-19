@@ -15,7 +15,7 @@ BSWorld 不修改 BabbleSim 上游源码，各组件保留各自的许可证文�
 ## Apache NuttX
 
 - 源码：https://github.com/apache/nuttx
-- 用途：[NuttX 测试程序](../../tests/integration/nuttx/README.zh-CN.md)
+- 用途：[NuttX 测试程序](../../tests/integration/uml/README.zh-CN.md)
 - 许可证：Apache License 2.0
 
 NuttX 源码通过外部依赖获取，不复制到本仓库。
@@ -23,7 +23,7 @@ NuttX 源码通过外部依赖获取，不复制到本仓库。
 ## Apache NimBLE
 
 - 源码：https://github.com/apache/mynewt-nimble
-- 用途：[NuttX](../../tests/integration/nuttx/README.zh-CN.md) 和 [Linux Guest 测试](../../tests/integration/uml/nimble/README.zh-CN.md)使用的 Bluetooth Host 协议栈
+- 用途：[NuttX](../../tests/integration/uml/README.zh-CN.md) 和 [Linux Guest 测试](../../tests/integration/uml/nimble/README.zh-CN.md)使用的 Bluetooth Host 协议栈
 - 许可证：Apache License 2.0
 
 NimBLE 源码通过外部依赖获取，不复制到本仓库。
@@ -31,7 +31,7 @@ NimBLE 源码通过外部依赖获取，不复制到本仓库。
 ## Bumble
 
 - 源码：https://github.com/google/bumble
-- 用途：[Bumble 测试](../../tests/integration/bumble/README.zh-CN.md)和 [BSController 示例](../../components/bscontroller/samples/README.zh-CN.md)使用的 Python Bluetooth Host 协议栈
+- 用途：[Bumble 对测 Host](../../tests/integration/uml/bumble_peer.py)和 [BSController 示例](../../components/bscontroller/samples/README.zh-CN.md)使用的 Python Bluetooth Host 协议栈
 - 许可证：Apache License 2.0
 
 BSWorld 使用公开的 Python 和 HCI transport 接口，不修改 Bumble Host 协议栈。
@@ -39,10 +39,10 @@ BSWorld 使用公开的 Python 和 HCI transport 接口，不修改 Bumble Host 
 ## Zephyr Project
 
 - 源码：https://github.com/zephyrproject-rtos/zephyr
-- 用途：[Zephyr Bluetooth shell 测试](../../tests/integration/zephyr/shell/README.zh-CN.md)
+- 用途：[Zephyr Bluetooth shell 测试](../../tests/integration/uml/README.zh-CN.md)
 - 许可证：Apache License 2.0
 
-BSWorld 使用自己的 [Host 配置与 HCI overlay](../../tests/integration/zephyr/shell/source/)，从外部 Zephyr 源码构建 Bluetooth shell。
+BSWorld 使用自己的 [native_sim 配置](../../tests/integration/uml/zephyr/prj.conf)，从外部 Zephyr 源码构建 Bluetooth shell。
 
 ## Linux
 
@@ -50,7 +50,11 @@ BSWorld 使用自己的 [Host 配置与 HCI overlay](../../tests/integration/zep
 - 用途：以 User Mode Linux 形式运行 [Linux Guest](../../tests/integration/uml/README.zh-CN.md)，并通过 time-travel 与 BabbleSim 同步时间
 - 许可证：GNU General Public License version 2；个别文件可能使用兼容许可证，以上游 `COPYING` 为准
 
-本仓库不包含 Linux 源码。Guest 内核使用未修改的上游提交和 BSWorld 的[配置片段](../../tests/integration/uml/source/linux.fragment)编译。
+Guest 内核使用未修改的上游提交和 BSWorld 的[配置片段](../../src/bsworld/uml/linux.fragment)编译。
+
+## Moby seccomp 配置
+
+[UML 容器配置](../../docker/uml-seccomp.json)基于 Moby `seccomp/v0.2.4`，增加了 `personality(ADDR_NO_RANDOMIZE)` 的许可。[上游配置](https://github.com/moby/profiles/blob/245180c51918481c0525424b3ee025d2b435d46c/seccomp/default.json)
 
 ## BlueZ
 
@@ -58,4 +62,4 @@ BSWorld 使用自己的 [Host 配置与 HCI overlay](../../tests/integration/zep
 - 用途：[Linux Guest 测试](../../tests/integration/uml/bluez/README.zh-CN.md)使用的 Bluetooth Host 协议栈和工具
 - 许可证：不同组件分别使用 GNU General Public License version 2 or later 和 GNU Lesser General Public License version 2.1 or later
 
-本机运行时，Guest 运行主机上安装的 BlueZ、D-Bus 等程序，它们沿用主机软件包各自的许可证。`bsworld-linux` 镜像包含 Ubuntu 24.04 的 `bluez`、`dbus`、`psmisc` 和 mbedTLS 软件包，遵循各自的 Debian 软件包许可证，见镜像中的 `/usr/share/doc/<package>/copyright`。
+UML Guest 根文件系统从 Ubuntu 24.04 i386 软件包解包得到。各包的许可证保留在 Guest 的 `/usr/share/doc/<package>/copyright`。

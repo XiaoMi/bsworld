@@ -1,13 +1,14 @@
-# The images are built with the repository root as context. Only paths named by
-# COPY in docker/*.Dockerfile are needed; keep caches and local outputs out so
-# they neither inflate the context nor invalidate cached layers.
-# docker/base.Dockerfile.dockerignore applies to base.Dockerfile instead.
-.git
-.cache
-.venv
+# Keep credentials and local environments and outputs out of the image.
+**/.git
+**/.env*
+**/.cache
+**/.venv
 .coverage
 **/__pycache__
 **/*.pyc
 .pytest_cache
 .ruff_cache
+**/build
+**/dist
+**/prebuilt
 **/target

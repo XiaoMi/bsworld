@@ -2,34 +2,20 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-在 [UML Linux Guest](../README.zh-CN.md) 中运行主机的 BlueZ，通过 `bluetoothctl` 控制，Bumble 作为对端。
-
-| 程序 | 来源 | 可执行文件变量 |
-|---|---|---|
-| `bluetoothd`、`bluetoothctl`、`btattach` | 主机已安装的 BlueZ，已用 `bluetoothd` 5.86 和 `bluetoothctl` 5.64 验证，CI 使用 Ubuntu 24.04 的 BlueZ 5.72 | 无 |
-
-## 准备环境
-
-先按 [UML 测试环境](../README.zh-CN.md#准备环境)编译内核和随机种子库，该步骤也会安装 BlueZ。[init.sh](../source/init.sh) 启动 `/usr/libexec/bluetooth/bluetoothd`，不存在时启动 `/usr/lib/bluetooth/bluetoothd`。
+在 [UML Guest](../README.zh-CN.md) 中运行 Ubuntu i386 软件包中的 `bluetoothd`、`bluetoothctl` 和 `btattach`。每个 Guest 启动自己的 D-Bus 和 `bluetoothd`，[main.conf](main.conf) 安装在 `/opt/bsworld/bluez.conf`。
 
 ## 构建与运行
 
-这些测试不需要编译 BlueZ。运行测试：
+准备 [UML 测试环境](../README.zh-CN.md#准备环境)，然后在仓库根目录选择 BlueZ 套件。
 
 ```sh
-cd "$BSWORLD_ROOT"
-source .venv/bin/activate
-pytest tests/integration/uml/bluez -q
+docker run --rm --security-opt seccomp=docker/uml-seccomp.json \
+  bsworld-linux:dev pytest tests/integration/uml/bluez -q
 ```
 
 | 测试 | 验证内容 |
 |---|---|
-| `test_uml_bluez_initializes_virtual_controller` | `hci0` 以预期的公共地址注册并上电。 |
-| `test_uml_bluez_advertises_to_bumble_observer` | Bumble Observer 收到 BlueZ 的可连接广播，设备名和地址正确。 |
-| `test_uml_bluez_scans_and_connects_bumble_peripheral` | BlueZ 发现 Bumble Peripheral，建立连接后断开。 |
+| `test_uml_bluez_guests_advertise_to_bumble_observer` | 两个 Guest 各自注册并上电 `hci0`，同一个 Bumble Observer 收到两者的广播，名称和地址均正确。 |
+| `test_uml_bluez_scans_and_connects_bumble_peripheral` | BlueZ 发现 Bumble Peripheral，连接后断开。 |
 
-BlueZ 通过 `bluetoothd` 使用 `hci0`。Guest 控制台位于 `uml/bluez/uml_bluez.log`，其余见[产物目录结构](../../../../docs/zh-CH/artifacts.md)。
-
-## 许可证
-
-本目录的测试使用 Apache License 2.0，其余见[上级许可证说明](../README.zh-CN.md#许可证)。
+控制台日志和 HCI 抓包位于 `uml/bluez/`。广播测试为每个 Guest 创建一个子目录。[测试产物](../../../../docs/zh-CH/artifacts.md)

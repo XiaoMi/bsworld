@@ -19,14 +19,19 @@ from __future__ import annotations
 import asyncio
 from contextlib import AsyncExitStack
 from pathlib import Path
+from shlex import quote
 
-from tests.integration.applications import require_artifact
-from tests.integration.bumble.common import (
+from tests.integration.uml.bumble_peer import (
     AdvertisingData,
     add_bumble_controller,
     open_bumble_device,
 )
-from tests.integration.uml.common import add_uml_controller, open_uml_guest
+from tests.integration.uml.common import (
+    add_uml_controller,
+    attach_hci_uart,
+    open_uml_guest,
+    require_guest_program,
+)
 
 from bsworld.topology import BluetoothTopology
 
@@ -40,8 +45,8 @@ _TIMEOUT = 20.0
 async def test_uml_nimble_linux_advertises_and_accepts_connection(
     topo: BluetoothTopology,
 ) -> None:
-    nimble = require_artifact(
-        "BSWORLD_UML_NIMBLE_BIN", guide="tests/integration/uml/README.md"
+    nimble = require_guest_program(
+        "BSWORLD_UML_NIMBLE_BIN", "/opt/bsworld/nimble-linux"
     )
     controller = add_uml_controller(topo, _NIMBLE_ADDRESS, log_subdir=_LOG_SUBDIR)
     central_ctl = add_bumble_controller(
@@ -63,7 +68,7 @@ async def test_uml_nimble_linux_advertises_and_accepts_connection(
         found = asyncio.get_running_loop().create_future()
 
         def on_advertisement(advertisement) -> None:  # noqa: ANN001
-            name = advertisement.data.get(AdvertisingData.COMPLETE_LOCAL_NAME)
+            name = advertisement.data.get(AdvertisingData.Type.COMPLETE_LOCAL_NAME)
             if not found.done() and name == _NIMBLE_NAME:
                 found.set_result(advertisement)
 
@@ -71,12 +76,8 @@ async def test_uml_nimble_linux_advertises_and_accepts_connection(
         await central.start_scanning(active=False, filter_duplicates=False)
         connection = None
         try:
-            # NimBLE claims hci0 through HCI User Channel, so BlueZ must not.
-            await guest.shell.run("killall bluetoothd 2>/dev/null || true")
-            await guest.shell.run("btattach -B /dev/ttyS0 -P h4 &")
-            await guest.wait_log(r"Device index 0 attached", timeout=_TIMEOUT)
-            # The guest runs the host's build of the NimBLE Linux example.
-            await guest.shell.run(f"{nimble} 0 &")
+            await attach_hci_uart(guest)
+            await guest.shell.run(f"{quote(str(nimble))} 0 &")
 
             advertisement = await asyncio.wait_for(found, timeout=_TIMEOUT)
             assert (

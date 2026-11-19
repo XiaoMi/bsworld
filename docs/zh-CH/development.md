@@ -11,7 +11,7 @@
 ```sh
 cd "$BSWORLD_ROOT"
 source .venv/bin/activate
-pytest tests/unit tests/integration/support -q
+pytest tests/unit -q
 ```
 
 使用 Docker：
@@ -20,10 +20,10 @@ pytest tests/unit tests/integration/support -q
 sudo docker run --rm \
   --mount "type=bind,src=$PWD,dst=/workspace,readonly" \
   --env PYTHONDONTWRITEBYTECODE=1 \
-  ghcr.io/xiaomi/bsworld-zephyr:latest pytest tests/unit -q -p no:cacheprovider
+  ghcr.io/xiaomi/bsworld-linux:latest pytest tests/unit -q -p no:cacheprovider
 ```
 
-单元测试覆盖环境与产物解析、拓扑和 Controller 生命周期、BabbleSim 命令生成、RF 配置、仿真时间调度、FIFO 时钟通信和日志采集。端到端 Bluetooth 行为由 `tests/integration/` 覆盖。
+单元测试覆盖拓扑与 Controller 生命周期、RF 配置、仿真时间调度、FIFO 时钟通信、UML Guest 生命周期与 time-travel，以及日志收集。蓝牙端到端场景位于 `tests/integration/`。
 
 ## 代码格式
 
@@ -72,11 +72,11 @@ pytest tests/integration/ -n auto
 
 ## 验证修改
 
-已发布的镜像用构建时的可执行程序运行挂载到 `/workspace` 的 checkout：
+已发布的镜像用构建时的可执行程序运行挂载到 `/workspace` 的 checkout。在 Docker 中运行 UML 集成测试时，传入 [UML seccomp 配置](../../docker/uml-seccomp.json)。
 
 | 修改内容 | 验证方式 |
 |---|---|
-| Python 框架、测试或场景 | 挂载 checkout，使用包含该套件固件的已发布镜像，参见[运行测试](../../docker/README.zh-CN.md#运行测试) |
+| Python 框架、测试或场景 | 挂载 checkout，使用同一提交的镜像。参见[运行测试](../../docker/README.zh-CN.md#运行测试)。 |
 | 固件或其构建输入（如 Zephyr shell 配置或 UML 内核配置片段），或 Dockerfile | 用 checkout [构建](../../docker/README.zh-CN.md#构建)的镜像，或 pull request 的 CI，它会用该 checkout 构建镜像 |
 
-已发布的镜像就是 CI 测试时的环境。本地工具或软件包不同时，本机结果可能与镜像不同，例如编译器、Python，以及 UML Guest 从主机运行的 BlueZ 和 D-Bus。本地结果与 CI 不一致时，先用同一提交的镜像 `sha-<commit>` 复现，再对比本地与镜像中的版本，例如分别运行 `gcc --version`；UML 套件可在 Linux 镜像中运行 `bluetoothctl --version`。
+本地结果与 CI 不一致时，先用同一提交的镜像 `sha-<commit>` 复现，再对比编译器、Python 及 UML Guest 根文件系统中的 i386 BlueZ 和 D-Bus 包版本。

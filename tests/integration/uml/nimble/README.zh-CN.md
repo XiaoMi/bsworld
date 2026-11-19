@@ -2,51 +2,17 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-在 [UML Linux Guest](../README.zh-CN.md) 中运行 [Apache NimBLE](https://github.com/apache/mynewt-nimble) 上游的 Linux Host 示例，Bumble 作为对端。
-
-| 程序 | 上游版本 | 可执行文件变量 |
-|---|---|---|
-| `nimble-linux` | `porting/examples/linux`，提交 `1e8ed60276f35a80ed4d4b4f8bb9d9c6fee53845` | `BSWORLD_UML_NIMBLE_BIN` |
-
-## 准备环境
-
-先按 [UML 测试环境](../README.zh-CN.md#准备环境)编译内核和随机种子库，该步骤也会设置 `UML_DIR`。安装 mbedtls 头文件（Ubuntu）：
-
-```sh
-sudo apt-get install -y libmbedtls-dev
-```
-
-在 Linux 源码树旁获取 Apache NimBLE：
-
-```sh
-export NIMBLE_DIR="$UML_DIR/mynewt-nimble"
-git init "$NIMBLE_DIR"
-git -C "$NIMBLE_DIR" fetch --depth 1 https://github.com/apache/mynewt-nimble.git 1e8ed60276f35a80ed4d4b4f8bb9d9c6fee53845
-git -C "$NIMBLE_DIR" checkout --detach FETCH_HEAD
-```
+在 [UML Guest](../README.zh-CN.md) 中运行 Apache NimBLE 上游的 Linux Host 示例。测试将 Controller 注册为 `hci0`，用 HCI 设备编号 `0` 启动程序。Bumble Central 发现名为 `nimble` 的广播设备，连接后断开。
 
 ## 构建与运行
 
-Guest 直接从主机文件系统运行该示例。上游默认编译 32 位版本（`-m32`），因此为 64 位 Guest 清空这两个参数。上游 Makefile 通过 ccache 调用编译器，`CC` 和 `CXX` 改为直接调用：
+[UML 测试环境](../README.zh-CN.md#准备环境)使用 [Dockerfile](../../../../docker/linux.Dockerfile) 的 `nimble-linux` 阶段编译的 i386 程序。默认 Guest 路径是 `/opt/bsworld/nimble-linux`，可通过 `BSWORLD_UML_NIMBLE_BIN` 指定。
+
+从仓库根目录运行测试。
 
 ```sh
-make -C "$NIMBLE_DIR/porting/examples/linux" CC=gcc CXX=g++ \
-  NIMBLE_CFLAGS= NIMBLE_LDFLAGS= -j"$(nproc)"
-export BSWORLD_UML_NIMBLE_BIN="$NIMBLE_DIR/porting/examples/linux/nimble-linux"
+docker run --rm --security-opt seccomp=docker/uml-seccomp.json \
+  bsworld-linux:dev pytest tests/integration/uml/nimble -q
 ```
 
-运行测试：
-
-```sh
-cd "$BSWORLD_ROOT"
-source .venv/bin/activate
-pytest tests/integration/uml/nimble -q
-```
-
-`test_uml_nimble_linux_advertises_and_accepts_connection`：NimBLE 以 `AA:BB:CC:DD:EE:FE` 和设备名 `nimble` 广播，Bumble Central 连接后断开。
-
-Guest 控制台位于 `uml/nimble/uml_nimble.log`，其余见[产物目录结构](../../../../docs/zh-CH/artifacts.md)。
-
-## 许可证
-
-本目录的测试使用 Apache License 2.0，Apache NimBLE 同样使用 Apache License 2.0，其余见[上级许可证说明](../README.zh-CN.md#许可证)。
+Guest 控制台日志和 HCI 抓包位于 `uml/nimble/`。[测试产物](../../../../docs/zh-CH/artifacts.md)

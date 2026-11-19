@@ -40,5 +40,4 @@ jobs:
         run: python -m ruff format --check --no-cache .
 
       - name: Run unit tests
-        # Neither suite needs BabbleSim, firmware or other native artifacts.
-        run: python -m pytest tests/unit tests/integration/support -n auto -q -p no:cacheprovider
+        run: python -m pytest tests/unit -n auto -q -p no:cacheprovider

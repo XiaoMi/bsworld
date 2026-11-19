@@ -35,7 +35,7 @@ Run the checks relevant to the change in your local environment, or in a publish
 ```sh
 ruff check --no-cache .
 ruff format --check --no-cache .
-pytest tests/unit tests/integration/support
+pytest tests/unit
 ```
 
 Follow the repository's Python [code style](docs/development.md#code-style). The `Checks` workflow, part of `CI`, checks all maintained Python code and runs the unit tests for every pull request and push to main.
@@ -43,10 +43,7 @@ Follow the repository's Python [code style](docs/development.md#code-style). The
 Run the affected virtual-system suite when changing process startup, scheduling, HCI, RF behavior, platform configuration, or test Applications. For example:
 
 ```sh
-pytest tests/integration/nuttx/btsak -n auto
-pytest tests/integration/nuttx/nimble -n auto
-pytest tests/integration/zephyr/shell -n auto
-pytest tests/integration/bumble -n auto
+pytest tests/integration -n auto
 ```
 
 Use the full suite when the change crosses subsystem boundaries:

@@ -9,21 +9,19 @@
 - [测试生命周期](#测试生命周期)
 - [添加 Controller](#添加-controller)
 - [异步等待与仿真时间](#异步等待与仿真时间)
-- [接入业务程序进程](#接入业务程序进程)
+- [在 UML 中运行 Host](#在-uml-中运行-host)
 - [向进程发送 Shell 命令](#向进程发送-shell-命令)
 - [RF 条件与干扰](#rf-条件与干扰)
 - [使用 pytest 描述拓扑](#使用-pytest-描述拓扑)
 
 ## 测试生命周期
 
-`topo` fixture 为每个测试提供一个 `BluetoothTopology`。测试声明参与者、连接关系和 RF 条件，不直接编排底层操作系统进程。原生业务程序由所在测试目录的创建函数描述为 `ProcessInstance`，获得日志等待和可选的 Shell 输入能力，并自动登记到传入的拓扑中；基于 asyncio 的 Python Host 协议栈则直接注册虚拟 Controller，并在拓扑启动后连接它的 HCI socket。User Mode Linux Guest 同样只预先注册 Controller，在拓扑启动后再启动。
+`topo` fixture 为每个测试提供 `BluetoothTopology`。
 
-一套拓扑依次经过四个阶段：
-
-1. 测试 fixture 通过程序创建函数、`attach()`、`topo.add_process()`、`topo.add_controller()` 和 RF 配置接口记录预期拓扑，此时不会创建子进程或推进仿真时间。
-2. `await topo.start()` 确定各设备标识，创建隔离的 socket 和日志路径，并启动 PHY、虚拟 Controller、干扰源和业务程序。当所有参与者完成注册、event loop 已运行在仿真时间上时，该调用返回。
-3. 测试通过 `ProcessInstance`、进程内 Host 协议栈接口、Shell 命令和标准 asyncio API 执行业务操作与断言。event loop 处理完当前时间戳上的回调和 I/O 后，才会推进共享仿真时间。
-4. fixture 清理阶段停止 Controller 和进程，写完日志和抓包文件，生成 Ellisys 跟踪文件并删除仿真临时文件。
+1. 通过 `topo.add_controller()` 为各 Host 分配 Controller，并配置 RF 条件。
+2. 调用 `await topo.start()` 启动 PHY、Controller、干扰源和仿真时钟。
+3. 启动 UML Guest 并通过控制台验证行为。Bumble 等 Python Host 在测试的 asyncio event loop 中直接连接 Controller 的 HCI socket。
+4. 清理阶段停止 Guest、Controller 和 PHY，保存日志与抓包。
 
 每个测试都有独立的仿真标识、Unix socket 目录和日志目录，因此多个虚拟测试可以并行运行，不会共享 Controller 状态、RF 状态或输出文件。
 
@@ -59,35 +57,41 @@ result = await asyncio.wait_for(operation(), timeout=5)
 
 <div align="center"><img src="../images/bluetooth-diagram.svg" alt="一次 BSWorld 离散时间推进" width="80%"><br><em>图 1：一次确定性的离散时间推进</em><br><br></div>
 
-`ProcessInstance.wait_log()` 建立在同一套异步等待机制之上，因此其 `timeout` 同样使用仿真时间。它按到达顺序对已经缓存和后续产生的完整日志行执行正则匹配；未收到换行符的片段不会提前参与匹配，已经扫描过的行也不会被后续调用重复检查。因此，连续的日志断言应按照预期事件顺序书写。
+`UmlGuest.wait_log()` 建立在同一套异步等待机制之上，因此其 `timeout` 同样使用仿真时间。它按到达顺序对已经缓存和后续产生的完整日志行执行正则匹配；未收到换行符的片段不会提前参与匹配，已经扫描过的行也不会被后续调用重复检查。因此，连续的日志断言应按照预期事件顺序书写。
 
 > [!WARNING]
 > 异步测试中不能调用 `time.sleep()` 这类阻塞函数，因为它会阻塞 event loop 线程。应优先使用异步接口；不参与协议时序且无法避免的 Host 侧阻塞操作可以交给 `asyncio.to_thread()`。
 
-## 接入业务程序进程
+## 在 UML 中运行 Host
 
-各集成测试套件通过自己的创建函数生成业务程序，并把新进程登记到拓扑中。若由调用方挂载 Controller，在 `topo.start()` 前调用 `host.attach(controller)`。Python Host 协议栈在拓扑启动后打开 Controller 的 `hci_sock`，直接运行在测试的 asyncio event loop 中。添加场景时复用所在套件的辅助函数。
+启动拓扑前为每个 Guest 添加一个 Controller，启动后通过 `bsworld.uml.UmlGuest` 创建 Guest。Guest 使用指定的内核和只读根文件系统，Controller 的 H4 socket 接到 `/dev/ttyS0`。参数 `init` 指定 Guest 根文件系统中的路径。
 
 ```python
-from tests.integration.nuttx.btsak.devices import NUTTX_BTSAK_ADVERTISER
-from tests.integration.nuttx.common import create_nuttx_process
+from bsworld.uml import UmlGuest
 
-host = create_nuttx_process(topo, NUTTX_BTSAK_ADVERTISER)
-host.attach(topo.add_controller(public_address="F0:F1:F2:F3:F4:02"))
+controller = topo.add_controller(log_subdir="uml/host")
+await topo.start()
+
+with UmlGuest(
+    topo,
+    controller,
+    kernel=kernel,
+    rootfs=rootfs,
+    init="/init",
+    label="host",
+    log_subdir="uml/host",
+    getrandom_library=seed_library,
+) as guest:
+    await guest.wait_log(r"^BSWORLD_UML_READY$")
+    await guest.shell.run("btattach -B /dev/ttyS0 -P h4 &")
+    await guest.wait_log(r"Device index 0 attached")
 ```
 
-设备标识发布前都可以修改绑定关系，通常由 `topo.start()` 发布，提前调用 `plan_devices()` 也会冻结。自行构造 `ProcessInstance` 时，通过 `topo.add_process()` 登记，并在规划设备布局前挂载 Controller。
-
-| 平台 | 测试说明 |
-|---|---|
-| Bumble | [Bumble 集成测试](../../tests/integration/bumble/README.zh-CN.md#添加场景) |
-| NuttX | [BTSak 与 NimBLE](../../tests/integration/nuttx/README.zh-CN.md#添加场景) |
-| UML Linux | [BlueZ 与 NimBLE](../../tests/integration/uml/README.zh-CN.md#添加场景) |
-| Zephyr | [Bluetooth shell](../../tests/integration/zephyr/shell/README.zh-CN.md#添加场景) |
+同一个测试可以启动多个 Guest，每个使用独立的名称、Controller、控制台和 time-travel socket。Guest 共享拓扑时钟，PHY 只为 Controller 分配设备 ID。内核、根文件系统和随机数种子库的准备方式见 [UML 测试环境](../../tests/integration/uml/README.zh-CN.md)。
 
 ## 向进程发送 Shell 命令
 
-对于启用 Shell 的 `ProcessInstance`，在 `await topo.start()` 和平台初始化完成后发送命令。假设 `dev` 已初始化，基本用法为：
+在 Guest 控制台就绪后发送命令并等待结果。
 
 ```python
 await dev.shell.run("...")
@@ -146,7 +150,7 @@ topo.set_channel_attenuation(
 
 路径具有方向性；如果两个方向需要不同的损耗，应分别配置 `tx -> rx` 和 `rx -> tx`。`TimedAttenuation` 的时间点与衰减值必须一一对应，相邻时间点之间采用线性插值。
 
-`tx` 和 `rx` 可以是已经登记的 `ProcessInstance` 或 `BSController`、`add_*_interference()` 返回的 `InterferenceRef`，也可以是原始 BabbleSim 设备编号。Host 进程解析为所挂载 Controller 的 RF 设备编号。
+`tx` 和 `rx` 可引用已注册的 `BSController`、`add_*_interference()` 返回的 `InterferenceRef` 或 BabbleSim 设备编号。
 
 ### 突发干扰
 
@@ -202,21 +206,4 @@ BSWorld 在启动 BabbleSim 进程前校验 RF 参数：
 
 ## 使用 pytest 描述拓扑
 
-`topo` fixture 将拓扑声明、RF 条件、业务操作和断言组织在同一个 Python 测试中。下例由套件内的 `peripheral` 和 `central` fixture 在测试开始前登记业务程序进程。RF 配置接口只登记预期状态；执行 `await topo.start()` 后，框架才会创建对应的运行实例。
-
-```python
-async def test_central_receives_notification(topo, peripheral, central):
-    topo.set_channel_attenuation(default_db=45.0)
-
-    await topo.start()
-
-    await peripheral.wait_log(r"Advertising successfully started")
-    await central.wait_log(r"Connected")
-    await central.wait_log(r"\[NOTIFICATION\]")
-```
-
-图 2 展示示例的执行过程。测试 fixture 登记 Host 进程并挂载各自的 Controller，`set_channel_attenuation()` 配置共享 PHY 上的 RF 路径。阶段 1 对应 `topo.start()`，该调用等到 HCI socket 和全部 BabbleSim 参与者就绪后返回。后续阶段对应三个 `wait_log()`，event loop 推进仿真时间，业务程序依次完成广播、连接和通知交互。
-
-<div align="center"><img src="../images/pytest-topology-execution.svg" alt="pytest 拓扑展开为确定性的 Bluetooth LE 执行" width="80%"><br><em>图 2：从 pytest 拓扑到确定性的 Bluetooth LE 执行</em><br><br></div>
-
-图的下半部分展示了日志断言对应的 HCI 命令、事件和仿真空口数据，使业务行为能够与协议交互直接关联。测试只需描述可观察结果；BSWorld 负责设备标识与 socket 分配、进程生命周期、时间推进以及日志和协议跟踪文件的保存。
+[BlueZ 多 Guest 用例](../../tests/integration/uml/bluez/test_uml_bluez.py)在同一拓扑中启动两台 Guest，由 Bumble 接收二者的广播。[NuttX 干扰用例](../../tests/integration/uml/nuttx/test_btsak.py)通过各 Guest 的 Controller 配置定向衰减，并验证干扰结束后的恢复。

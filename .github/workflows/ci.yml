@@ -49,33 +49,10 @@ jobs:
     if: github.event_name != 'release'
     uses: ./.github/workflows/bscontroller.yml
 
-  bumble:
-    name: Bumble
-    if: github.event_name != 'release'
-    uses: ./.github/workflows/bumble.yml
-
-  # A release only tags the platform images its commit already published.
-  zephyr:
-    name: Zephyr
-    uses: ./.github/workflows/zephyr.yml
-    permissions:
-      contents: read
-      packages: write
-    with:
-      rebuild_image: ${{ inputs.rebuild_image || false }}
-
-  nuttx:
-    name: NuttX
-    uses: ./.github/workflows/nuttx.yml
-    permissions:
-      contents: read
-      packages: write
-    with:
-      rebuild_image: ${{ inputs.rebuild_image || false }}
-
-  linux:
-    name: Linux
-    uses: ./.github/workflows/linux.yml
+  # A release tags the image its commit already published.
+  uml:
+    name: UML
+    uses: ./.github/workflows/uml.yml
     permissions:
       contents: read
       packages: write
@@ -85,7 +62,7 @@ jobs:
   result:
     # The one check branch protection requires.
     name: CI result
-    needs: [checks, bscontroller, bumble, zephyr, nuttx, linux]
+    needs: [checks, bscontroller, uml]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

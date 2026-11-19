@@ -49,6 +49,9 @@ Issues = "https://github.com/XiaoMi/bsworld/issues"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"bsworld.uml" = ["getrandom.c", "init.sh", "linux.fragment"]
+
 [tool.setuptools_scm]
 fallback_version = "0+unknown"
 # Only v* tags version bsworld; bscontroller-v* tags version bscontroller.

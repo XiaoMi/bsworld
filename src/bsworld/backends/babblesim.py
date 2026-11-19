@@ -14,19 +14,12 @@
 #
 """BabbleSim backend: PHY, Controllers and interference.
 
-Application command factories receive an AppSlot and select their native
-arguments for joining the PHY. Host slots follow their Controller attachments.
-
 Bring-up shape:
     1. verify configured BabbleSim artifacts.
-    2. plan_devices: freeze one DeviceLayout covering Controllers, Host
-       processes, the framework clock, then interference.
-    3. prepare: kill stragglers for this sim_id, remove stale HCI
-       socket files.
-    4. spawn phy (-D = num_devs).
-    5. start Controller workers and spawn interference devices. The topology
-       starts Host processes separately.
-    6. connect the in-process pytest clock after external participants start.
+    2. freeze the layout for Controllers, the framework clock and interference.
+    3. clear stale simulation state and start the PHY.
+    4. start Controller workers and interference devices.
+    5. connect the pytest clock and wait for PHY registration.
 """
 
 from __future__ import annotations
@@ -40,11 +33,12 @@ from typing import TYPE_CHECKING
 
 from ..deps import check_babblesim_ready
 from ..devices.bscontroller import BSController
-from ..devices.layout import DeviceLayout, build_device_layout
+from ..devices.layout import DeviceLayout
 from ..env import Env
 from ..interference import (
     BurstInterference,
     ChannelAttenuation,
+    InterferenceRef,
     InterferenceSource,
     PlaybackInterference,
     StaticAttenuation,
@@ -59,8 +53,6 @@ from .ellisys import convert_tx_csv
 
 if TYPE_CHECKING:
     from bscontroller import ControllerConfig
-
-    from ..devices.instance import ProcessInstance
 
 _RESIDUAL_PATTERNS = (
     "bs_2G4_phy_v1",
@@ -77,18 +69,12 @@ class BabbleSimBackend:
     sim_id: str
     controllers: list[BSController] = field(default_factory=list)
     channel_attenuation: ChannelAttenuation | None = None
-    interference_sources: list[InterferenceSource] = field(default_factory=list)
-    _processes: list[ProcessInstance] = field(
-        default_factory=list, init=False, repr=False
+    interference_sources: dict[InterferenceRef, InterferenceSource] = field(
+        default_factory=dict, init=False
     )
     _layout: DeviceLayout | None = field(default=None, init=False, repr=False)
     _started: bool = False
     clock: BsimClock | None = None
-
-    @property
-    def processes(self) -> tuple[ProcessInstance, ...]:
-        """Registered processes, read-only; register through register_process()."""
-        return tuple(self._processes)
 
     def _ensure_layout_mutable(self) -> None:
         """Reject registrations once PHY identities have been published.
@@ -121,46 +107,12 @@ class BabbleSimBackend:
         self.controllers.append(ctl)
         return ctl
 
-    def validate_attachment(
-        self, process: ProcessInstance, controller: BSController
-    ) -> None:
-        """Check that a Controller can be attached, without changing any state."""
+    def add_interference_source(self, source: InterferenceSource) -> InterferenceRef:
+        """Record an interference device and return its topology-local reference."""
         self._ensure_layout_mutable()
-        if not any(candidate is controller for candidate in self.controllers):
-            raise ValueError("Controller does not belong to this BabbleSim backend")
-        if any(
-            other is not process and other.controller is controller
-            for other in self._processes
-        ):
-            raise ValueError(
-                "a Controller can only be attached to one Application process"
-            )
-
-    def register_process(self, process: ProcessInstance) -> None:
-        """Record a process once; its final attachment is read when ids are frozen."""
-        if any(existing is process for existing in self._processes):
-            raise ValueError("process is already registered with this backend")
-        if process.controller is None:
-            self._ensure_layout_mutable()
-        else:
-            self.validate_attachment(process, process.controller)
-        self._processes.append(process)
-
-    def add_interference_source(self, source: InterferenceSource) -> int:
-        """Record an interference device and return its index."""
-        self._ensure_layout_mutable()
-        self.interference_sources.append(source)
-        return len(self.interference_sources) - 1
-
-    def set_snoop_dir(self, controller: BSController, snoop_dir: Path) -> None:
-        """Relocate a Controller's capture before it starts."""
-        if self._started:
-            raise RuntimeError("cannot move an HCI capture after BabbleSim has started")
-        if not any(candidate is controller for candidate in self.controllers):
-            raise ValueError("Controller does not belong to this BabbleSim backend")
-        controller.hci_snoop_file = (
-            snoop_dir / f"hci{controller.controller_dev_id}.snoop"
-        ).resolve()
+        ref = InterferenceRef(len(self.interference_sources))
+        self.interference_sources[ref] = source
+        return ref
 
     def plan_devices(self) -> DeviceLayout:
         """Freeze the device id assignment for the registered topology.
@@ -169,12 +121,10 @@ class BabbleSimBackend:
         caller after registration fixes the layout for the whole simulation.
         """
         if self._layout is None:
-            self._layout = build_device_layout(
+            self._layout = DeviceLayout(
                 phy_id=_PHY_ID,
-                sim_id=self.sim_id,
-                controllers=self.controllers,
-                processes=self._processes,
-                interference_count=len(self.interference_sources),
+                controllers=tuple(self.controllers),
+                interference_refs=tuple(self.interference_sources),
             )
         return self._layout
 
@@ -192,12 +142,6 @@ class BabbleSimBackend:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-        subprocess.run(
-            ["pkill", "-9", "-f", "--", f"--sim-bsim-sid={self.sim_id}"],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
         for ctl in self.controllers:
             if ctl.hci_sock.exists():
                 log(f"removing stale {ctl.hci_sock}")
@@ -214,11 +158,10 @@ class BabbleSimBackend:
         bsim_log_dir = log_dir / "babblesim"
         if self._started:
             return
-        if not self.controllers and not self._processes:
+        if not self.controllers:
             raise RuntimeError("a simulation requires at least one BSController")
         self.check_deps_ready()
         layout = self.plan_devices()
-        self.prepare()
         num_devs = layout.device_count
 
         # Spawn phy.
@@ -237,6 +180,7 @@ class BabbleSimBackend:
                     static_paths=ca.static_paths,
                     timed_paths=ca.timed_paths,
                     out_dir=bsim_log_dir,
+                    layout=layout,
                 )
             phy_argv += [
                 "-channel=multiatt",
@@ -251,6 +195,7 @@ class BabbleSimBackend:
             # not consumed by the channel plugin
             phy_argv.append("-argsmain")
         phy_argv.extend(["-dump", "-dump_imm"])
+        self.prepare()
         phy_process = pm.spawn(
             "bs_2G4_phy_v1",
             phy_argv,
@@ -271,8 +216,8 @@ class BabbleSimBackend:
         for ctl in self.controllers:
             await ctl.start()
 
-        for i, src in enumerate(self.interference_sources):
-            dev_id = layout.interference_dev_id(i)
+        for ref, src in self.interference_sources.items():
+            dev_id = layout.interference_dev_id(ref)
             argv = _build_interf_argv(
                 src, sim_id=self.sim_id, dev_id=dev_id, bin_dir=self.env.bsim_bin_dir
             )
@@ -367,6 +312,7 @@ def _write_attenuation_matrix(
     static_paths: list[StaticAttenuation],
     timed_paths: list[TimedAttenuation],
     out_dir: Path,
+    layout: DeviceLayout,
 ) -> Path:
     """Write per-path static/timed attenuation files + matrix_file into out_dir.
 
@@ -374,16 +320,19 @@ def _write_attenuation_matrix(
     available for post-mortem inspection alongside bsworld.log and HCI snoops.
     Returns the path to the generated matrix file ready for -file=<path>.
     """
-    out_dir.mkdir(parents=True, exist_ok=True)
+    resolve = layout.resolve_endpoint
     matrix_lines = [
-        f"{path.tx} {path.rx} : {path.attenuation_db}" for path in static_paths
+        f"{resolve(path.tx)} {resolve(path.rx)} : {path.attenuation_db}"
+        for path in static_paths
     ]
-    for i, tp in enumerate(timed_paths):
-        timed_file = out_dir / f"timed_att_{tp.tx}_{tp.rx}_{i}.txt"
+    timed = [(resolve(path.tx), resolve(path.rx), path) for path in timed_paths]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for i, (tx, rx, path) in enumerate(timed):
+        timed_file = out_dir / f"timed_att_{tx}_{rx}_{i}.txt"
         with open(timed_file, "w") as fh:
-            for t, att in zip(tp.times_us, tp.attenuation_db):
+            for t, att in zip(path.times_us, path.attenuation_db, strict=True):
                 fh.write(f"{t}    {att}\n")
-        matrix_lines.append(f'{tp.tx} {tp.rx} : "{timed_file}"')
+        matrix_lines.append(f'{tx} {rx} : "{timed_file}"')
 
     matrix_file = out_dir / "att_matrix.txt"
     with open(matrix_file, "w") as fh:

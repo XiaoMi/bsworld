@@ -1,104 +1,53 @@
-# User Mode Linux 测试环境
+# User Mode Linux 集成测试
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-在 User Mode Linux（UML）中运行 Linux Guest。UML 是编译成普通主机程序的主线 Linux 内核，Guest 运行主机文件系统中的程序。Guest 的 `/dev/ttyS0` 连接到 [BSController](../../../docs/zh-CH/controllers.md)，Guest 时钟通过 UML time-travel 与 BabbleSim 仿真时间同步。
-
-## 已验证版本
-
-| 组件 | 提交或版本 |
-|---|---|
-| Linux | `7.4-rc1`（`f66469d9905b39d2c260a15d7d6db450f4db67c1`） |
+64 位 BSWorld 运行 32 位 User Mode Linux（UML）Guest。各 Guest 的 Host 连接各自的 [BSController](../../../docs/zh-CH/controllers.md)，Bumble 在 pytest 中作为对端。同一个拓扑可以启动多个 Guest，共用仿真时钟。
 
 ## 准备环境
 
-先按[本地 Linux 环境搭建](../../../docs/zh-CH/README.md#本地-linux)准备 BSWorld，并按[仓库构建说明](../../../docs/zh-CH/README.md#构建与测试)构建 BabbleSim。安装编译内核所需的工具和 Guest 运行的程序：
+[Linux 测试镜像](../../../docker/README.zh-CN.md#构建)包含 UML 内核、种子库、BabbleSim 和 i386 Guest 根文件系统。在仓库根目录构建镜像并运行测试。
 
 ```sh
-sudo apt-get install -y bc bison flex bluez dbus psmisc
+docker buildx bake -f docker/docker-bake.hcl --load linux
+docker run --rm --security-opt seccomp=docker/uml-seccomp.json \
+  bsworld-linux:dev pytest tests/integration/uml -n auto -q
 ```
 
-Guest 以只读方式挂载主机的根文件系统并运行其中的程序。64 位 UML 内核不能运行 32 位程序，因此 Guest 运行的程序都必须是 64 位，包括 [init.sh](source/init.sh) 启动的 `dbus-daemon`、`bluetoothd` 以及 `btattach`，可以用 `file /usr/bin/dbus-daemon` 检查。
+本地编译先准备 [BSWorld 和 BabbleSim](../../../docs/zh-CH/README.md#本地-linux)。源码版本和编译命令见 [Dockerfile](../../../docker/linux.Dockerfile) 中的 `uml`、`uml-rootfs`、`zephyr-uml`、`nuttx-uml` 和 `nimble-linux` 阶段。使用 `ARCH=um SUBARCH=i386` 和[配置片段](../../../src/bsworld/uml/linux.fragment)编译内核。[种子库](../../../src/bsworld/uml/getrandom.c)使用 `cc -m32 -shared -fPIC -O2` 编译。[根文件系统脚本](../../../docker/uml-rootfs.sh)使用 `dpkg-deb -x` 解包 i386 软件包，其中包括 BlueZ 的 `btattach`。Dockerfile 随后安装 Guest 程序和可执行的 `/init`。
 
-获取 Linux：
+| 环境变量 | BSWorld 运行端的路径 |
+|---|---|
+| `BSWORLD_UML_KERNEL` | 可执行的 i386 UML 内核 |
+| `BSWORLD_UML_GETRANDOM` | UML 进程加载的 i386 种子库 |
+| `BSWORLD_UML_ROOTFS` | 包含 `/init`、i386 程序和库的 Guest 根目录 |
 
-```sh
-export UML_DIR="$HOME/bsworld-uml"
-export LINUX_DIR="$UML_DIR/linux"
-git init "$LINUX_DIR"
-git -C "$LINUX_DIR" fetch --depth 1 https://github.com/torvalds/linux.git f66469d9905b39d2c260a15d7d6db450f4db67c1
-git -C "$LINUX_DIR" checkout --detach FETCH_HEAD
-```
-
-## 编译 Linux Guest
-
-用 [linux.fragment](source/linux.fragment) 配置并编译内核：
-
-```sh
-cd "$LINUX_DIR"
-make ARCH=um defconfig
-scripts/kconfig/merge_config.sh -m .config "$BSWORLD_ROOT/tests/integration/uml/source/linux.fragment"
-make ARCH=um olddefconfig
-make ARCH=um -j"$(nproc)"
-```
-
-UML 启动时从主机获取 Guest 随机数生成器的种子。编译 [getrandom.c](source/getrandom/getrandom.c)，用由 Guest 标签派生的种子代替它，使随机地址和密钥每次运行都相同：
-
-```sh
-cc -shared -fPIC -O2 -o "$UML_DIR/getrandom.so" \
-  "$BSWORLD_ROOT/tests/integration/uml/source/getrandom/getrandom.c"
-```
-
-导出产物：
-
-```sh
-export BSWORLD_UML_KERNEL="$LINUX_DIR/linux"
-export BSWORLD_UML_GETRANDOM="$UML_DIR/getrandom.so"
-```
-
-检查产物：
-
-```sh
-test -x "$BSWORLD_UML_KERNEL"
-test -f "$BSWORLD_UML_GETRANDOM"
-```
+设置这些变量后，在 BSWorld 的 Python 环境中运行 `pytest tests/integration/uml -n auto -q`。
 
 ## 测试套件
 
-| 套件 | 编译说明 | 可执行文件变量 |
+| Host | 场景 | Guest 内可执行文件 |
 |---|---|---|
-| BlueZ | [BlueZ 测试](bluez/README.zh-CN.md#构建与运行) | 无，Guest 运行主机的 BlueZ |
-| NimBLE | [NimBLE 测试](nimble/README.zh-CN.md#构建与运行) | `BSWORLD_UML_NIMBLE_BIN` |
+| [BlueZ](bluez/README.zh-CN.md) | Controller 初始化、双 Guest 并发广播、扫描和连接 | `/usr/bin/bluetoothctl` |
+| [Zephyr native_sim](zephyr/) | 广播、扫描、连接、GATT、配对及隐私、链路过程、周期广播与同步转移 | `/opt/bsworld/zephyr-shell`，由 `BSWORLD_UML_ZEPHYR_BIN` 指定 |
+| [NuttX sim BTSak](nuttx/test_btsak.py) | 广播、扫描、干扰与恢复 | `/opt/bsworld/nuttx-btsak`，由 `BSWORLD_UML_NUTTX_BIN` 指定 |
+| [NuttX sim NimBLE](nuttx/test_nimble.py) | 两种角色的连接、Battery Service 发现和通知 | `/opt/bsworld/nuttx-nimble`，由 `BSWORLD_UML_NUTTX_NIMBLE_BIN` 指定 |
+| [NimBLE Linux](nimble/README.zh-CN.md) | 广播、发现和连接 | `/opt/bsworld/nimble-linux`，由 `BSWORLD_UML_NIMBLE_BIN` 指定 |
 
-运行两个套件：
+可执行文件变量填写 **Guest 内的绝对路径**。例如，在 `$BSWORLD_UML_ROOTFS/opt/bsworld/my-shell` 放置程序后，设置 `BSWORLD_UML_ZEPHYR_BIN=/opt/bsworld/my-shell`。
 
-```sh
-cd "$BSWORLD_ROOT"
-source .venv/bin/activate
-pytest tests/integration/uml -n auto -q
-```
+## Guest 运行机制
 
-## 运行时数据路径
+[启动脚本](../../../src/bsworld/uml/init.sh)在只读的 Guest 根文件系统中挂载私有的运行目录，并启动 shell。每个 Guest 的 `/dev/ttyS0` 通过独立的 H4 连接接入对应 Controller。测试使用 `btattach -B /dev/ttyS0 -P h4` 将它注册为 `hci0`。控制台使用 UML 进程的标准输入和标准输出。
 
-测试把虚拟 Controller 的 socket 作为 Guest 的 `/dev/ttyS0`，并用 `btattach -B /dev/ttyS0 -P h4` 注册 `hci0`。这条串口实际是 socket，不需要设置波特率和流控。Guest 控制台就是进程的 stdin 和 stdout。[init.sh](source/init.sh) 在 `/tmp`、`/run` 和 `/var/lib/bluetooth` 上挂载内存文件系统，用 [main.conf](source/main.conf) 启动 D-Bus 和 `bluetoothd`，然后打开 root shell。
-
-内核以 `time-travel=ext` 启动，时钟的每次推进都由 pytest event loop 批准，Guest 运行期间仿真时间不前进。串口和控制台无法唤醒等待中的 Guest，因此内核使用周期 tick：输入在下一个 tick 处理，最多晚 10 ms（HZ=100）。
-
-Guest 的随机种子、起始时间（2026-01-01T00:00:00Z）和内核命令行固定，因此 Guest 日志、HCI 抓包和空口日志每次运行都相同。内核会把命令行混入随机数池，所以 Controller socket 总是以进程允许的最大描述符编号交给 Guest（`ssl0=fd:N`，N 为 `ulimit -n` 减 1）。
-
-## 重建配置
-
-修改 [linux.fragment](source/linux.fragment) 后，在 `$LINUX_DIR` 中重新执行上面的配置和编译命令。
+测试事件循环通过 UML `time-travel=ext` 为各 Guest 推进时钟。Guest 运行期间仿真时间保持不变，等待中的串口和控制台输入由 Guest 的周期 tick 处理。只有 Controller、测试时钟和场景中的 RF 干扰设备分配 BabbleSim 设备编号。
 
 ## 添加场景
 
-在 [BlueZ](bluez/README.zh-CN.md) 或 [NimBLE](nimble/README.zh-CN.md) 目录中添加异步 pytest 测试。启动前通过 [common.py](common.py) 中的 `add_uml_controller(topo, ...)` 登记 Controller。`topo.start()` 之后，在 `AsyncExitStack` 中调用 `open_uml_guest(stack, topo, controller, ...)` 启动 Guest，stack 关闭时 Guest 随之停止。再通过 `guest.shell` 发送命令并用 `wait_log()` 验证。
+使用 [common.py](common.py) 在 `await topo.start()` 前添加 Controller，再在 `AsyncExitStack` 中调用 `open_uml_guest()`。各 Guest 使用不同的标签和 Controller。通过 `guest.shell.run()` 发命令，用 `guest.wait_log()` 检查控制台输出。退出 stack 时，先关闭 Guest，再由测试框架清理拓扑。
 
-[unit/](unit) 下是 time-travel calendar 的协议测试，不需要内核和 BabbleSim：`pytest tests/integration/uml/unit`。它们也会随整个套件一起运行。
+启动器和时钟调度代码位于 [bsworld.uml](../../../src/bsworld/uml)。运行 `pytest tests/unit/uml -q` 可检查其[单元测试](../../unit/uml)，无需构建 UML 内核和 BabbleSim。
 
 ## 许可证
 
-- 测试和 `source/` 中的文件：Apache License 2.0。
-- Linux 及 Guest 运行的程序：保留各自的许可证。
-
-详见[第三方声明](../../../docs/zh-CH/THIRD_PARTY_NOTICES.md)。
+测试与 BSWorld 的 UML 适配代码使用 Apache License 2.0。Linux 和 Guest 程序保留各自的上游许可证。[第三方声明](../../../docs/zh-CH/THIRD_PARTY_NOTICES.md)
