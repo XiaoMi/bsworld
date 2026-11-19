@@ -40,6 +40,10 @@ BSWorld 使用 Bumble 公开的 Python 和 HCI transport 接口。
 
 BSWorld 使用自己的 [native_sim 配置](../../tests/integration/uml/zephyr/prj.conf)，从外部 Zephyr 源码构建 Bluetooth shell。
 
+## TrouBLE
+
+BSWorld 为 [UML TrouBLE 套件](../../tests/integration/uml/trouble/README.zh-CN.md)编译 TrouBLE 上游 Linux 示例。TrouBLE 可按 MIT 或 Apache License 2.0 使用，见[上游源码](https://github.com/embassy-rs/trouble)。
+
 ## Linux
 
 - 源码：https://github.com/torvalds/linux

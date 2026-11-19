@@ -106,6 +106,7 @@ Each suite runs its Host in a UML Guest and tests it against Bumble on the same 
 | [Zephyr Bluetooth shell](tests/integration/uml/zephyr/README.md) | Advertising, scanning, GATT, pairing, privacy, link updates, periodic advertising and sync transfer |
 | [NuttX BTSak and NimBLE](tests/integration/uml/nuttx/README.md) | Advertising, multi-device scanning, interference recovery, GATT reads, writes and notifications |
 | [Apache NimBLE Linux](tests/integration/uml/nimble/README.md) | Discovery and connection |
+| [TrouBLE](tests/integration/uml/trouble/README.md) | Battery Service discovery, reads, and notifications in both roles |
 
 ## Technical Architecture
 

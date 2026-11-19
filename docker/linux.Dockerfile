@@ -304,6 +304,38 @@ ARG BUILD_JOBS=4
 RUN make -C "$NIMBLE_DIR/porting/examples/linux" CC=gcc CXX=g++ -j"$BUILD_JOBS" \
     && strip --strip-unneeded "$NIMBLE_DIR/porting/examples/linux/nimble-linux"
 
+# Build the upstream TrouBLE Linux examples for the UML guest.
+FROM native-build AS trouble-uml
+USER root
+RUN install -d -o "$BUILD_UID" -g "$BUILD_GID" /opt/trouble /opt/rust
+USER bsworld
+
+ARG TROUBLE_REVISION=da44b34f67e1ee8efe977a5a975804b8b21962d4
+ARG TROUBLE_RUST_VERSION=1.97.1
+ENV RUSTUP_HOME=/opt/rust/rustup \
+    CARGO_HOME=/opt/rust/cargo \
+    PATH=/opt/rust/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o /tmp/rustup-init.sh \
+    && sh /tmp/rustup-init.sh -y --no-modify-path --default-toolchain none \
+    && rm /tmp/rustup-init.sh \
+    && rustup toolchain install "$TROUBLE_RUST_VERSION" --profile minimal \
+        --target i686-unknown-linux-gnu
+
+RUN git init /opt/trouble \
+    && git -C /opt/trouble fetch --depth=1 https://github.com/embassy-rs/trouble.git "$TROUBLE_REVISION" \
+    && git -C /opt/trouble checkout --detach FETCH_HEAD \
+    && test "$(git -C /opt/trouble rev-parse HEAD)" = "$TROUBLE_REVISION"
+
+ARG BUILD_JOBS=4
+# Duplicate Tokio waker vtables in this build cause repeated self-wakes in
+# Embassy's waker registration. A single codegen unit keeps the vtable shared.
+RUN --mount=type=cache,id=bsworld-trouble-cargo-${BUILD_UID}-${BUILD_GID},target=/opt/rust/cargo/registry,uid=${BUILD_UID},gid=${BUILD_GID},sharing=locked \
+    cd /opt/trouble/examples/linux \
+    && CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 cargo "+$TROUBLE_RUST_VERSION" build --locked --release -j"$BUILD_JOBS" \
+        --target i686-unknown-linux-gnu --bin ble_bas_central --bin ble_bas_peripheral \
+    && strip --strip-unneeded target/i686-unknown-linux-gnu/release/ble_bas_central \
+        target/i686-unknown-linux-gnu/release/ble_bas_peripheral
+
 # The guest's rootfs is assembled independently of the 64-bit test runner.
 FROM build-base AS uml-rootfs
 USER root
@@ -317,12 +349,16 @@ COPY --from=nimble-linux /opt/nimble/porting/examples/linux/nimble-linux /opt/um
 COPY --from=zephyr-uml /opt/zephyrproject/build/bsworld_uml_zephyr/zephyr/zephyr.exe /opt/uml/rootfs/opt/bsworld/zephyr-shell
 COPY --from=nuttx-uml /opt/nuttx/nuttx /opt/uml/rootfs/opt/bsworld/nuttx-btsak
 COPY --from=nuttx-uml /opt/nuttx-nimble/nuttx /opt/uml/rootfs/opt/bsworld/nuttx-nimble
+COPY --from=trouble-uml /opt/trouble/examples/linux/target/i686-unknown-linux-gnu/release/ble_bas_central \
+    /opt/trouble/examples/linux/target/i686-unknown-linux-gnu/release/ble_bas_peripheral \
+    /opt/uml/rootfs/opt/bsworld/trouble/
 
 # TMPDIR avoids Docker's noexec mount on /dev/shm for UML's memory mapping.
 FROM runtime-base AS runtime-linux
 COPY --from=uml /opt/uml/kernel /opt/firmware/uml/linux
 COPY --from=uml /opt/uml/getrandom.so /opt/firmware/uml/getrandom.so
 COPY --from=uml-rootfs /opt/uml/rootfs /opt/firmware/uml/rootfs
+COPY --from=trouble-uml /opt/trouble/LICENSE-APACHE /opt/trouble/LICENSE-MIT /usr/share/doc/bsworld/trouble/
 ENV TMPDIR=/tmp \
     BSWORLD_UML_KERNEL=/opt/firmware/uml/linux \
     BSWORLD_UML_GETRANDOM=/opt/firmware/uml/getrandom.so \
@@ -330,7 +366,9 @@ ENV TMPDIR=/tmp \
     BSWORLD_UML_NIMBLE_BIN=/opt/bsworld/nimble-linux \
     BSWORLD_UML_ZEPHYR_BIN=/opt/bsworld/zephyr-shell \
     BSWORLD_UML_NUTTX_BIN=/opt/bsworld/nuttx-btsak \
-    BSWORLD_UML_NUTTX_NIMBLE_BIN=/opt/bsworld/nuttx-nimble
+    BSWORLD_UML_NUTTX_NIMBLE_BIN=/opt/bsworld/nuttx-nimble \
+    BSWORLD_UML_TROUBLE_CENTRAL_BIN=/opt/bsworld/trouble/ble_bas_central \
+    BSWORLD_UML_TROUBLE_PERIPHERAL_BIN=/opt/bsworld/trouble/ble_bas_peripheral
 RUN bsworld-check-binaries "$BSWORLD_UML_KERNEL" \
     && test -x "$BSWORLD_UML_ROOTFS/init" \
     && file -b "$BSWORLD_UML_GETRANDOM" | grep -q '^ELF 32-bit' \
@@ -342,7 +380,9 @@ RUN bsworld-check-binaries "$BSWORLD_UML_KERNEL" \
             "$BSWORLD_UML_ROOTFS$BSWORLD_UML_NIMBLE_BIN" \
             "$BSWORLD_UML_ROOTFS$BSWORLD_UML_ZEPHYR_BIN" \
             "$BSWORLD_UML_ROOTFS$BSWORLD_UML_NUTTX_BIN" \
-            "$BSWORLD_UML_ROOTFS$BSWORLD_UML_NUTTX_NIMBLE_BIN"; do \
+            "$BSWORLD_UML_ROOTFS$BSWORLD_UML_NUTTX_NIMBLE_BIN" \
+            "$BSWORLD_UML_ROOTFS$BSWORLD_UML_TROUBLE_CENTRAL_BIN" \
+            "$BSWORLD_UML_ROOTFS$BSWORLD_UML_TROUBLE_PERIPHERAL_BIN"; do \
         if ! test -x "$binary" || ! file -b "$binary" | grep -q '^ELF 32-bit'; then \
             printf 'Expected an executable ELF 32-bit file at %s\n' "$binary" >&2; \
             exit 1; \

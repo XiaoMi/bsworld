@@ -86,6 +86,7 @@ Use the Host guides below to prepare the programs for the suites you want to run
 | [Zephyr Bluetooth shell](zephyr/README.md) | `tests/integration/uml/zephyr` |
 | [NuttX BTSak and NimBLE](nuttx/README.md) | `tests/integration/uml/nuttx` |
 | [Apache NimBLE Linux](nimble/README.md) | `tests/integration/uml/nimble` |
+| [TrouBLE](trouble/README.md) | `tests/integration/uml/trouble` |
 
 After preparing all Hosts, run the full UML suite in the BSWorld virtual environment.
 

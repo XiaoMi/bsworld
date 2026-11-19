@@ -106,6 +106,7 @@ pytest tests/integration/babblesim -n auto
 | [Zephyr 蓝牙 shell](../../tests/integration/uml/zephyr/README.zh-CN.md) | 广播与扫描、GATT、配对和隐私、链路更新、周期广播及同步转移 |
 | [NuttX BTSak 与 NimBLE](../../tests/integration/uml/nuttx/README.zh-CN.md) | 广播、多广播端扫描、定向干扰恢复、GATT 读写与通知 |
 | [Apache NimBLE Linux](../../tests/integration/uml/nimble/README.zh-CN.md) | 发现、连接 |
+| [TrouBLE](../../tests/integration/uml/trouble/README.zh-CN.md) | 两种角色下的 Battery Service 发现、读取和通知 |
 
 ## 技术架构
 
