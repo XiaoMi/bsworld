@@ -28,14 +28,6 @@ NuttX source is obtained externally and is not vendored in this repository.
 
 NimBLE source is obtained externally and is not vendored in this repository.
 
-## TrouBLE
-
-- Source: https://github.com/embassy-rs/trouble
-- Usage: Rust Bluetooth Host stack and Battery Service applications for [native Linux tests](tests/integration/trouble/README.md)
-- License: MIT or Apache License 2.0
-
-The upstream stack and applications are used without modification as external Cargo dependencies. BSWorld maintains the native transport and executor; the adapter retains its original MIT OR Apache-2.0 license.
-
 ## Bumble
 
 - Source: https://github.com/google/bumble

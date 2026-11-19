@@ -12,7 +12,7 @@ BSWorld 是一个在 Linux 上测试 Bluetooth Host 及其业务程序的确定�
 
 使用 BSWorld 可以：
 
-- 测试 Zephyr、NuttX、BlueZ、NimBLE、Bumble、TrouBLE 等开源 Host 协议栈，无需修改其源码。
+- 测试 Zephyr、NuttX、BlueZ、NimBLE、Bumble 等开源 Host 协议栈，无需修改其源码。
 - 无需硬件，Host 通过标准 H4 HCI 连接 BSController。
 - 保留业务程序日志、HCI BTSnoop、PHY 日志和 Ellisys 跟踪文件定位故障。
 - 每个场景里可以同时仿真多台设备，同一场景重复运行，日志及时序均保持一致，不受主机负载和调度影响。
@@ -38,7 +38,7 @@ sudo docker run --rm \
   ghcr.io/xiaomi/bsworld-zephyr:latest
 ```
 
-测试结果写入 `.cache/docker-results`，包括 `pytest.xml`、进程日志、HCI 抓包和 RF 跟踪文件。NuttX、TrouBLE 和 Linux 镜像、选择测试套件、测试当前检出版本、选择镜像版本或自行构建镜像，参见 [Docker 使用说明](../../docker/README.zh-CN.md)。
+测试结果写入 `.cache/docker-results`，包括 `pytest.xml`、进程日志、HCI 抓包和 RF 跟踪文件。NuttX 和 Linux 镜像、选择测试套件、测试当前检出版本、选择镜像版本或自行构建镜像，参见 [Docker 使用说明](../../docker/README.zh-CN.md)。
 
 ### 本地 Linux
 
@@ -111,7 +111,6 @@ pytest tests/integration/bumble tests/integration/babblesim -n auto
 | Zephyr Bluetooth shell | 广播与扫描、干扰与恢复、连接与 GATT、LL 过程、配对与隐私、周期广播与同步转移，以及与 Bumble 互通 | [Zephyr 测试](../../tests/integration/zephyr/README.zh-CN.md) |
 | Bumble Python Host | 广播、扫描、连接、周期广播与同步 | [Bumble 测试](../../tests/integration/bumble/README.zh-CN.md) |
 | User Mode Linux 中的 Linux 与 BlueZ | 通过 Linux Bluetooth 子系统完成 Controller 初始化、广播、扫描、连接和断连 | [BlueZ 测试](../../tests/integration/uml/bluez/README.zh-CN.md) |
-| TrouBLE Rust Host | 广播、连接、Battery Service 发现、读取和通知 | [TrouBLE 测试](../../tests/integration/trouble/README.zh-CN.md) |
 | NuttX BTSak | 广播、扫描、多广播设备、干扰与恢复 | [BTSak 测试](../../tests/integration/nuttx/btsak/README.zh-CN.md) |
 | Apache NimBLE | 在 NuttX 上完成发现、连接、GATT 和订阅；在 User Mode Linux 中完成发现和连接 | [NuttX 测试](../../tests/integration/nuttx/nimble/README.zh-CN.md) · [UML 测试](../../tests/integration/uml/nimble/README.zh-CN.md) |
 

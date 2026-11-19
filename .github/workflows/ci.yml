@@ -73,15 +73,6 @@ jobs:
     with:
       rebuild_image: ${{ inputs.rebuild_image || false }}
 
-  trouble:
-    name: TrouBLE
-    uses: ./.github/workflows/trouble.yml
-    permissions:
-      contents: read
-      packages: write
-    with:
-      rebuild_image: ${{ inputs.rebuild_image || false }}
-
   linux:
     name: Linux
     uses: ./.github/workflows/linux.yml
@@ -94,7 +85,7 @@ jobs:
   result:
     # The one check branch protection requires.
     name: CI result
-    needs: [checks, bscontroller, bumble, zephyr, nuttx, trouble, linux]
+    needs: [checks, bscontroller, bumble, zephyr, nuttx, linux]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

@@ -10,7 +10,6 @@
 |---|---|---|
 | `ghcr.io/xiaomi/bsworld-zephyr` | Zephyr 蓝牙 Host shell | `tests/integration/zephyr` |
 | `ghcr.io/xiaomi/bsworld-nuttx` | NuttX BTSak 与 NimBLE | `tests/integration/nuttx` |
-| `ghcr.io/xiaomi/bsworld-trouble` | TrouBLE `ble_bas` | `tests/integration/trouble` |
 | `ghcr.io/xiaomi/bsworld-linux` | [User Mode Linux](../tests/integration/uml/README.zh-CN.md) 内核、Ubuntu 的 BlueZ、NimBLE Linux | `tests/integration/uml` |
 
 ## 使用已发布镜像
@@ -133,7 +132,7 @@ sudo docker run --rm --env PYTHONDONTWRITEBYTECODE=1 \
   bsworld:python-test python -m pytest tests/unit -q -p no:cacheprovider
 ```
 
-用 [docker-bake.hcl](docker-bake.hcl) 构建平台镜像，它把各平台的 Dockerfile 与 [base.Dockerfile](base.Dockerfile) 中共用的阶段关联起来。可选 target 为 `zephyr`、`nuttx`、`trouble` 和 `linux`：
+用 [docker-bake.hcl](docker-bake.hcl) 构建平台镜像，它把各平台的 Dockerfile 与 [base.Dockerfile](base.Dockerfile) 中共用的阶段关联起来。可选 target 为 `zephyr`、`nuttx` 和 `linux`。
 
 ```sh
 sudo BUILD_UID="$(id -u)" BUILD_GID="$(id -g)" BUILD_JOBS=4 \
@@ -148,7 +147,6 @@ sudo BUILD_UID="$(id -u)" BUILD_GID="$(id -g)" BUILD_JOBS=4 \
 | `base.Dockerfile` | `build-base`、`bsworld`（用于读取版本号的 setuptools-scm）、`python-test`（已安装的项目和测试）、`babblesim`、`runtime-base`（运行库和 BabbleSim） |
 | `zephyr.Dockerfile` | `zephyr-workspace`（Zephyr workspace 和 SDK）、`zephyr-shell`、`runtime-zephyr` |
 | `nuttx.Dockerfile` | `nuttx`、`runtime-nuttx` |
-| `trouble.Dockerfile` | `trouble`、`runtime-trouble` |
 | `linux.Dockerfile` | `uml`（内核和随机种子库）、`nimble-linux`、`runtime-linux` |
 
 运行本地镜像：

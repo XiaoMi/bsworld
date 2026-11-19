@@ -12,7 +12,7 @@ BSWorld is a deterministic simulation framework for testing Bluetooth Hosts and 
 
 Use BSWorld to:
 
-- Test open-source Host stacks such as Zephyr, NuttX, BlueZ, NimBLE, Bumble, and TrouBLE without modifying their source code.
+- Test open-source Host stacks such as Zephyr, NuttX, BlueZ, NimBLE, and Bumble without modifying their source code.
 - Run tests without hardware by connecting Hosts to BSController over standard H4 HCI.
 - Keep Application logs, HCI BTSnoop captures, PHY logs, and Ellisys traces for debugging failures.
 - Simulate many devices in one scenario. Repeated runs of the same scenario produce consistent logs and timing, regardless of host load or scheduling.
@@ -37,7 +37,7 @@ sudo docker run --rm \
   ghcr.io/xiaomi/bsworld-zephyr:latest
 ```
 
-Results are written to `.cache/docker-results`, including `pytest.xml`, process logs, HCI captures, and RF traces. See the [Docker guide](docker/README.md) for the NuttX, TrouBLE and Linux images, to run a selected suite, test the current checkout, choose an image version, or build an image.
+Results are written to `.cache/docker-results`, including `pytest.xml`, process logs, HCI captures, and RF traces. See the [Docker guide](docker/README.md) for the NuttX and Linux images, to run a selected suite, test the current checkout, choose an image version, or build an image.
 
 ### Local Linux
 
@@ -110,7 +110,6 @@ The other suites run a platform's executables. Build them with the guides in [Su
 | Zephyr Bluetooth shell | Advertising and scanning, interference and recovery, connections and GATT, LL procedures, pairing and privacy, periodic advertising and sync transfer, and interoperability with Bumble | [Zephyr tests](tests/integration/zephyr/README.md) |
 | Bumble Python Host | Advertising, scanning, connections, periodic advertising and synchronization | [Bumble tests](tests/integration/bumble/README.md) |
 | Linux and BlueZ under User Mode Linux | Controller setup, advertising, scanning, connection and disconnection through the Linux Bluetooth subsystem | [BlueZ tests](tests/integration/uml/bluez/README.md) |
-| TrouBLE Rust Host | Advertising, connection, Battery Service discovery, reads and notifications | [TrouBLE tests](tests/integration/trouble/README.md) |
 | NuttX BTSak | Advertising, scanning, multiple advertisers, interference and recovery | [BTSak tests](tests/integration/nuttx/btsak/README.md) |
 | Apache NimBLE | Discovery, connection, GATT and subscription on NuttX; discovery and connection under User Mode Linux | [NuttX tests](tests/integration/nuttx/nimble/README.md) · [UML tests](tests/integration/uml/nimble/README.md) |
 

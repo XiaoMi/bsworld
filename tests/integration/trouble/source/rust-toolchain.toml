@@ -1,4 +1,0 @@
-# The adapter only builds for the Linux host; no embedded targets are needed.
-[toolchain]
-channel = "1.97"
-components = ["rustfmt", "clippy"]

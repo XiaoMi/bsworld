@@ -60,7 +60,7 @@ function "cache_to" {
 }
 
 group "default" {
-  targets = ["zephyr", "nuttx", "trouble", "linux"]
+  targets = ["zephyr", "nuttx", "linux"]
 }
 
 target "_common" {
@@ -134,19 +134,6 @@ target "nuttx" {
   tags       = ["bsworld-nuttx:${TAG}"]
   cache-from = cache_from("nuttx")
   cache-to   = cache_to("nuttx")
-}
-
-target "trouble" {
-  inherits   = ["_platform"]
-  dockerfile = "docker/trouble.Dockerfile"
-  target     = "runtime-trouble"
-  contexts = {
-    babblesim    = "target:babblesim"
-    runtime-base = "target:runtime-base"
-  }
-  tags       = ["bsworld-trouble:${TAG}"]
-  cache-from = cache_from("trouble")
-  cache-to   = cache_to("trouble")
 }
 
 target "linux" {
