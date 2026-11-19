@@ -2,7 +2,7 @@
 
 [English](THIRD_PARTY_NOTICES.md) | [简体中文](docs/zh-CH/THIRD_PARTY_NOTICES.md)
 
-Third-party software used by BSWorld retains its own licenses. Build and configuration details are documented in the linked guides. Component-specific attribution is recorded in [BSController's NOTICE](components/bscontroller/NOTICE).
+Third-party software used by BSWorld retains its own licenses. For attribution specific to BSController, see [BSController's NOTICE](components/bscontroller/NOTICE).
 
 ## BabbleSim
 
@@ -10,23 +10,19 @@ Third-party software used by BSWorld retains its own licenses. Build and configu
 - Usage: [shared RF simulation environment](README.md#build-and-test)
 - License: Apache License 2.0 unless otherwise stated by an individual component.
 
-BSWorld does not modify the upstream BabbleSim sources. Each component retains its own license files.
+BSWorld uses the upstream BabbleSim sources with each component's license files.
 
 ## Apache NuttX
 
 - Source: https://github.com/apache/nuttx
-- Usage: [NuttX test applications](tests/integration/uml/README.md)
+- Usage: [NuttX test applications](tests/integration/uml/nuttx/README.md)
 - License: Apache License 2.0
-
-NuttX source is obtained externally and is not vendored in this repository.
 
 ## Apache NimBLE
 
 - Source: https://github.com/apache/mynewt-nimble
-- Usage: Bluetooth Host stack for [NuttX](tests/integration/uml/README.md) and [Linux Guest tests](tests/integration/uml/nimble/README.md)
+- Usage: Bluetooth Host stack for the [NuttX NimBLE suite](tests/integration/uml/nuttx/README.md#nimble) and the [NimBLE Linux suite](tests/integration/uml/nimble/README.md)
 - License: Apache License 2.0
-
-NimBLE source is obtained externally and is not vendored in this repository.
 
 ## Bumble
 
@@ -34,12 +30,12 @@ NimBLE source is obtained externally and is not vendored in this repository.
 - Usage: Python Bluetooth Host stack for [Bumble test peers](tests/integration/uml/bumble_peer.py) and [BSController samples](components/bscontroller/samples/README.md)
 - License: Apache License 2.0
 
-BSWorld uses the public Python and HCI transport APIs without modifying the Bumble Host stack.
+BSWorld uses Bumble's public Python and HCI transport APIs.
 
 ## Zephyr Project
 
 - Source: https://github.com/zephyrproject-rtos/zephyr
-- Usage: [Zephyr Bluetooth shell tests](tests/integration/uml/README.md)
+- Usage: [Zephyr Bluetooth shell tests](tests/integration/uml/zephyr/README.md)
 - License: Apache License 2.0
 
 BSWorld builds the Bluetooth shell from external Zephyr sources using its [native_sim configuration](tests/integration/uml/zephyr/prj.conf).
@@ -48,13 +44,13 @@ BSWorld builds the Bluetooth shell from external Zephyr sources using its [nativ
 
 - Source: https://github.com/torvalds/linux
 - Usage: [Linux Guest execution](tests/integration/uml/README.md) as User Mode Linux, with time-travel synchronized to BabbleSim
-- License: GNU General Public License version 2; individual files may carry compatible licenses, as described by the upstream `COPYING` file
+- License: GNU General Public License version 2. The upstream `COPYING` file describes compatible licenses used by individual files.
 
 The Guest kernel is built from an unmodified upstream commit with BSWorld's [configuration fragment](src/bsworld/uml/linux.fragment).
 
 ## Moby seccomp profile
 
-The [UML container profile](docker/uml-seccomp.json) uses Moby `seccomp/v0.2.4` with permission added for `personality(ADDR_NO_RANDOMIZE)`. [Upstream profile](https://github.com/moby/profiles/blob/245180c51918481c0525424b3ee025d2b435d46c/seccomp/default.json)
+The [UML seccomp profile](docker/uml-seccomp.json) adds permission for `personality(ADDR_NO_RANDOMIZE)` to the [Moby seccomp/v0.2.4 defaults](https://github.com/moby/profiles/blob/245180c51918481c0525424b3ee025d2b435d46c/seccomp/default.json).
 
 ## BlueZ
 

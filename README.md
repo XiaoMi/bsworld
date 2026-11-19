@@ -8,24 +8,20 @@ English | [简体中文](docs/zh-CH/README.md)
 
 </div>
 
-BSWorld is a deterministic simulation framework for testing Bluetooth Hosts and Applications on Linux. A pytest scenario defines the device topology and expected behavior; BSWorld runs the participants on a shared BabbleSim radio and simulation clock, then archives logs and protocol traces.
+BSWorld tests Bluetooth Hosts and applications on Linux through deterministic simulation. Define the topology and expected behavior in pytest. Hosts connect to BSController over H4 HCI and communicate over a shared BabbleSim radio.
 
-Use BSWorld to:
-
-- Test open-source Host stacks such as Zephyr, NuttX, BlueZ, NimBLE, and Bumble without modifying their source code.
-- Run tests without hardware by connecting Hosts to BSController over standard H4 HCI.
-- Keep Application logs, HCI BTSnoop captures, PHY logs, and Ellisys traces for debugging failures.
-- Simulate many devices in one scenario. Repeated runs of the same scenario produce consistent logs and timing, regardless of host load or scheduling.
-- Share one discrete simulation clock across all devices. Scenarios are isolated and run in parallel with pytest-xdist, up to 100 times faster than real time.
-- Inject attenuation, interference, WLAN activity, and recorded radio signals.
+- Test open-source Host stacks without hardware or changes to their source code.
+- Run multiple devices on one simulation clock. Run independent scenarios in parallel with pytest-xdist.
+- Set path attenuation, inject interference and WLAN activity, or replay recorded radio signals.
+- Inspect application logs, HCI BTSnoop captures, PHY logs, and Ellisys traces.
 
 ## Quick Start
 
-BSWorld runs on Linux/x86_64. The published Docker image includes BabbleSim, a 32-bit UML kernel, its Guest root filesystem, and the test Host executables. See [Local Linux](#local-linux) for development setup.
+BSWorld runs on Linux/x86_64.
 
 ### Docker
 
-Install [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) and run the UML integration suite from the repository root.
+The Docker image ships with BabbleSim, a 32-bit UML kernel, and a Guest root filesystem with the Host executables. Run the integration tests from the repository root on a host with [Docker Engine](https://docs.docker.com/engine/install/ubuntu/).
 
 ```sh
 sudo docker pull ghcr.io/xiaomi/bsworld-linux:latest
@@ -38,13 +34,11 @@ sudo docker run --rm \
   ghcr.io/xiaomi/bsworld-linux:latest
 ```
 
-Results are written to `.cache/docker-results`, including `pytest.xml`, process logs, HCI captures, and RF traces. See the [Docker guide](docker/README.md) to select a suite or image version and to build the image locally.
+The results in `.cache/docker-results` include `pytest.xml`, process logs, HCI captures, and RF traces. For suite selection, image versions, and local builds, see the [Docker guide](docker/README.md).
 
 ### Local Linux
 
-A local environment builds the firmware and runs the tests with your own tools, so changes rebuild incrementally.
-
-Development and test commands require Python 3.12 or newer. On Ubuntu 24.04, install the required tools:
+Development and tests require Python 3.12 or newer. Install these tools on Ubuntu 24.04.
 
 ```sh
 sudo apt-get update
@@ -54,7 +48,7 @@ sudo apt-get install -y \
   gcc-multilib g++-multilib coreutils findutils grep sed
 ```
 
-Clone and install BSWorld:
+Clone BSWorld and install it in a virtual environment.
 
 ```sh
 git clone https://github.com/XiaoMi/bsworld.git
@@ -65,7 +59,7 @@ source .venv/bin/activate
 python -m pip install -e components/bscontroller -e '.[test]'
 ```
 
-Run the development checks:
+Run the development checks.
 
 ```sh
 ruff check .
@@ -75,7 +69,7 @@ pytest tests/unit -q
 
 #### Build and Test
 
-Fetch the BabbleSim revisions selected by `components/babblesim.xml`:
+Fetch the BabbleSim revisions pinned in `components/babblesim.xml`.
 
 ```sh
 mkdir -p "$BSWORLD_ROOT/.cache/babblesim"
@@ -84,7 +78,7 @@ repo init --standalone-manifest --depth=1 -u "file://$BSWORLD_ROOT/components/ba
 repo sync -c --no-tags
 ```
 
-Set the output paths and build every component:
+Set the build paths and compile BabbleSim.
 
 ```sh
 export BSIM_OUT_PATH="$PWD/build"
@@ -93,56 +87,56 @@ export BSIM_BUILD_FAIL_ASAP=1
 make -j"$(nproc)" everything
 ```
 
-Export `BSWORLD_ROOT`, `BSIM_OUT_PATH` and `BSIM_COMPONENTS_PATH` again in every new shell that builds or runs tests; without `BSIM_OUT_PATH`, the integration tests stop with a setup error.
-
-Run the BabbleSim tests.
+Run the BabbleSim integration tests from the repository root. In a new shell, activate `.venv` and restore `BSWORLD_ROOT` and `BSIM_OUT_PATH` before running the tests.
 
 ```sh
 cd "$BSWORLD_ROOT"
 pytest tests/integration/babblesim -n auto
 ```
 
-For the full integration suite, prepare a 32-bit Guest using the [UML test environment](tests/integration/uml/README.md).
+To run the Host integration suites locally, prepare a 32-bit Guest as described in the [UML test environment guide](tests/integration/uml/README.md).
 
 ## Supported Integrations
 
-Each Host runs in a UML Guest and interoperates with a [Bumble test peer](tests/integration/uml/bumble_peer.py) on the same simulated radio.
+Each suite runs its Host in a UML Guest and tests it against Bumble on the same simulated radio.
 
 | Guest Host | Coverage |
 |---|---|
-| BlueZ | Multi-Guest advertising, scanning, connection and disconnection |
-| Zephyr `native_sim` Bluetooth shell | Advertising, scanning, GATT, pairing, privacy, link updates, periodic advertising and sync transfer |
-| NuttX `sim` BTSak and NimBLE | Advertising, multi-device scanning, interference recovery, GATT reads, writes and notifications |
-| Apache NimBLE Linux | Discovery and connection |
+| [BlueZ](tests/integration/uml/bluez/README.md) | Multi-Guest advertising, scanning, connection and disconnection |
+| [Zephyr Bluetooth shell](tests/integration/uml/zephyr/README.md) | Advertising, scanning, GATT, pairing, privacy, link updates, periodic advertising and sync transfer |
+| [NuttX BTSak and NimBLE](tests/integration/uml/nuttx/README.md) | Advertising, multi-device scanning, interference recovery, GATT reads, writes and notifications |
+| [Apache NimBLE Linux](tests/integration/uml/nimble/README.md) | Discovery and connection |
 
 ## Technical Architecture
 
-Each Host connects to its own BSController over H4 HCI. Bumble runs in the pytest event loop, and each UML Guest gets simulation time from that loop over its own time-travel socket. The PHY assigns device IDs to the Controllers, the pytest clock and any configured interference sources.
+Each Host connects to its own BSController over H4 HCI. The Controllers, the pytest clock, and any configured interference sources share a BabbleSim PHY.
+
+Bumble runs in the pytest event loop. Each UML Guest runs in a separate process and receives simulation time from that loop through its own time-travel socket. A topology can run several Guests together.
 
 <div align="center"><img src="docs/images/babblesim_arch.svg" alt="Bluetooth Hosts connected through BSController workers to a shared BabbleSim PHY" width="80%"><br><em>Figure 1: BSWorld architecture</em><br><br></div>
 
-A topology can run several UML Guests at once. See [BSController configuration](docs/controllers.md) for per-instance settings such as device address, buffer sizes, and Bluetooth version.
+To set per-Controller options such as device address, buffer sizes, and Bluetooth version, see [BSController configuration](docs/controllers.md).
 
-HCI traffic is saved as `hciN.snoop` for Wireshark or another BTSnoop-capable tool. Radio traffic is saved as `babblesim/ellisys.bttrp` for Ellisys. See [Logs, traces, and captures](docs/artifacts.md) for locations and a recommended investigation order.
+Open `hciN.snoop` in Wireshark or another BTSnoop-capable tool. Use Ellisys to inspect the radio traffic in `babblesim/ellisys.bttrp`. For the output directory layout, see [Logs, traces, and captures](docs/artifacts.md).
 
 ### Discrete-Time Scheduling
 
 | Time base | Meaning |
 |---|---|
-| **Simulation time** | Defines protocol timers, packet timing, RF events, asyncio waits, and test timeouts. It advances only after all participants synchronize. |
-| **Wall-clock time** | Measures how long the test takes on the host. CPU load and Linux scheduling affect this duration but not protocol timing. |
+| **Simulation time** | Advances when all PHY participants synchronize. It governs protocol timers, packet timing, RF events, asyncio waits, and test timeouts. |
+| **Wall-clock time** | Measures test duration on the host and varies with CPU load and Linux scheduling. |
 
-BSController workers, interference sources and the pytest clock register with the same PHY. The clock schedules the Guests so a protocol interval such as `T_IFS = 150 μs` remains 150 μs regardless of host load. After topology startup, standard `asyncio` waits and timeouts use simulation time; see [Async waiting and simulation time](docs/writing-tests.md#async-waiting-and-simulation-time).
+After startup, standard `asyncio` waits and timeouts use simulation time. See [Async waiting and simulation time](docs/writing-tests.md#async-waiting-and-simulation-time) for examples.
 
 Repeatability assumes identical binaries and inputs and controlled random sources. External networks, wall-clock-driven services, and other unadapted Host I/O can still introduce nondeterminism.
 
 ## Documentation
 
-- [Writing tests and RF scenarios](docs/writing-tests.md): define topologies, integrate Applications, wait with asyncio, and configure RF conditions.
-- [BSController configuration](docs/controllers.md) covers the topology API and Controller settings.
-- [Logs, traces, and captures](docs/artifacts.md): locate and analyze test artifacts.
-- [Development checks](docs/development.md): run unit tests, lint, and coverage.
-- [Docker guide](docker/README.md): run the UML image, select suites and build the image locally.
+- [Write tests and configure RF scenarios](docs/writing-tests.md)
+- [Allocate and configure BSControllers](docs/controllers.md)
+- [Find logs, traces, and captures](docs/artifacts.md)
+- [Run unit tests, lint checks, and coverage](docs/development.md)
+- [Build or run the Docker test image](docker/README.md)
 
 ## Community
 
@@ -152,4 +146,4 @@ Repeatability assumes identical binaries and inputs and controlled random source
 
 ## License
 
-BSWorld is licensed under the [Apache License 2.0](LICENSE). Third-party components retain their own licenses; see [Third-Party Notices](THIRD_PARTY_NOTICES.md).
+BSWorld is licensed under the [Apache License 2.0](LICENSE). For third-party licenses, see [Third-Party Notices](THIRD_PARTY_NOTICES.md).

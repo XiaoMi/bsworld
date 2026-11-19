@@ -1,53 +1,116 @@
-# User Mode Linux Integration Tests
+# User Mode Linux Test Environment
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-The suites run 32-bit User Mode Linux (UML) guests on the 64-bit BSWorld runner. Each guest Host uses its own [BSController](../../../docs/controllers.md) and exchanges traffic with a Bumble peer in pytest. One topology can run several guests on the same simulation clock.
+BSWorld runs 32-bit User Mode Linux (UML) Guests on 64-bit Linux. Each Guest Host connects to its own BSController and tests against a Bumble peer in pytest. Multiple Guests in a topology share the simulation clock.
 
 ## Prepare the Environment
 
-The [Linux test image](../../../docker/README.md#build) bundles the UML kernel, seed library, BabbleSim and an i386 guest root file system. Use it to build and run the suites from the repository root.
+### Docker
+
+From the repository root, build the Linux test image and run the UML suites. The output mount keeps logs and captures in `.cache/docker-results`.
 
 ```sh
 docker buildx bake -f docker/docker-bake.hcl --load linux
-docker run --rm --security-opt seccomp=docker/uml-seccomp.json \
-  bsworld-linux:dev pytest tests/integration/uml -n auto -q
+mkdir -p .cache/docker-results
+sudo chown 1000:1000 .cache/docker-results
+docker run --rm \
+  --security-opt seccomp=docker/uml-seccomp.json \
+  --mount "type=bind,src=$PWD/.cache/docker-results,dst=/output" \
+  bsworld-linux:dev pytest tests/integration/uml --require-integration -n auto -q \
+    --out-dir /output/uml --junitxml=/output/uml.xml
 ```
 
-For local builds, prepare [BSWorld and BabbleSim](../../../README.md#local-linux). The [Dockerfile](../../../docker/linux.Dockerfile) records the source revisions and build commands in the `uml`, `uml-rootfs`, `zephyr-uml`, `nuttx-uml` and `nimble-linux` stages. Build the kernel with `ARCH=um SUBARCH=i386` and the [configuration fragment](../../../src/bsworld/uml/linux.fragment). Build the [seed library](../../../src/bsworld/uml/getrandom.c) with `cc -m32 -shared -fPIC -O2`. The [rootfs script](../../../docker/uml-rootfs.sh) extracts the i386 packages with `dpkg-deb -x`, including BlueZ's `btattach`, and the Dockerfile installs the guest programs and the executable `/init`.
+To run one Host, replace `tests/integration/uml` with its pytest path from the suite table below. To mount your checkout or select an image for a specific commit, follow the [Docker guide](../../../docker/README.md#run-tests).
 
-| Variable | Path on the BSWorld runner |
+### Local Linux
+
+Set up BSWorld and BabbleSim by following the [local Linux guide](../../../README.md#local-linux). On Ubuntu 24.04, enable i386 packages and install the kernel build tools.
+
+```sh
+sudo dpkg --add-architecture i386
+sudo apt-get update
+sudo apt-get install -y bc bison flex
+
+UML_DIR="$BSWORLD_ROOT/.cache/uml"
+LINUX_DIR="$UML_DIR/linux-src"
+mkdir -p "$UML_DIR"
+
+export BSWORLD_UML_KERNEL="$LINUX_DIR/linux"
+export BSWORLD_UML_GETRANDOM="$UML_DIR/getrandom.so"
+export BSWORLD_UML_ROOTFS="$UML_DIR/rootfs"
+```
+
+| Variable | Host path |
 |---|---|
 | `BSWORLD_UML_KERNEL` | Executable i386 UML kernel |
 | `BSWORLD_UML_GETRANDOM` | i386 seed library loaded by the UML process |
 | `BSWORLD_UML_ROOTFS` | Guest root directory containing `/init`, the i386 programs and their libraries |
 
-Set those variables and run `pytest tests/integration/uml -n auto -q` in the BSWorld Python environment.
+#### Build the Kernel and Seed Library
+
+Fetch the Linux revision pinned in the [Dockerfile](../../../docker/linux.Dockerfile). Build the UML kernel and seed library for i386.
+
+```sh
+LINUX_REVISION=$(sed -n 's/^ARG LINUX_REVISION=//p' "$BSWORLD_ROOT/docker/linux.Dockerfile")
+git init "$LINUX_DIR"
+git -C "$LINUX_DIR" fetch --depth=1 https://github.com/torvalds/linux.git "${LINUX_REVISION:?}"
+git -C "$LINUX_DIR" checkout --detach FETCH_HEAD
+
+(
+  cd "${LINUX_DIR:?}" &&
+  make ARCH=um SUBARCH=i386 defconfig &&
+  scripts/kconfig/merge_config.sh -m .config "$BSWORLD_ROOT/src/bsworld/uml/linux.fragment" &&
+  make ARCH=um SUBARCH=i386 olddefconfig &&
+  make ARCH=um SUBARCH=i386 -j"$(nproc)"
+) && cc -m32 -shared -fPIC -O2 -o "${BSWORLD_UML_GETRANDOM:?}" \
+  "$BSWORLD_ROOT/src/bsworld/uml/getrandom.c"
+```
+
+#### Prepare the Guest Root Filesystem
+
+Run the [rootfs script](../../../docker/uml-rootfs.sh) as your local user to extract the Ubuntu i386 runtime packages. Install the UML startup script as `/init`.
+
+```sh
+sh "$BSWORLD_ROOT/docker/uml-rootfs.sh" "${BSWORLD_UML_ROOTFS:?}" &&
+install -m 0755 "$BSWORLD_ROOT/src/bsworld/uml/init.sh" "$BSWORLD_UML_ROOTFS/init"
+```
+
+Use the Host guides below to prepare the programs for the suites you want to run. Their executable overrides take absolute paths **inside the Guest**. For example, a binary installed at `$BSWORLD_UML_ROOTFS/opt/bsworld/my-shell` is selected with `BSWORLD_UML_ZEPHYR_BIN=/opt/bsworld/my-shell`.
 
 ## Test Suites
 
-| Host | Scenarios | Guest executable |
-|---|---|---|
-| [BlueZ](bluez/README.md) | Controller setup, concurrent advertising from two guests, scanning and connection | `/usr/bin/bluetoothctl` |
-| [Zephyr native_sim](zephyr/) | Advertising, scanning, connection, GATT, pairing and privacy, link procedures, periodic advertising and sync transfer | `/opt/bsworld/zephyr-shell` via `BSWORLD_UML_ZEPHYR_BIN` |
-| [NuttX sim BTSak](nuttx/test_btsak.py) | Advertising, scanning, interference and recovery | `/opt/bsworld/nuttx-btsak` via `BSWORLD_UML_NUTTX_BIN` |
-| [NuttX sim NimBLE](nuttx/test_nimble.py) | Connections, Battery Service discovery and notifications in both roles | `/opt/bsworld/nuttx-nimble` via `BSWORLD_UML_NUTTX_NIMBLE_BIN` |
-| [NimBLE Linux](nimble/README.md) | Advertising, discovery and connection | `/opt/bsworld/nimble-linux` via `BSWORLD_UML_NIMBLE_BIN` |
+| Host guide | Test entry point |
+|---|---|
+| [BlueZ](bluez/README.md) | `tests/integration/uml/bluez` |
+| [Zephyr Bluetooth shell](zephyr/README.md) | `tests/integration/uml/zephyr` |
+| [NuttX BTSak and NimBLE](nuttx/README.md) | `tests/integration/uml/nuttx` |
+| [Apache NimBLE Linux](nimble/README.md) | `tests/integration/uml/nimble` |
 
-Executable overrides take absolute paths **inside the guest**. For example, an executable at `$BSWORLD_UML_ROOTFS/opt/bsworld/my-shell` is selected with `BSWORLD_UML_ZEPHYR_BIN=/opt/bsworld/my-shell`.
+After preparing all Hosts, run the full UML suite in the BSWorld virtual environment.
+
+```sh
+cd "$BSWORLD_ROOT"
+source .venv/bin/activate
+pytest tests/integration/uml --require-integration -n auto -q
+```
 
 ## Guest Runtime
 
-The [bootstrap script](../../../src/bsworld/uml/init.sh) runs on the read-only guest root, mounts private runtime directories and starts a shell. A dedicated H4 connection maps the guest's `/dev/ttyS0` to its Controller. The tests use `btattach -B /dev/ttyS0 -P h4` to register it as `hci0`. The console shares the UML process's standard input and output.
+The Guest boots from a read-only root filesystem. Its `/init` script mounts writable runtime directories and starts a shell connected to the UML process's standard input and output. See [init.sh](../../../src/bsworld/uml/init.sh).
 
-The test loop grants clock advances to each guest through UML `time-travel=ext`. Simulation time stands still while a guest executes. A periodic guest tick handles pending console and serial input. Only the Controllers, the test clock, and any RF interference devices have BabbleSim device IDs.
+Each Guest reaches its Controller over H4 through `/dev/ttyS0`. The tests use `btattach -B /dev/ttyS0 -P h4` to register the Controller as `hci0`.
+
+The pytest event loop advances Guest clocks through `time-travel=ext`. Simulation time pauses while a Guest runs. A periodic Guest tick handles input from the console and serial port. BabbleSim device IDs belong to Controllers, the test clock, and configured RF interference sources.
 
 ## Adding Scenarios
 
-Use [common.py](common.py) to add a Controller before `await topo.start()`, then call `open_uml_guest()` within an `AsyncExitStack`. Give each guest a distinct label and Controller. Send commands with `guest.shell.run()` and match the console with `guest.wait_log()`. The stack closes each guest before the topology is torn down.
+Before `await topo.start()`, add one Controller for each Guest. Then call `open_uml_guest()` within an `AsyncExitStack`, with a distinct label for each Guest. The stack closes the Guests before pytest tears down the topology. See the helpers in [common.py](common.py).
+
+Send commands with `guest.shell.run()` and check the console output with `guest.wait_log()`.
 
 The reusable launcher and calendar are in [bsworld.uml](../../../src/bsworld/uml). Run their [unit tests](../../unit/uml) with `pytest tests/unit/uml -q`, which requires no UML kernel or BabbleSim build.
 
 ## License
 
-The tests and BSWorld's UML adapter use Apache License 2.0. Linux and the guest programs keep their upstream licenses. [Third-Party Notices](../../../THIRD_PARTY_NOTICES.md)
+The tests and BSWorld's UML adapter use Apache License 2.0. For the licenses of Linux and the Guest programs, see [Third-Party Notices](../../../THIRD_PARTY_NOTICES.md).
