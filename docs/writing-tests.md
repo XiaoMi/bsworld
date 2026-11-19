@@ -216,7 +216,7 @@ async def test_central_receives_notification(topo, peripheral, central):
     await central.wait_log(r"\[NOTIFICATION\]")
 ```
 
-Figure 2 maps the example to its runtime behavior. Test fixtures create Controllers, attach Host-only Applications and register the processes, while `set_channel_attenuation()` configures RF paths on their shared PHY. Phase 1 corresponds to `topo.start()`, which returns only after the HCI sockets and all BabbleSim participants are ready. The remaining phases correspond to the three `wait_log()` calls as the event loop advances simulation time through advertising, connection establishment, and notification delivery.
+Figure 2 maps the example to its runtime behavior. Test fixtures register the Host processes and attach their Controllers. The `set_channel_attenuation()` call configures RF paths on their shared PHY. Phase 1 corresponds to `topo.start()`, which returns only after the HCI sockets and all BabbleSim participants are ready. The remaining phases correspond to the three `wait_log()` calls as the event loop advances simulation time through advertising, connection establishment, and notification delivery.
 
 <div align="center"><img src="images/pytest-topology-execution.svg" alt="A pytest topology expanded into deterministic Bluetooth LE execution" width="80%"><br><em>Figure 2: From a pytest topology to deterministic Bluetooth LE execution</em><br><br></div>
 
