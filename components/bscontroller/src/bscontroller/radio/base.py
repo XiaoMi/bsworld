@@ -9,6 +9,7 @@ from enum import IntEnum
 from typing import Protocol
 
 from bscontroller.radio.packet import (
+    LL_DATA_CHANNEL_COUNT,
     PDU_ACCESS_ADDRESS_SIZE,
     PDU_ADV_ACCESS_ADDRESS,
     PDU_ADV_CRC_INIT,
@@ -60,6 +61,15 @@ RADIO_TX_POWER_MIN_DBM = -127
 RADIO_TX_POWER_MAX_DBM = 20
 
 
+def channel_frequency_mhz(channel: int) -> int:
+    if channel in PHY_ADV_CHANNEL_FREQUENCIES_MHZ:
+        return PHY_ADV_CHANNEL_FREQUENCIES_MHZ[channel]
+    if not 0 <= channel < LL_DATA_CHANNEL_COUNT:
+        raise ValueError(f'invalid Bluetooth LE channel: {channel}')
+    offset = channel + (channel >= PHY_DATA_CHANNEL_GAP_INDEX)
+    return PHY_DATA_CHANNEL_BASE_MHZ + offset * PHY_DATA_CHANNEL_SPACING_MHZ
+
+
 class Phy(IntEnum):
     LE_1M = 1
     LE_2M = 2
@@ -109,6 +119,23 @@ class Received:
     valid_crc: bool
     phy: Phy = Phy.LE_1M
     coding: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class AirPacket:
+    """A dewhitened LE PDU and CRC with its radio metadata.
+
+    ``channel`` is the logical LE channel index. RSSI is present on RX only.
+    """
+
+    start_us: int
+    channel: int
+    access_address: int
+    phy: Phy
+    coding: int
+    packet: bytes
+    rssi: float | None = None
+    crc_valid: bool | None = None
 
 
 class Radio(Protocol):

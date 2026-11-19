@@ -8,10 +8,11 @@ import asyncio
 import logging
 import signal
 import uuid
+from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
 
-from . import RadioController, RadioEventLoop, RadioSession, __version__
+from . import EllisysCapture, RadioController, RadioEventLoop, RadioSession, __version__
 from .config import ControllerConfig
 from .runtime import PhyProcess
 
@@ -32,10 +33,18 @@ def controller_addresses(first: str, count: int) -> list[str]:
     ]
 
 
-async def serve(args):
+async def serve(args, capture):
     addresses = controller_addresses(args.address, len(args.hci_socket))
     controllers = [
-        RadioController(f'hci{index}', address, hci_socket=path, config=args.config)
+        RadioController(
+            f'hci{index}',
+            address,
+            hci_socket=path,
+            config=args.config,
+            hci_snoop_file=args.log_dir / f'hci{index}.btsnoop' if capture else None,
+            rf_pcap_file=args.log_dir / f'radio{index}.pcapng' if capture else None,
+            ellisys_capture=capture,
+        )
         for index, (path, address) in enumerate(zip(args.hci_socket, addresses))
     ]
     # Controllers take PHY devices 0..n-1 and the serve clock takes device n.
@@ -59,7 +68,13 @@ async def run(args):
     task = asyncio.current_task()
     loop.add_signal_handler(signal.SIGTERM, task.cancel)
     try:
-        await serve(args)
+        capture = (
+            EllisysCapture(args.log_dir / 'ellisys.bttrp')
+            if args.capture_air
+            else nullcontext()
+        )
+        with capture as trace:
+            await serve(args, trace)
     finally:
         loop.remove_signal_handler(signal.SIGTERM)
 
@@ -81,6 +96,11 @@ def main():
     )
     server.add_argument('--sim-id', default=None)
     server.add_argument('--log-dir', type=Path)
+    server.add_argument(
+        '--capture-air',
+        action='store_true',
+        help='write Ellisys, PCAPNG and HCI BTSnoop captures to --log-dir',
+    )
     server.add_argument(
         '--hci-socket',
         type=Path,

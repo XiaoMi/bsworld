@@ -48,6 +48,10 @@ bscontroller serve --hci-socket /tmp/radio.sock
 bscontroller serve --hci-socket /tmp/radio0.sock /tmp/radio1.sock
 ```
 
+加上 `--capture-air --log-dir /tmp/bscontroller` 可保存一份共享的 `ellisys.bttrp`，并为每个 Controller 保存 `radioN.pcapng` 和 `hciN.btsnoop`。
+
+Ellisys 文件按仿真时间记录所有 Controller 的发射。每份 PCAPNG 记录对应 Controller 发送的报文及 PHY 在接收期间返回的报文。每份 BTSnoop 记录 Host 与对应 Controller 之间的 H4 报文。
+
 默认情况下，仿真以机器允许的最快速度运行。如果 Host 使用墙钟定时器，请加上 `--realtime`，让仿真时间与墙钟时间同步。
 
 ```sh
@@ -104,6 +108,8 @@ with asyncio.Runner(loop_factory=RadioEventLoop) as runner:
 - **进程内 H4** 方式省略 `hci_socket`。启动前调用 `controller.set_packet_sink(sink)` 注册接收端，由其 `on_packet(packet: bytes)` 接收 H4 报文。调用 `controller.on_packet(packet)` 向 Controller 发送完整的 H4 报文。
 
 传入 `hci_snoop_file=Path(...)` 可以录制 BTSnoop 抓包，时间戳使用仿真时间。
+
+传入 `rf_pcap_file=Path(...)` 可将当前 Controller 的空口报文写入 PCAPNG。需要汇总多个 Controller 的发射时，创建一个 `EllisysCapture(Path(...))`，并通过 `ellisys_capture` 传给每个 Controller。退出 `RadioSession` 后关闭它，即可保存汇总文件。
 
 包还导出 `Radio`、`Phy`、`Received` 和 `hci` 中的报文类。`ControllerConfig` 用法见[配置](#配置)。
 

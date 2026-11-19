@@ -7,13 +7,12 @@ import argparse
 import asyncio
 import inspect
 import json
-import shutil
 import uuid
 from contextlib import AsyncExitStack, ExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from bscontroller import RadioController, RadioEventLoop, RadioSession
+from bscontroller import EllisysCapture, RadioController, RadioEventLoop, RadioSession
 from bscontroller.hosts.bumble import open_device
 from bscontroller.runtime import PhyProcess
 
@@ -29,7 +28,7 @@ def argument_parser(description):
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument('--bsim-dir', type=Path, help='BabbleSim build (BSIM_OUT_PATH)')
     parser.add_argument(
-        '--log-dir', type=Path, help='retain PHY and per-device HCI logs'
+        '--log-dir', type=Path, help='retain PHY logs, HCI and RF captures'
     )
     parser.add_argument(
         '--timeout',
@@ -40,7 +39,7 @@ def argument_parser(description):
     return parser
 
 
-async def _run(scenario, names, args, sim_id, log_dir, socket_dir):
+async def _run(scenario, names, args, sim_id, log_dir, socket_dir, capture):
     controllers = [
         RadioController(
             name,
@@ -48,6 +47,8 @@ async def _run(scenario, names, args, sim_id, log_dir, socket_dir):
             f'{index >> 8 & 255:02X}:{index & 255:02X}',
             hci_socket=socket_dir / f'{index}.sock',
             hci_snoop_file=log_dir / f'{name}.snoop',
+            rf_pcap_file=log_dir / f'{name}.pcapng' if capture else None,
+            ellisys_capture=capture,
         )
         for index, name in enumerate(names, 1)
     ]
@@ -62,6 +63,7 @@ async def _run(scenario, names, args, sim_id, log_dir, socket_dir):
                         'name': name,
                         'address': controller.public_address,
                         'hci': f'{name}.snoop',
+                        'radio': f'{name}.pcapng' if capture else None,
                     }
                     for index, (name, controller) in enumerate(zip(names, controllers))
                 ],
@@ -87,11 +89,6 @@ async def _run(scenario, names, args, sim_id, log_dir, socket_dir):
             print(json.dumps(result, sort_keys=True))
 
 
-def _collect_air(phy, log_dir):
-    if phy.results_dir.is_dir():
-        shutil.move(str(phy.results_dir), log_dir / 'air')
-
-
 def run(scenario, names, args):
     """Run one finite example with actual Hosts and radios; clean up on failure."""
     sim_id = (
@@ -108,13 +105,15 @@ def run(scenario, names, args):
             len(names) + 1,
             directory=args.bsim_dir,
             log_dir=log_dir,
-            dump=bool(args.log_dir),
         )
-        if args.log_dir:
-            resources.callback(_collect_air, phy, log_dir)
         resources.enter_context(phy)
+        capture = (
+            resources.enter_context(EllisysCapture(log_dir / 'ellisys.bttrp'))
+            if args.log_dir
+            else None
+        )
         with asyncio.Runner(loop_factory=RadioEventLoop) as runner:
-            runner.run(_run(scenario, names, args, sim_id, log_dir, temporary))
+            runner.run(_run(scenario, names, args, sim_id, log_dir, temporary, capture))
         if args.log_dir:
             print(f'Logs: {log_dir}')
 

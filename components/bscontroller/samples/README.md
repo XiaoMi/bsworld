@@ -38,4 +38,6 @@ The hubs each transmit a periodic train and synchronize with the other. An indep
 
 ## Logs
 
-Use `--log-dir /tmp/bscontroller-samples` to retain `phy.log`, per-device `.snoop` captures and the PHY's transmit and receive records under `air/`. Each run creates its own subdirectory. Use `devices.json` to match PHY device IDs to the corresponding names, addresses and HCI captures. A successful run also saves `result.json`.
+Use `--log-dir /tmp/bscontroller-samples` to keep artifacts in a separate subdirectory for each run. `phy.log` contains the PHY process output. Open a device's `.snoop` for HCI traffic and its `.pcapng` for radio traffic. The shared `ellisys.bttrp` records transmissions from all Controllers.
+
+Use `devices.json` to look up names, addresses and capture files by PHY device ID. A successful run also saves `result.json`.

@@ -48,6 +48,7 @@ from bscontroller.radio.base import (
     PHY_1M_OCTET_TIME_US,
     PHY_ADV_CHANNEL_FREQUENCIES_MHZ,
     RADIO_SWITCH_TIME_US,
+    AirPacket,
     Phy,
 )
 from bscontroller.radio.packet import crc24
@@ -514,7 +515,7 @@ async def test_tx_packet_layout_crc_and_completion_time(endpoints):
 
     Purpose: Verify ``BabbleSimRadio.transmit`` builds the TX request with the
     correct timing, Access Address, modulation, frequency and length, appends
-    the computed CRC, and reports the completion time from TX_END.
+    the computed CRC, and captures the frame once TX_END confirms transmission.
 
     Steps:
         1. Transmit a 2-octet PDU on channel 37.
@@ -524,10 +525,13 @@ async def test_tx_packet_layout_crc_and_completion_time(endpoints):
     Expected:
         - The TX fields match the expected tuple; the received bytes equal
           PDU+CRC; ``radio.now_us`` is 80 and the returned end time is 81.
+        - The capture has the on-air bytes and the start time of 1 µs.
     """
     device, phy = endpoints
     radio = BabbleSimRadio()
     radio.connection = device
+    capture = []
+    radio.on_air_packet = capture.append
     pdu = b'\x02\x00'
     packet = pdu + crc24(pdu)
 
@@ -547,10 +551,17 @@ async def test_tx_packet_layout_crc_and_completion_time(endpoints):
             len(packet),
         )
         assert await phy.receive(len(packet)) == packet
+        assert not capture
         await phy.send(HEADER.pack(TX_END) + TIME.pack(80))
 
     end, _ = await asyncio.gather(radio.transmit(37, pdu), respond())
     assert radio.now_us == 80 and end == 81
+    assert len(capture) == 1
+    assert capture[0].start_us == 1
+    assert capture[0].channel == 37
+    assert capture[0].access_address == PDU_ADV_ACCESS_ADDRESS
+    assert capture[0].phy == Phy.LE_1M
+    assert capture[0].packet == packet and capture[0].crc_valid
 
 
 @pytest.mark.asyncio
@@ -727,10 +738,14 @@ async def test_rx_address_handshake_and_crc(
         - ``radio.now_us`` ends at 179; the result is present iff ``received``;
           when present its PDU, RSSI (-45), start (100) and end (180) match and
           ``valid_crc`` reflects whether the status was OK.
+        - The capture retains all bytes and the CRC status even when the
+          Controller rejects the reception.
     """
     device, phy = endpoints
     radio = BabbleSimRadio()
     radio.connection = device
+    capture = []
+    radio.on_air_packet = capture.append
     pdu = b'\x02\x00'
     packet = pdu + crc24(pdu)
     done = RX_DONE.pack(status, len(packet), 139, 179, -45 * BSIM_RSSI_SCALE)
@@ -774,6 +789,18 @@ async def test_rx_address_handshake_and_crc(
         radio.receive(37, search_until_us, accept_bad_crc=accept_bad_crc), respond()
     )
     assert radio.now_us == 179
+    assert capture == [
+        AirPacket(
+            100,
+            37,
+            PDU_ADV_ACCESS_ADDRESS,
+            Phy.LE_1M,
+            0,
+            packet,
+            rssi=-45,
+            crc_valid=status == RX_STATUS_OK,
+        )
+    ]
     assert (result is not None) == received
     if result is not None:
         assert (result.pdu, result.rssi, result.start_us, result.end_us) == (

@@ -48,6 +48,10 @@ Pass multiple paths to `--hci-socket` to run Controllers on a shared PHY. Each s
 bscontroller serve --hci-socket /tmp/radio0.sock /tmp/radio1.sock
 ```
 
+Add `--capture-air --log-dir /tmp/bscontroller` to save a shared `ellisys.bttrp` and two captures per Controller, `radioN.pcapng` and `hciN.btsnoop`.
+
+The Ellisys trace records all Controller transmissions in simulation order. Each PCAPNG records that Controller's transmissions and packets returned by the PHY during reception. Each BTSnoop records H4 traffic between the Host and its Controller.
+
 Simulation time advances as fast as the machine allows by default. For a Host that uses wall-clock timers, add `--realtime` to keep simulation time in step with wall-clock time.
 
 ```sh
@@ -104,6 +108,8 @@ Choose the Host connection when creating the Controller.
 - **In-process H4** with `hci_socket` omitted. Before starting the Controller, register a sink with `controller.set_packet_sink(sink)`. The sink receives H4 packets through its `on_packet(packet: bytes)` method. To send an H4 packet to the Controller, call `controller.on_packet(packet)`.
 
 Pass `hci_snoop_file=Path(...)` to record a BTSnoop capture, timestamped with simulation time.
+
+Pass `rf_pcap_file=Path(...)` to write the Controller's radio traffic to PCAPNG. To merge transmissions from multiple Controllers, create one `EllisysCapture(Path(...))` and pass it as `ellisys_capture` to each Controller. Close it after the `RadioSession` exits to save the trace.
 
 The package also exposes `Radio`, `Phy`, `Received` and the HCI packet classes in `hci`. Controller settings are described under [Configuration](#configuration).
 

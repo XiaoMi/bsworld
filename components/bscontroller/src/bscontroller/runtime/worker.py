@@ -21,7 +21,9 @@ from bscontroller.hci.controller import Controller
 from bscontroller.hci.snoop import BtsnoopWriter
 from bscontroller.hci.transport import H4Server
 from bscontroller.radio.babblesim import BabbleSimRadio
-from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND
+from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND, AirPacket
+from bscontroller.radio.capture import PcapngWriter
+from bscontroller.runtime.capture import EllisysCapture
 from bscontroller.runtime.event_loop import DEFAULT_MAX_STEP_US, ControllerEventLoop
 
 
@@ -54,6 +56,8 @@ class RadioControllerWorker:
         *,
         max_step_us: int = DEFAULT_MAX_STEP_US,
         hci_snoop_file: Path | None = None,
+        rf_pcap_file: Path | None = None,
+        ellisys_capture: EllisysCapture | None = None,
         hci_socket: Path | None = None,
         config: ConfigSource = None,
     ):
@@ -65,6 +69,8 @@ class RadioControllerWorker:
         self.public_address = public_address
         self.max_step_us = max_step_us
         self.hci_snoop_file = hci_snoop_file
+        self.rf_pcap_file = rf_pcap_file
+        self.ellisys_capture = ellisys_capture
         self.hci_socket = Path(hci_socket) if hci_socket is not None else None
         self.sink = None
         self._input: SimpleQueue[bytes] | None = (
@@ -158,6 +164,21 @@ class RadioControllerWorker:
         radio = BabbleSimRadio()
         with ExitStack() as resources:
             resources.callback(radio.close)
+            pcap = None
+            if self.rf_pcap_file is not None:
+                self.rf_pcap_file.parent.mkdir(parents=True, exist_ok=True)
+                pcap = PcapngWriter(
+                    resources.enter_context(self.rf_pcap_file.open('wb'))
+                )
+
+            def record_air_packet(packet: AirPacket) -> None:
+                if self.ellisys_capture is not None and packet.rssi is None:
+                    self.ellisys_capture.record_tx(packet)
+                if pcap is not None:
+                    pcap.write(packet)
+
+            if pcap is not None or self.ellisys_capture is not None:
+                radio.on_air_packet = record_air_packet
             snoop = (
                 resources.enter_context(
                     BtsnoopWriter(self.hci_snoop_file, lambda: radio.now_us)

@@ -18,6 +18,7 @@ import select
 import stat
 import struct
 import time
+from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -27,23 +28,20 @@ from bscontroller.radio.base import (
     PHY_1M_OCTET_TIME_US,
     PHY_2M_BITRATE_BPS,
     PHY_2M_OCTET_TIME_US,
-    PHY_ADV_CHANNEL_FREQUENCIES_MHZ,
     PHY_CODED_ADDRESS_TIME_US,
     PHY_CODED_FEC1_TIME_US,
     PHY_CODED_S2_FACTOR,
     PHY_CODED_S8_FACTOR,
-    PHY_DATA_CHANNEL_BASE_MHZ,
-    PHY_DATA_CHANNEL_GAP_INDEX,
-    PHY_DATA_CHANNEL_SPACING_MHZ,
     RADIO_SWITCH_TIME_US,
     RADIO_TX_POWER_MAX_DBM,
     RADIO_TX_POWER_MIN_DBM,
+    AirPacket,
     Phy,
     RadioSwitch,
     Received,
+    channel_frequency_mhz,
 )
 from bscontroller.radio.packet import (
-    LL_DATA_CHANNEL_COUNT,
     PDU_ADV_ACCESS_ADDRESS,
     PDU_ADV_CRC_INIT,
     PDU_ADV_EXT_PAYLOAD_SIZE_MAX,
@@ -339,6 +337,7 @@ class BabbleSimRadio:
         self.connection: PhyConnection | None = None
         self.now_us = 0
         self.switch = RadioSwitch(switch_time_us=switch_time_us)
+        self.on_air_packet: Callable[[AirPacket], None] | None = None
 
     async def connect(self, sim_id: str, dev_id: int) -> None:
         if self.connection is not None:
@@ -369,20 +368,7 @@ class BabbleSimRadio:
 
     @staticmethod
     def params(channel: int, phy: Phy = Phy.LE_1M) -> tuple[int, int]:
-        if channel in PHY_ADV_CHANNEL_FREQUENCIES_MHZ:
-            mhz = PHY_ADV_CHANNEL_FREQUENCIES_MHZ[channel]
-        elif 0 <= channel <= LL_DATA_CHANNEL_COUNT - 1:
-            mhz = (
-                PHY_DATA_CHANNEL_BASE_MHZ
-                + channel * PHY_DATA_CHANNEL_SPACING_MHZ
-                + (
-                    PHY_DATA_CHANNEL_SPACING_MHZ
-                    if channel >= PHY_DATA_CHANNEL_GAP_INDEX
-                    else 0
-                )
-            )
-        else:
-            raise ValueError(f'invalid Bluetooth LE channel: {channel}')
+        mhz = channel_frequency_mhz(channel)
         return {
             Phy.LE_1M: MODULATION_LE_1M,
             Phy.LE_2M: MODULATION_LE_2M,
@@ -462,10 +448,22 @@ class BabbleSimRadio:
                     coding,
                     power_dbm,
                 )
-                return self.now_us + 1
-            await connection.send(HEADER.pack(TX_REQUEST) + request + packet)
-            await connection.response(TX_END)
-            self.now_us = TIME.unpack(await connection.receive(TIME.size))[0]
+            else:
+                await connection.send(HEADER.pack(TX_REQUEST) + request + packet)
+                await connection.response(TX_END)
+                self.now_us = TIME.unpack(await connection.receive(TIME.size))[0]
+            if self.on_air_packet is not None:
+                self.on_air_packet(
+                    AirPacket(
+                        start_us,
+                        channel,
+                        access_address,
+                        phy,
+                        coding,
+                        packet,
+                        crc_valid=True,
+                    )
+                )
             return self.now_us + 1
         finally:
             connection.end_request()
@@ -574,9 +572,7 @@ class BabbleSimRadio:
             valid_crc = status == RX_STATUS_OK and packet[-PDU_CRC_SIZE:] == crc24(
                 packet[:-PDU_CRC_SIZE], crc_init
             )
-            if not valid_crc and not accept_bad_crc:
-                return None
-            return Received(
+            received = Received(
                 # The v1 PHY timestamps the last preamble/address microsecond.
                 packet[:-PDU_CRC_SIZE],
                 rssi / BSIM_RSSI_SCALE,
@@ -585,6 +581,8 @@ class BabbleSimRadio:
                 valid_crc,
                 phy,
             )
+            self._capture_receive(channel, access_address, packet, received)
+            return received if valid_crc or accept_bad_crc else None
         finally:
             connection.end_request()
             self.switch.complete(channel, phy, transmit=False, end_us=self.now_us + 1)
@@ -662,9 +660,7 @@ class BabbleSimRadio:
         valid = status == RX_STATUS_OK and packet[-PDU_CRC_SIZE:] == crc24(
             packet[:-PDU_CRC_SIZE], crc_init
         )
-        if not valid and not accept_bad_crc:
-            return None
-        return Received(
+        received = Received(
             packet[:-PDU_CRC_SIZE],
             rssi / BSIM_RSSI_SCALE,
             address_end_us - (PHY_CODED_ADDRESS_TIME_US - 1),
@@ -673,6 +669,25 @@ class BabbleSimRadio:
             Phy.LE_CODED,
             coding,
         )
+        self._capture_receive(channel, address, packet, received)
+        return received if valid or accept_bad_crc else None
+
+    def _capture_receive(
+        self, channel: int, address: int, packet: bytes, received: Received
+    ) -> None:
+        if self.on_air_packet is not None:
+            self.on_air_packet(
+                AirPacket(
+                    received.start_us,
+                    channel,
+                    address,
+                    received.phy,
+                    received.coding,
+                    packet,
+                    rssi=received.rssi,
+                    crc_valid=received.valid_crc,
+                )
+            )
 
 
 class _ControllerClock:
