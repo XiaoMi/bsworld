@@ -17,21 +17,19 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 from tests.unit.helpers import make_env
 
 from bsworld.devices import BSController
-from bsworld.runtime.proc import ProcessManager
 from bsworld.topology import BluetoothTopology
 
 
-def _python_controller(tmp_path, **options):
+def _controller(tmp_path, **options):
     # The backend assigns hci_snoop_file when it allocates a Controller; a
     # directly constructed one has to supply it the same way.
     options.setdefault("hci_snoop_file", tmp_path / "bscontroller" / "hci0.snoop")
-    return BSController(0, "sim", "2G4", tmp_path, **options)
+    return BSController(0, "sim", tmp_path, **options)
 
 
 class Worker:
@@ -71,16 +69,14 @@ def worker(monkeypatch):
 
 
 @pytest.mark.parametrize("interval", [0, -1])
-def test_python_controller_rejects_invalid_worker_interval(tmp_path, interval):
+def test_controller_rejects_invalid_worker_interval(tmp_path, interval):
     with pytest.raises(ValueError, match="max_step_us must be positive"):
-        _python_controller(tmp_path, max_step_us=interval)
+        _controller(tmp_path, max_step_us=interval)
 
 
-async def test_python_controller_delegates_h4_and_capture_to_worker(tmp_path, worker):
-    ctl = _python_controller(
-        tmp_path, public_address="c0:ff:ee:00:00:01", max_step_us=250
-    )
-    await ctl.start(ProcessManager(), SimpleNamespace(), log_dir=tmp_path)
+async def test_controller_delegates_h4_and_capture_to_worker(tmp_path, worker):
+    ctl = _controller(tmp_path, public_address="c0:ff:ee:00:00:01", max_step_us=250)
+    await ctl.start()
     instance = worker.instances[0]
     await instance.started.wait()
     assert instance.identity == ("sim", 0)
@@ -95,9 +91,9 @@ async def test_python_controller_delegates_h4_and_capture_to_worker(tmp_path, wo
     await ctl.stop()
 
 
-async def test_python_controller_uses_worker_defaults(tmp_path, worker):
-    ctl = _python_controller(tmp_path)
-    await ctl.start(ProcessManager(), SimpleNamespace(), log_dir=tmp_path)
+async def test_controller_uses_worker_defaults(tmp_path, worker):
+    ctl = _controller(tmp_path)
+    await ctl.start()
     await ctl.stop()
     assert worker.instances[0].options == {
         "hci_snoop_file": ctl.hci_snoop_file,
@@ -108,12 +104,12 @@ async def test_python_controller_uses_worker_defaults(tmp_path, worker):
     assert not ctl.hci_sock.exists()
 
 
-async def test_python_controller_propagates_worker_failure_during_cleanup(
+async def test_controller_propagates_worker_failure_during_cleanup(
     tmp_path, worker, monkeypatch
 ):
     monkeypatch.setattr(worker, "failure", RuntimeError("worker failed"))
-    ctl = _python_controller(tmp_path)
-    await ctl.start(ProcessManager(), SimpleNamespace(), log_dir=tmp_path)
+    ctl = _controller(tmp_path)
+    await ctl.start()
     await worker.instances[0].started.wait()
     with pytest.raises(RuntimeError, match="worker failed"):
         await ctl.stop()
@@ -122,11 +118,11 @@ async def test_python_controller_propagates_worker_failure_during_cleanup(
     await ctl.stop()
 
 
-async def test_python_controller_passes_application_capture_path(tmp_path, worker):
+async def test_controller_passes_application_capture_path(tmp_path, worker):
     path = tmp_path / "application" / "hci0.snoop"
-    ctl = _python_controller(tmp_path, hci_snoop_file=path)
+    ctl = _controller(tmp_path, hci_snoop_file=path)
     try:
-        await ctl.start(ProcessManager(), SimpleNamespace(), log_dir=tmp_path)
+        await ctl.start()
         assert worker.instances[0].options == {
             "hci_snoop_file": path,
             "hci_socket": ctl.hci_sock,
@@ -135,10 +131,10 @@ async def test_python_controller_passes_application_capture_path(tmp_path, worke
         await ctl.stop()
 
 
-async def test_python_controller_start_failure_preserves_existing_path(
+async def test_controller_start_failure_preserves_existing_path(
     tmp_path, worker, monkeypatch
 ):
-    ctl = _python_controller(tmp_path)
+    ctl = _controller(tmp_path)
     ctl.hci_sock.write_text("owned by another endpoint")
 
     async def fail_start(self, sim_id, dev_id):
@@ -146,19 +142,19 @@ async def test_python_controller_start_failure_preserves_existing_path(
 
     monkeypatch.setattr(worker, "start", fail_start)
     with pytest.raises(FileExistsError):
-        await ctl.start(ProcessManager(), SimpleNamespace(), log_dir=tmp_path)
+        await ctl.start()
     assert ctl.hci_sock.read_text() == "owned by another endpoint"
     assert worker.instances[0].closed
     await ctl.stop()
 
 
-async def test_python_controllers_have_distinct_default_addresses(tmp_path, worker):
-    first = _python_controller(tmp_path)
-    second = _python_controller(tmp_path)
+async def test_controllers_have_distinct_default_addresses(tmp_path, worker):
+    first = _controller(tmp_path)
+    second = _controller(tmp_path)
     second.controller_dev_id = 1
     try:
-        await first.start(ProcessManager(), SimpleNamespace(), log_dir=tmp_path)
-        await second.start(ProcessManager(), SimpleNamespace(), log_dir=tmp_path)
+        await first.start()
+        await second.start()
         assert len({instance.address for instance in worker.instances}) == 2
     finally:
         await first.stop()
@@ -169,40 +165,40 @@ async def test_stop_releases_other_controllers_and_phy_after_worker_failure(
     tmp_path, monkeypatch
 ):
     topo = BluetoothTopology(make_env(tmp_path), "sim", tmp_path / "log")
-    python = topo.add_controller(controller_type=BSController)
-    zephyr = topo.add_controller()
+    first = topo.add_controller()
+    second = topo.add_controller()
     events = []
 
     async def fail_stop():
-        events.append("python")
+        events.append("first")
         raise RuntimeError("worker failed")
 
-    async def stop_zephyr():
-        events.append("zephyr")
+    async def stop_second():
+        events.append("second")
 
-    monkeypatch.setattr(python, "stop", fail_stop)
-    monkeypatch.setattr(zephyr, "stop", stop_zephyr)
+    monkeypatch.setattr(first, "stop", fail_stop)
+    monkeypatch.setattr(second, "stop", stop_second)
     monkeypatch.setattr(topo.pm, "cleanup", lambda: events.append("processes"))
     monkeypatch.setattr(topo.bsim, "finish", lambda **kwargs: events.append("finish"))
     with pytest.raises(RuntimeError, match="worker failed"):
         await topo.stop()
-    assert events == ["python", "zephyr", "processes", "finish"]
+    assert events == ["first", "second", "processes", "finish"]
 
 
-async def test_python_controller_passes_its_config_to_the_worker(tmp_path, worker):
+async def test_controller_passes_its_config_to_the_worker(tmp_path, worker):
     """Each Controller's ``ControllerConfig`` reaches its own worker unchanged."""
     from bscontroller import ControllerConfig
 
     first = ControllerConfig(max_connections=1)
     second = ControllerConfig(advertising_set_count=2)
     controllers = [
-        _python_controller(tmp_path, config=first),
-        _python_controller(tmp_path, config=second),
+        _controller(tmp_path, config=first),
+        _controller(tmp_path, config=second),
     ]
     controllers[1].controller_dev_id = 1
     try:
         for ctl in controllers:
-            await ctl.start(ProcessManager(), SimpleNamespace(), log_dir=tmp_path)
+            await ctl.start()
         assert [i.options["config"] for i in worker.instances] == [first, second]
     finally:
         for ctl in controllers:
@@ -214,7 +210,7 @@ async def test_python_controller_passes_its_config_to_the_worker(tmp_path, worke
     [{"controllers": {"hci0": {"maxConnections": 1}}}, "controllers.json"],
     ids=["mapping", "path"],
 )
-def test_python_controller_requires_a_controller_config(tmp_path, config):
+def test_controller_requires_a_controller_config(tmp_path, config):
     """Only a ``ControllerConfig`` is accepted as ``config``."""
     with pytest.raises(TypeError, match="ControllerConfig"):
-        _python_controller(tmp_path, config=config)
+        _controller(tmp_path, config=config)

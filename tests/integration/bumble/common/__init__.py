@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 
-from bsworld.devices import Controller
+from bsworld.devices import BSController
 from bsworld.topology import BluetoothTopology
 
 try:
@@ -170,7 +170,7 @@ async def wait_for_advertisement(
 
 def add_bumble_controller(
     topo: BluetoothTopology, role: str, address: str
-) -> Controller:
+) -> BSController:
     return topo.add_controller(
         public_address=address,
         log_subdir=Path("bumble") / role,

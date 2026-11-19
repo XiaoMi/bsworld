@@ -10,8 +10,6 @@ import struct
 
 import pytest
 
-from bsworld.devices import BSController
-
 _FILE_HEADER = bytes.fromhex("6274736e6f6f700000000001000003ea")
 _RECORD = struct.Struct(">IIIIQ")
 _FLAG_COMMAND_EVENT = 0x02
@@ -23,9 +21,7 @@ _FLAG_COMMAND_EVENT = 0x02
 async def test_snoop_matches_live_h4_traffic_without_host_relay(
     topo, tmp_path, custom_path
 ):
-    ctl = topo.add_controller(
-        controller_type=BSController, public_address="F0:F1:F2:F3:F4:01"
-    )
+    ctl = topo.add_controller(public_address="F0:F1:F2:F3:F4:01")
     if custom_path:
         ctl.hci_snoop_file = tmp_path / "application" / "hci0.snoop"
     await topo.start()

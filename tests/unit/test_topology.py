@@ -19,9 +19,10 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
+from bscontroller import ControllerConfig
 from tests.unit.helpers import make_env, register_process
 
-from bsworld.devices import BSController, ZephyrController
+from bsworld.devices import BSController
 from bsworld.devices.instance import ProcessInstance
 from bsworld.devices.layout import AppSlot
 from bsworld.interference import (
@@ -46,37 +47,22 @@ def test_add_process_registers_controller_application_device(tmp_path) -> None:
     assert dev.controller.hci_sock == tmp_path / "state" / "sim0" / "hci0.sock"
 
 
-def test_add_controller_allocates_in_process_virtual_controller(tmp_path) -> None:
+def test_add_controller_allocates_bscontroller_with_its_configuration(tmp_path) -> None:
     topo = BluetoothTopology(make_env(tmp_path), "sim0", tmp_path / "log")
+    config = ControllerConfig(max_connections=2)
 
-    ctl = topo.add_controller(public_address="c0:ff:ee:00:00:03")
+    ctl = topo.add_controller(
+        public_address="c0:ff:ee:00:00:03", config=config, max_step_us=250
+    )
 
+    assert isinstance(ctl, BSController)
     assert ctl is topo.bsim.controllers[0]
     assert ctl.public_address == "C0:FF:EE:00:00:03"
+    assert ctl.config is config
+    assert ctl.max_step_us == 250
     with pytest.raises(KeyError, match="no Application device reserved"):
         topo.bsim.plan_devices().application_slot(ctl)
     assert ctl.hci_sock == tmp_path / "state" / "sim0" / "hci0.sock"
-
-
-def test_default_controller_type_applies_until_a_call_overrides_it(tmp_path) -> None:
-    topo = BluetoothTopology(
-        make_env(tmp_path),
-        "sim0",
-        tmp_path / "log",
-        default_controller_type=BSController,
-    )
-
-    inherited = topo.add_controller()
-    overridden = topo.add_controller(controller_type=ZephyrController)
-
-    assert isinstance(inherited, BSController)
-    assert isinstance(overridden, ZephyrController)
-
-
-def test_controller_type_defaults_to_bscontroller(tmp_path) -> None:
-    topo = BluetoothTopology(make_env(tmp_path), "sim0", tmp_path / "log")
-
-    assert isinstance(topo.add_controller(), BSController)
 
 
 def test_add_process_rejects_duplicate_label(tmp_path) -> None:
@@ -145,10 +131,10 @@ def test_add_wlan_interference_exposes_full_wlan_parameters(tmp_path) -> None:
     assert source.rand_seed == 7
 
 
-async def test_start_requires_a_controller_or_complete_firmware(tmp_path) -> None:
+async def test_start_requires_a_controller(tmp_path) -> None:
     topo = BluetoothTopology(make_env(tmp_path), "sim0", tmp_path / "log")
 
-    with pytest.raises(RuntimeError, match="Virtual Controller or complete firmware"):
+    with pytest.raises(RuntimeError, match="at least one BSController"):
         await topo.start()
     # Teardown still has to release whatever the failed start opened.
     await topo.stop()

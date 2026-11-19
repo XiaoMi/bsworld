@@ -18,6 +18,4 @@
   <project name="ext_2G4_modem_BLE_simple.git" path="components/ext_2G4_modem_BLE_simple" revision="4d2379de510684cd4b1c3bbbb09bce7b5a20bc1f"/>
   <project name="ext_2G4_modem_magic.git" path="components/ext_2G4_modem_magic" revision="edfcda2d3937a74be0a59d6cd47e0f50183453da"/>
   <project name="ext_2G4_phy_v1.git" path="components/ext_2G4_phy_v1" revision="62e797b2c518e5bb6123a198382ed2b64b8c068e"/>
-  <!-- Real AES-CCM/ECB for nRF HW models (-RealEncryption=1); Zephyr's pinned revision. -->
-  <project name="ext_libCryptov1.git" path="components/ext_libCryptov1" revision="da246018ebe031e4fe4a8228187fb459e9f3b2fa"/>
 </manifest>

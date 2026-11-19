@@ -2,15 +2,11 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-These tests run a complete Zephyr Bluetooth shell against a [Bumble](../../../bumble/README.md) Host in the pytest event loop. The `peer` fixture in [conftest.py](conftest.py) starts the shell, opens Bumble on its own Virtual Controller and runs once per Controller implementation. It fixes Bumble's SMP random values and key pair so pairing traces repeat between runs.
-
-## Prepare the Environment
-
-Build the complete executable and export `BSWORLD_ZEPHYR_FULL_SHELL_BIN` using the [Bluetooth shell guide](../README.md#build-and-run). The `[zephyr]` cases also need the [Zephyr Controller](../../../../../docs/controllers.md#building-the-zephyr-controller) and are skipped without it.
+The `peer` fixture runs a Zephyr Bluetooth shell and a [Bumble](../../../bumble/README.md) Host on separate BSControllers. It fixes Bumble's SMP random values and key pair so pairing traces repeat between runs. [conftest.py](conftest.py)
 
 ## Build and Run
 
-The executable is built by the Bluetooth shell guide. Run the tests:
+Build the shell using the [Bluetooth shell guide](../README.md#build-and-run), then run the tests.
 
 ```sh
 cd "$BSWORLD_ROOT"
@@ -18,9 +14,7 @@ source .venv/bin/activate
 pytest tests/integration/zephyr/shell/bumble_peer -n auto -q
 ```
 
-| File | Scenarios | Controllers |
-|---|---|---|
-| [test_bumble.py](test_bumble.py) | Scanning in both directions, connections initiated by either side, shell GATT server and client, pairing and bonded reconnection, PHY, data length and connection parameter updates, LE Coded connection, periodic advertising sync, loss and recovery in both directions | Once per Controller |
+[test_bumble.py](test_bumble.py) covers scanning and connections initiated by either side, GATT, pairing and bonded reconnection, link updates, LE Coded connections, and periodic advertising sync, loss and recovery in both directions.
 
 ## Adding Scenarios
 

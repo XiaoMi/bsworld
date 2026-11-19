@@ -15,7 +15,7 @@
 """Create and register an externally built Application.
 
 Resolve the executable, create the process and register it with the topology.
-The caller selects and attaches its Controller before simulation startup.
+The caller attaches its BSController before simulation startup.
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ def create_application(
     log_subdir: Path | str | None = None,
     shell: bool = False,
 ) -> ProcessInstance:
-    """Create and register an HCI Host; attach its Controller before startup."""
+    """Register an HCI Host for attachment to a BSController."""
     if (binary is None) == (binary_env is None):
         raise TypeError("pass exactly one of binary or binary_env")
     if binary is None:
@@ -72,8 +72,6 @@ def create_application(
             label=label,
             shell=shell,
             log_subdir=log_subdir,
-            # Fail at layout planning, before the PHY starts, if attach() is missing.
-            requires_controller=True,
         )
     )
 

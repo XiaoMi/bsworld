@@ -18,30 +18,44 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from string import hexdigits
 from typing import TYPE_CHECKING
-
-from ..env import Env
-from ..runtime.proc import ProcessManager
-from .controller import Controller
 
 if TYPE_CHECKING:
     from bscontroller import ControllerConfig, RadioController
 
 
+def _normalize_controller_address(address: str) -> str:
+    parts = address.split(":")
+    if len(parts) != 6 or any(
+        len(part) != 2 or any(char not in hexdigits for char in part) for part in parts
+    ):
+        raise ValueError("controller address must use AA:BB:CC:DD:EE:FF format")
+    if all(part == "00" for part in parts):
+        raise ValueError("controller address must not be all zero")
+    return address.upper()
+
+
 @dataclass(eq=False, repr=False)
-class BSController(Controller):
-    """BSController in a worker thread.
+class BSController:
+    """One PHY participant exposing an H:4 socket to its Bluetooth Host.
 
     ``config`` is a ``bscontroller.ControllerConfig`` with this Controller's
     Controller-defined values (buffers, list sizes, limits).
     """
 
+    controller_dev_id: int
+    sim_id: str
+    socket_dir: Path
+    public_address: str | None = None
+    hci_snoop_file: Path | None = None
     max_step_us: int | None = None
     config: ControllerConfig | None = None
     _worker: RadioController | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        super().__post_init__()
+        if self.public_address is not None:
+            self.public_address = _normalize_controller_address(self.public_address)
         if self.max_step_us is not None and self.max_step_us <= 0:
             raise ValueError("max_step_us must be positive")
         if self.config is not None:
@@ -50,7 +64,15 @@ class BSController(Controller):
             if not isinstance(self.config, ControllerConfig):
                 raise TypeError("config must be a bscontroller.ControllerConfig")
 
-    async def start(self, pm: ProcessManager, env: Env, *, log_dir: Path) -> None:
+    def __repr__(self) -> str:
+        return f"<BSController dev{self.controller_dev_id}>"
+
+    @property
+    def hci_sock(self) -> Path:
+        return self.socket_dir / f"hci{self.controller_dev_id}.sock"
+
+    async def start(self) -> None:
+        """Launch the worker while the backend brings up other PHY participants."""
         from bscontroller import RadioController
 
         if self._worker is not None:
@@ -85,6 +107,7 @@ class BSController(Controller):
             raise
 
     async def stop(self) -> None:
+        """Release the worker and its transport resources."""
         if self._worker is not None:
             try:
                 await self._worker.close()

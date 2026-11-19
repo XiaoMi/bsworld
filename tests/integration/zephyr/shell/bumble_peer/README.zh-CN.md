@@ -2,15 +2,11 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-本组测试让完整 Zephyr Bluetooth shell 与运行在 pytest event loop 中的 [Bumble](../../../bumble/README.zh-CN.md) Host 互测。[conftest.py](conftest.py) 中的 `peer` fixture 启动 shell，在独立的虚拟 Controller 上打开 Bumble，并让两种 Controller 实现各跑一次。它固定了 Bumble 的 SMP 随机数和密钥对，使配对过程的抓包在多次运行之间保持一致。
-
-## 准备环境
-
-按 [Bluetooth shell 构建说明](../README.zh-CN.md#构建与运行)编译完整固件并导出 `BSWORLD_ZEPHYR_FULL_SHELL_BIN`。`[zephyr]` 用例还需要构建 [Zephyr Controller](../../../../../docs/zh-CH/controllers.md#编译-zephyr-controller)，未构建时跳过。
+`peer` fixture 在两个独立的 BSController 上运行 Zephyr Bluetooth shell 和 [Bumble](../../../bumble/README.zh-CN.md) Host。它固定了 Bumble 的 SMP 随机数和密钥对，以便复现配对抓包。 [conftest.py](conftest.py)
 
 ## 构建与运行
 
-程序已按 Bluetooth shell 构建说明编译。运行测试：
+按 [Bluetooth shell 构建说明](../README.zh-CN.md#构建与运行)编译 shell，然后运行测试。
 
 ```sh
 cd "$BSWORLD_ROOT"
@@ -18,9 +14,7 @@ source .venv/bin/activate
 pytest tests/integration/zephyr/shell/bumble_peer -n auto -q
 ```
 
-| 文件 | 场景 | Controller |
-|---|---|---|
-| [test_bumble.py](test_bumble.py) | 双向扫描、任一侧发起连接、shell 作为 GATT 服务端和客户端、配对与绑定后重连、PHY/数据长度/连接参数更新、LE Coded 连接，以及双向的周期广播同步、丢失与恢复 | 两种 Controller 各跑一次 |
+[test_bumble.py](test_bumble.py) 覆盖双向扫描和连接、GATT、配对与绑定后重连、链路更新、LE Coded 连接，以及双向的周期广播同步、丢失与恢复。
 
 ## 添加场景
 

@@ -26,7 +26,7 @@ from numbers import Real
 from pathlib import Path
 from typing import Final, Literal, get_args
 
-from .devices import Controller, ProcessInstance
+from .devices import BSController, ProcessInstance
 
 InterfType = Literal[
     "CW",
@@ -183,7 +183,7 @@ class InterferenceRef:
     index: int
 
 
-PathEndpoint = int | ProcessInstance | Controller | InterferenceRef
+PathEndpoint = int | ProcessInstance | BSController | InterferenceRef
 
 
 @dataclass

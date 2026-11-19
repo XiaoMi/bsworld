@@ -7,10 +7,9 @@ The repository [README](../README.md#technical-architecture) introduces the Virt
 ## Quick Index
 
 - [Test Lifecycle](#test-lifecycle)
-- [Choosing Controllers](#choosing-controllers)
+- [Adding Controllers](#adding-controllers)
 - [Async Waiting and Simulation Time](#async-waiting-and-simulation-time)
 - [Integrating Application Processes](#integrating-application-processes)
-- [Complete Firmware](#complete-firmware)
 - [Process Shell Commands](#process-shell-commands)
 - [RF Conditions and Interference](#rf-conditions-and-interference)
 - [Topology as a pytest Test](#topology-as-a-pytest-test)
@@ -28,19 +27,17 @@ The topology moves through four phases:
 
 Every test receives its own simulation ID, Unix socket directory, and log directory. Virtual tests can therefore run concurrently without sharing Controller state, RF state, or output files.
 
-## Choosing Controllers
+## Adding Controllers
 
 Each Host gets its own virtual Controller from `topo.add_controller()` and connects to its `hci_sock` after `topo.start()`:
 
 ```python
-from bsworld.devices import BSController
-
-ctl = topo.add_controller(controller_type=BSController, public_address="F0:F1:F2:F3:F4:01")
+ctl = topo.add_controller(public_address="F0:F1:F2:F3:F4:01")
 await topo.start()
 # Connect the Host to ctl.hci_sock.
 ```
 
-`BSController` is the default and `ZephyrController` is the native alternative; one topology may mix both. Complete Zephyr firmware carries its own Controller and needs neither; see [Complete Firmware](#complete-firmware) and [Virtual Controllers](controllers.md).
+See [BSController configuration](controllers.md) for the available settings.
 
 ## Async Waiting and Simulation Time
 
@@ -69,19 +66,17 @@ Simulation time only advances once every callback and I/O event at the current t
 
 ## Integrating Application Processes
 
-Each integration suite owns the factories that create its Applications. A factory takes the topology as its first argument and registers the new process; the test then selects a Controller and binds it with `host.attach(controller)` before `topo.start()`. Python Host stacks open their Controller's `hci_sock` after startup and run in the test's asyncio event loop. Reuse the suite's existing helpers when adding a scenario; its README describes setup, initialization, and available commands.
+Each integration suite owns the factories that create its Applications. A factory registers a new process with the topology. If it leaves the Controller attachment to the caller, use `host.attach(controller)` before `topo.start()`. Python Host stacks open their Controller's `hci_sock` after startup and run in the test's asyncio event loop. Use the suite's existing helpers when adding a scenario.
 
 ```python
-from tests.integration.zephyr.shell.devices import create_zephyr_shell
-from bsworld.devices import BSController
+from tests.integration.nuttx.btsak.devices import NUTTX_BTSAK_ADVERTISER
+from tests.integration.nuttx.common import create_nuttx_process
 
-host = create_zephyr_shell(topo, name="host")
-host.attach(topo.add_controller(
-    controller_type=BSController, public_address="F0:F1:F2:F3:F4:02"
-))
+host = create_nuttx_process(topo, NUTTX_BTSAK_ADVERTISER)
+host.attach(topo.add_controller(public_address="F0:F1:F2:F3:F4:02"))
 ```
 
-Attachments can change until device identities are published, normally by `topo.start()`; an earlier `plan_devices()` call also freezes them. When you construct a `ProcessInstance` yourself, register it with `topo.add_process()` and pass `requires_controller=True` if its Controller is attached later. A missing `attach()` then fails when the layout is planned, before the PHY starts, instead of the Host being treated as complete firmware. The suite factories already set it.
+Attachments can change until device identities are published, normally by `topo.start()`; an earlier `plan_devices()` call also freezes them. If you construct a `ProcessInstance` yourself, register it with `topo.add_process()` and attach its Controller before planning the layout.
 
 | Platform | Test guide |
 |---|---|
@@ -90,34 +85,6 @@ Attachments can change until device identities are published, normally by `topo.
 | TrouBLE | [Native TrouBLE tests](../tests/integration/trouble/README.md#adding-scenarios) |
 | UML Linux | [BlueZ and NimBLE](../tests/integration/uml/README.md#adding-scenarios) |
 | Zephyr | [Bluetooth shell](../tests/integration/zephyr/shell/README.md#adding-scenarios) |
-
-## Complete Firmware
-
-Firmware that contains its own Controller and radio, such as a Zephyr `nrf52_bsim` build, joins the PHY directly. Register it without a Controller:
-
-```python
-from pathlib import Path
-from bsworld.devices import ProcessInstance
-
-node = topo.add_process(ProcessInstance(
-    command=lambda slot: [
-        Path("/absolute/path/to/zephyr.exe"),
-        f"-s={slot.sim_id}", f"-p={slot.phy_id}", f"-d={slot.dev_id}",
-        "-rs=41", "-mro=1000", "-RealEncryption=1",
-    ],
-    label="node",
-    shell=True,
-    # -RealEncryption=1 loads libCryptov1.so from BabbleSim.
-    env={"LD_LIBRARY_PATH": str(topo.env.bsim_dir / "lib")},
-))
-await topo.start()
-```
-
-- Set `shell=True` only for images with the UART on stdin/stdout; otherwise check output with `wait_log()`.
-- Use the process as a `tx` or `rx` endpoint in attenuation paths.
-- There is no `hci_sock` and no `hciN.snoop`; use the console log and `ellisys.bttrp`.
-
-Build steps for the Zephyr shell images: [Zephyr Bluetooth shell](../tests/integration/zephyr/shell/README.md#build-and-run).
 
 ## Process Shell Commands
 
@@ -180,7 +147,7 @@ topo.set_channel_attenuation(
 
 Paths are directional. Configure both `tx -> rx` and `rx -> tx` when the two directions require distinct loss values. A `TimedAttenuation` curve pairs each timestamp with one attenuation value and linearly interpolates between adjacent points.
 
-`tx` and `rx` can be registered `ProcessInstance` or `Controller` objects, `InterferenceRef` objects returned by `add_*_interference()`, or raw BabbleSim device IDs. An HCI Host process resolves to its associated Virtual Controller. A complete firmware process resolves to its own radio device ID.
+`tx` and `rx` can be registered `ProcessInstance` or `BSController` objects, `InterferenceRef` objects returned by `add_*_interference()`, or raw BabbleSim device IDs. A Host process resolves to the radio device ID of its attached Controller.
 
 ### Burst Interference
 

@@ -38,24 +38,6 @@ def _write_bsim_outputs(env: SimpleNamespace) -> None:
             path.chmod(0o755)
 
 
-def _hci_env(tmp_path: Path) -> SimpleNamespace:
-    return SimpleNamespace(
-        hci_virt_bin=(
-            tmp_path
-            / "components"
-            / "bt_virt_controller"
-            / "build"
-            / "bt_virt_controller"
-        ),
-    )
-
-
-def _write_controller(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/bin/sh\n")
-    path.chmod(0o755)
-
-
 def test_babblesim_check_accepts_runtime_without_source(tmp_path) -> None:
     env = _bsim_env(tmp_path)
     _write_bsim_outputs(env)
@@ -68,11 +50,10 @@ def test_babblesim_check_accepts_runtime_without_source(tmp_path) -> None:
     "break_output",
     [
         lambda env: (env.bsim_dir / "lib" / "lib_2G4Channel_multiatt.so").unlink(),
-        lambda env: (env.bsim_dir / "lib" / "libCryptov1.so").unlink(),
         lambda env: (env.bsim_bin_dir / "bs_2G4_phy_v1").unlink(),
         lambda env: (env.bsim_bin_dir / "bs_2G4_phy_v1").chmod(0o644),
     ],
-    ids=["missing-radio-module", "missing-aes", "missing-phy", "non-executable-phy"],
+    ids=["missing-radio-module", "missing-phy", "non-executable-phy"],
 )
 def test_babblesim_check_names_the_unusable_output(tmp_path, break_output) -> None:
     env = _bsim_env(tmp_path)
@@ -88,32 +69,6 @@ def test_babblesim_check_names_the_unusable_output(tmp_path, break_output) -> No
 def test_babblesim_check_rejects_unset_path() -> None:
     with pytest.raises(deps.BSWorldSetupError, match="BSIM_OUT_PATH"):
         deps.check_babblesim_ready(SimpleNamespace(bsim_dir=None))
-
-
-def test_controller_check_accepts_native_executable(tmp_path) -> None:
-    env = _hci_env(tmp_path)
-    _write_controller(env.hci_virt_bin)
-
-    deps.check_controller_ready(env)
-    launcher = deps.controller_bin(env)
-
-    assert launcher.is_file()
-    assert launcher.parent.name == "build"
-    assert launcher.stat().st_mode & 0o111
-
-
-@pytest.mark.parametrize("state", ["missing", "unset", "non-executable"])
-def test_controller_check_reports_an_unusable_executable(tmp_path, state) -> None:
-    if state == "unset":
-        env = SimpleNamespace(hci_virt_bin=None)
-    else:
-        env = _hci_env(tmp_path)
-        if state == "non-executable":
-            _write_controller(env.hci_virt_bin)
-            env.hci_virt_bin.chmod(0o644)
-
-    with pytest.raises(deps.BSWorldSetupError, match="BSWORLD_BT_VIRT_CONTROLLER_BIN"):
-        deps.check_controller_ready(env)
 
 
 def test_setup_errors_are_ordinary_failures_not_interpreter_exits() -> None:

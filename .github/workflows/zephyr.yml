@@ -1,7 +1,7 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-# Zephyr Controller and Bluetooth shells.
+# Zephyr Bluetooth Host shell with BSController.
 # Builds bsworld-zephyr from docker/zephyr.Dockerfile and runs its tests.
 name: Zephyr
 

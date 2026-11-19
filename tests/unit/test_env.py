@@ -21,14 +21,11 @@ import pytest
 from bsworld.env import Env, env_path
 
 
-def test_detect_uses_explicit_artifact_paths(monkeypatch, tmp_path) -> None:
+def test_detect_uses_explicit_babblesim_path(monkeypatch, tmp_path) -> None:
     bsim_dir = tmp_path / "BabbleSim output"
-    controller = tmp_path / "Zephyr build" / "zephyr.exe"
     monkeypatch.setenv("BSIM_OUT_PATH", str(bsim_dir))
-    monkeypatch.setenv("BSWORLD_BT_VIRT_CONTROLLER_BIN", str(controller))
     env = Env.detect(out_dir="/tmp/out", now_tag="run-fixed", run_uid="uid")
 
-    assert env.hci_virt_bin == controller
     assert env.bsim_dir == bsim_dir
     assert env.bsim_bin_dir == bsim_dir / "bin"
 
@@ -45,12 +42,10 @@ def test_detect_selects_image_runtime(monkeypatch, tmp_path) -> None:
 
 def test_detect_does_not_guess_missing_artifacts(monkeypatch) -> None:
     monkeypatch.delenv("BSIM_OUT_PATH", raising=False)
-    monkeypatch.setenv("BSWORLD_BT_VIRT_CONTROLLER_BIN", "")
     env = Env.detect()
 
     assert env.bsim_dir is None
     assert env.bsim_bin_dir is None
-    assert env.hci_virt_bin is None
 
 
 def test_env_path_expands_home_and_resolves_relative_paths(

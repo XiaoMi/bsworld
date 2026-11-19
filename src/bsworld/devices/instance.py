@@ -25,39 +25,32 @@ from typing import TYPE_CHECKING
 from ..deps import BSWorldSetupError
 from ..runtime.pipe import LogCapture
 from ..runtime.shell import ProcessShell
+from .bscontroller import BSController
 from .layout import AppSlot
 
 if TYPE_CHECKING:
     from ..runtime.proc import ProcessManager
     from ..topology import BluetoothTopology
-    from .controller import Controller
 
 
 class ProcessInstance:
-    """An HCI Host or a complete firmware process joining the PHY directly.
-
-    A process with a Controller is an HCI Host. Set requires_controller for a
-    Host whose Controller is attached later, so a forgotten attach() fails when
-    the layout is planned instead of being counted as complete firmware.
-    """
+    """An HCI Host process whose Controller can be attached before startup."""
 
     def __init__(
         self,
         *,
         command: list[str | Path] | Callable[[AppSlot], list[str | Path]],
-        controller: "Controller | None" = None,
+        controller: BSController | None = None,
         label: str,
         shell: bool = False,
         log_subdir: Path | str | None = None,
         cwd: Path | None = None,
         env: Mapping[str, str] | None = None,
-        requires_controller: bool = False,
     ) -> None:
         if not callable(command) and not command:
             raise ValueError("process command must not be empty")
         self._command_factory = command
         self._controller = controller
-        self.requires_controller = requires_controller or controller is not None
         self._topology: BluetoothTopology | None = None
         self.label = label
         self.shell = ProcessShell(label=label, enabled=shell)
@@ -70,17 +63,15 @@ class ProcessInstance:
         self._pipe: LogCapture | None = None
 
     @property
-    def controller(self) -> Controller | None:
+    def controller(self) -> BSController | None:
         return self._controller
 
-    def attach(self, controller: Controller) -> ProcessInstance:
-        """Bind an external Controller before the topology layout is frozen."""
-        from .controller import Controller
-
+    def attach(self, controller: BSController) -> ProcessInstance:
+        """Bind a BSController before the topology layout is frozen."""
         if self._controller is not None:
             raise RuntimeError("process already has a Controller attached")
-        if not isinstance(controller, Controller):
-            raise TypeError("attach requires a Controller instance")
+        if not isinstance(controller, BSController):
+            raise TypeError("attach requires a BSController instance")
         if self._topology is not None:
             self._topology._attach_process_controller(self, controller)
         self._controller = controller

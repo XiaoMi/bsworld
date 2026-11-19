@@ -118,7 +118,7 @@ def test_process_environment_overrides_and_working_directory(
     monkeypatch.setenv("BSWORLD_PARENT_TEST", "parent")
     monkeypatch.setenv("LD_LIBRARY_PATH", "parent-lib")
     topo = BluetoothTopology(unit_env, "sim", tmp_path / "log")
-    binary = tmp_path / "firmware"
+    binary = tmp_path / "host"
     binary.touch()
     working_dir = tmp_path / "working" if custom_cwd else None
     if working_dir is not None:
@@ -126,6 +126,7 @@ def test_process_environment_overrides_and_working_directory(
     process = topo.add_process(
         ProcessInstance(
             command=[binary],
+            controller=topo.add_controller(),
             label="device",
             cwd=working_dir,
             env={"LD_LIBRARY_PATH": "child-lib"},

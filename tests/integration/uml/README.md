@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Runs a Linux guest in User Mode Linux (UML): a mainline Linux kernel built as an ordinary host program. The guest runs programs from the host's file system. Its `/dev/ttyS0` connects to a BSController, the default [Virtual Controller](../../../docs/controllers.md), and UML time-travel synchronizes the guest clock with BabbleSim simulation time.
+Runs a Linux guest in User Mode Linux (UML): a mainline Linux kernel built as an ordinary host program. The guest runs programs from the host's file system. Its `/dev/ttyS0` connects to [BSController](../../../docs/controllers.md), and UML time-travel synchronizes the guest clock with BabbleSim simulation time.
 
 ## Validated Versions
 

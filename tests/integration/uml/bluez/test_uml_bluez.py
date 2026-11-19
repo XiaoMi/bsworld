@@ -28,7 +28,7 @@ from tests.integration.bumble.common import (
 )
 from tests.integration.uml.common import UmlGuest, add_uml_controller, open_uml_guest
 
-from bsworld.devices import Controller
+from bsworld.devices import BSController
 from bsworld.topology import BluetoothTopology
 
 _CONTROLLER_ADDRESS = "AA:BB:CC:DD:EE:FF"
@@ -40,12 +40,12 @@ _LOG_SUBDIR = Path("uml") / "bluez"
 _TIMEOUT = 20.0
 
 
-def _add_bluez_controller(topo: BluetoothTopology) -> Controller:
+def _add_bluez_controller(topo: BluetoothTopology) -> BSController:
     return add_uml_controller(topo, _CONTROLLER_ADDRESS, log_subdir=_LOG_SUBDIR)
 
 
 async def _open_bluez(
-    stack: AsyncExitStack, topo: BluetoothTopology, controller: Controller
+    stack: AsyncExitStack, topo: BluetoothTopology, controller: BSController
 ) -> UmlGuest:
     guest = await open_uml_guest(
         stack, topo, controller, label="uml_bluez", log_subdir=_LOG_SUBDIR

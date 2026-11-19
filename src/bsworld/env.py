@@ -69,10 +69,6 @@ class Env:
     out_dir: Path
     log_dir: Path
 
-    # Native artifacts are selected explicitly before pytest starts.
-    hci_virt_bin: Path | None
-
-    # shared build outputs prepared before pytest
     bsim_dir: Path | None
 
     bs_state_dir: Path
@@ -110,7 +106,6 @@ class Env:
             run_uid=uid,
             out_dir=run_dir,
             log_dir=log_dir,
-            hci_virt_bin=env_path("BSWORLD_BT_VIRT_CONTROLLER_BIN"),
             bsim_dir=bsim_dir,
             # Native layout shared with the Controllers; bscontroller owns it.
             bs_state_dir=simulation_root(),

@@ -13,7 +13,7 @@ BSWorld is a deterministic simulation framework for testing Bluetooth Hosts and 
 Use BSWorld to:
 
 - Test open-source Host stacks such as Zephyr, NuttX, BlueZ, NimBLE, Bumble, and TrouBLE without modifying their source code.
-- Run without hardware: Hosts connect over standard H4 HCI to virtual Controllers, or complete firmware joins the PHY with its own Controller and radio.
+- Run tests without hardware by connecting Hosts to BSController over standard H4 HCI.
 - Keep Application logs, HCI BTSnoop captures, PHY logs, and Ellisys traces for debugging failures.
 - Simulate many devices in one scenario. Repeated runs of the same scenario produce consistent logs and timing, regardless of host load or scheduling.
 - Share one discrete simulation clock across all devices. Scenarios are isolated and run in parallel with pytest-xdist, up to 100 times faster than real time.
@@ -107,7 +107,7 @@ The other suites run a platform's executables. Build them with the guides in [Su
 
 | Environment | Validated behavior | Guide |
 |---|---|---|
-| Zephyr Bluetooth shell | Advertising and scanning, interference and recovery, connections and GATT, LL procedures, pairing and privacy, periodic advertising; complete firmware against Host-only shells on either Controller and against Bumble | [Zephyr tests](tests/integration/zephyr/README.md) |
+| Zephyr Bluetooth shell | Advertising and scanning, interference and recovery, connections and GATT, LL procedures, pairing and privacy, periodic advertising and sync transfer, and interoperability with Bumble | [Zephyr tests](tests/integration/zephyr/README.md) |
 | Bumble Python Host | Advertising, scanning, connections, periodic advertising and synchronization | [Bumble tests](tests/integration/bumble/README.md) |
 | Linux and BlueZ under User Mode Linux | Controller setup, advertising, scanning, connection and disconnection through the Linux Bluetooth subsystem | [BlueZ tests](tests/integration/uml/bluez/README.md) |
 | TrouBLE Rust Host | Advertising, connection, Battery Service discovery, reads and notifications | [TrouBLE tests](tests/integration/trouble/README.md) |
@@ -116,11 +116,11 @@ The other suites run a platform's executables. Build them with the guides in [Su
 
 ## Technical Architecture
 
-BSWorld keeps each Application and Host stack on its native interface. Every Host connects through standard HCI to an independent Zephyr Controller process or Python BSController worker. Complete Zephyr firmware includes its own Controller and radio and joins the PHY directly; see [Complete firmware](docs/writing-tests.md#complete-firmware). All Controllers, complete firmware and interference sources share the BabbleSim PHY and simulation clock. Native Hosts also join the PHY's clock, Bumble runs on the pytest event loop, and a User Mode Linux guest receives its clock from that loop through UML time-travel.
+BSWorld keeps each Application and Host stack on its native interface. Each Host connects over H4 HCI to its own BSController worker. The Controllers and interference sources share the BabbleSim PHY and simulation clock. Native Hosts also join the PHY's clock, Bumble runs on the pytest event loop, and a User Mode Linux guest receives its clock from that loop through UML time-travel.
 
-<div align="center"><img src="docs/images/babblesim_arch.svg" alt="BSWorld participants connected through independent virtual Controllers or as complete firmware to a shared BabbleSim PHY" width="80%"><br><em>Figure 1: BSWorld architecture</em><br><br></div>
+<div align="center"><img src="docs/images/babblesim_arch.svg" alt="Bluetooth Hosts connected through BSController workers to a shared BabbleSim PHY" width="80%"><br><em>Figure 1: BSWorld architecture</em><br><br></div>
 
-The virtual Controllers implement HCI commands, events, ACL data, Link Layer procedures, and radio transmission and reception. A topology can mix RTOS, Python, User Mode Linux and complete Zephyr participants with either Controller implementation. See [Virtual Controllers](docs/controllers.md) to choose and configure them.
+A topology can mix RTOS, Python, and User Mode Linux Hosts. See [BSController configuration](docs/controllers.md) for per-instance settings such as device address, buffer sizes, and Bluetooth version.
 
 HCI traffic is saved as `hciN.snoop` for Wireshark or another BTSnoop-capable tool. Radio traffic is saved as `babblesim/ellisys.bttrp` for Ellisys. See [Logs, traces, and captures](docs/artifacts.md) for locations and a recommended investigation order.
 
@@ -138,7 +138,7 @@ Repeatability assumes identical binaries and inputs and controlled random source
 ## Documentation
 
 - [Writing tests and RF scenarios](docs/writing-tests.md): define topologies, integrate Applications, wait with asyncio, and configure RF conditions.
-- [Virtual Controllers](docs/controllers.md): choose between the Zephyr and Python Controllers, run a scenario against both, and configure BSController.
+- [BSController configuration](docs/controllers.md) covers the topology API and Controller settings.
 - [Logs, traces, and captures](docs/artifacts.md): locate and analyze test artifacts.
 - [Development checks](docs/development.md): run unit tests, lint, and coverage.
 - [Docker guide](docker/README.md): run published images, select suites, and build local images.

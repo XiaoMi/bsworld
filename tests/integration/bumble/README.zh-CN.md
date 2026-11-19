@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-本组测试在 pytest 的 asyncio event loop 中运行 [Bumble](https://github.com/google/bumble) Python Host，与测试共用仿真时钟。每个设备连接自己的 BSController，即默认的[虚拟 Controller](../../../docs/zh-CH/controllers.md)。[common/](common/) 存放共用的设备辅助函数。
+本组测试在 pytest 的 asyncio event loop 中运行 [Bumble](https://github.com/google/bumble) Python Host，与测试共用仿真时钟。每个设备连接自己的 [BSController](../../../docs/zh-CH/controllers.md)。[common/](common/) 存放共用的设备辅助函数。
 
 | Host | 上游 | 版本 |
 |---|---|---|

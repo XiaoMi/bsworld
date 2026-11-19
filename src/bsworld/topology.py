@@ -30,12 +30,12 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from bsworld.runtime.scheduler import BsimEventLoop
 
 from .backends.babblesim import BabbleSimBackend
 from .devices.bscontroller import BSController
-from .devices.controller import Controller
 from .devices.instance import ProcessInstance
 from .env import Env
 from .interference import (
@@ -52,13 +52,15 @@ from .interference import (
 from .log import close_log_file, open_log_file, warn
 from .runtime.proc import ProcessManager
 
+if TYPE_CHECKING:
+    from bscontroller import ControllerConfig
+
 
 @dataclass
 class BluetoothTopology:
     env: Env
     sim_id: str
     test_log_dir: Path
-    default_controller_type: type[Controller] = BSController
     pm: ProcessManager = field(default_factory=ProcessManager)
     bsim: BabbleSimBackend = field(init=False)
     _event_loop: BsimEventLoop | None = field(default=None, init=False, repr=False)
@@ -83,17 +85,12 @@ class BluetoothTopology:
     def add_controller(
         self,
         *,
-        controller_type: type[Controller] | None = None,
         public_address: str | None = None,
         log_subdir: Path | str | None = None,
-        **options,
-    ) -> Controller:
-        """Allocate a Virtual Controller for one Bluetooth Host.
-
-        Omitting controller_type uses default_controller_type, so a suite can
-        run unchanged scenarios against either implementation by choosing the
-        default once for the whole topology.
-        """
+        config: ControllerConfig | None = None,
+        max_step_us: int | None = None,
+    ) -> BSController:
+        """Allocate a BSController for one Bluetooth Host."""
         self._ensure_configurable()
         log_path = (
             Path(log_subdir)
@@ -101,10 +98,10 @@ class BluetoothTopology:
             else Path("controllers") / f"hci{len(self.bsim.controllers)}"
         )
         return self.bsim.add_controller(
-            controller_type=controller_type or self.default_controller_type,
             public_address=public_address,
             snoop_dir=self.test_log_dir / log_path,
-            **options,
+            config=config,
+            max_step_us=max_step_us,
         )
 
     def add_process(self, process: ProcessInstance) -> ProcessInstance:
@@ -125,14 +122,14 @@ class BluetoothTopology:
         return process
 
     def _attach_process_controller(
-        self, process: ProcessInstance, controller: Controller
+        self, process: ProcessInstance, controller: BSController
     ) -> None:
         """Validate a late attachment of a registered process before it is recorded."""
         self._ensure_configurable()
         self.bsim.validate_attachment(process, controller)
         self._move_capture(process, controller)
 
-    def _move_capture(self, process: ProcessInstance, controller: Controller) -> None:
+    def _move_capture(self, process: ProcessInstance, controller: BSController) -> None:
         # An Application keeps its Controller's capture beside its own logs.
         self.bsim.set_snoop_dir(controller, self.test_log_dir / process.log_subdir)
 
