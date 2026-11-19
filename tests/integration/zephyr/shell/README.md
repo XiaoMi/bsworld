@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Pytest drives the upstream Zephyr `tests/bluetooth/shell` through shell commands. Each Zephyr Host connects to its own BSController over an HCI socket. [source/](source/) holds the Kconfig files and the HCI overlay.
+Pytest drives the upstream Zephyr `tests/bluetooth/shell` through shell commands. Each Zephyr Host connects to its own BSController over an HCI socket. [source/](source/) holds the shell's Kconfig and HCI overlay.
 
 ## Build and Run
 
@@ -15,7 +15,7 @@ SRC="$BSWORLD_ROOT/tests/integration/zephyr/shell/source"
 APP="$ZEPHYR_WORKSPACE/zephyr/tests/bluetooth/shell"
 
 west build -p always -b nrf52_bsim -d build/bsworld_zephyr_shell "$APP" -- \
-  -DCONF_FILE="$SRC/prj.conf" -DEXTRA_CONF_FILE="$SRC/le.conf" \
+  -DCONF_FILE="$SRC/prj.conf" \
   -DDTC_OVERLAY_FILE="$APP/xterm-native-shell.overlay;$SRC/bsim_host_only.overlay"
 export BSWORLD_ZEPHYR_SHELL_BIN="$ZEPHYR_WORKSPACE/build/bsworld_zephyr_shell/zephyr/zephyr.exe"
 ```

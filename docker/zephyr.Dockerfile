@@ -78,7 +78,6 @@ RUN . "$ZEPHYR_WORKSPACE/.venv/bin/activate" \
         -d "$ZEPHYR_WORKSPACE/build/bsworld_zephyr_shell" \
         "$ZEPHYR_BASE/tests/bluetooth/shell" \
         -- -DCONF_FILE=/opt/bsworld-build/zephyr/shell/prj.conf \
-        -DEXTRA_CONF_FILE=/opt/bsworld-build/zephyr/shell/le.conf \
         -DDTC_OVERLAY_FILE="$ZEPHYR_BASE/tests/bluetooth/shell/xterm-native-shell.overlay;/opt/bsworld-build/zephyr/shell/bsim_host_only.overlay" \
     && strip --strip-unneeded "$ZEPHYR_WORKSPACE/build/bsworld_zephyr_shell/zephyr/zephyr.exe"
 

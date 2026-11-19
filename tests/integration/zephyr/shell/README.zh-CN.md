@@ -15,7 +15,7 @@ SRC="$BSWORLD_ROOT/tests/integration/zephyr/shell/source"
 APP="$ZEPHYR_WORKSPACE/zephyr/tests/bluetooth/shell"
 
 west build -p always -b nrf52_bsim -d build/bsworld_zephyr_shell "$APP" -- \
-  -DCONF_FILE="$SRC/prj.conf" -DEXTRA_CONF_FILE="$SRC/le.conf" \
+  -DCONF_FILE="$SRC/prj.conf" \
   -DDTC_OVERLAY_FILE="$APP/xterm-native-shell.overlay;$SRC/bsim_host_only.overlay"
 export BSWORLD_ZEPHYR_SHELL_BIN="$ZEPHYR_WORKSPACE/build/bsworld_zephyr_shell/zephyr/zephyr.exe"
 ```

@@ -35,7 +35,7 @@ from bsworld.topology import BluetoothTopology
 
 
 def test_add_process_registers_controller_application_device(tmp_path) -> None:
-    exe = tmp_path / "firmware"
+    exe = tmp_path / "host"
     exe.write_text("")
     topo = BluetoothTopology(make_env(tmp_path), "sim0", tmp_path / "log")
 
@@ -66,7 +66,7 @@ def test_add_controller_allocates_bscontroller_with_its_configuration(tmp_path) 
 
 
 def test_add_process_rejects_duplicate_label(tmp_path) -> None:
-    exe = tmp_path / "firmware"
+    exe = tmp_path / "host"
     exe.write_text("")
     topo = BluetoothTopology(make_env(tmp_path), "sim0", tmp_path / "log")
     original = register_process(topo, exe=exe, label="device")
@@ -78,7 +78,7 @@ def test_add_process_rejects_duplicate_label(tmp_path) -> None:
 
 
 def test_add_process_rejects_shared_controller(tmp_path) -> None:
-    exe = tmp_path / "firmware"
+    exe = tmp_path / "host"
     exe.write_text("")
     topo = BluetoothTopology(make_env(tmp_path), "sim0", tmp_path / "log")
     first = register_process(topo, exe=exe, label="first")
@@ -94,7 +94,7 @@ def test_topology_rejects_configuration_after_start(tmp_path) -> None:
     topo = BluetoothTopology(make_env(tmp_path), "sim0", tmp_path / "log")
     controller = topo.add_controller()
     process = ProcessInstance(
-        command=[tmp_path / "firmware"], controller=controller, label="device"
+        command=[tmp_path / "host"], controller=controller, label="device"
     )
     topo._started = True
 
@@ -144,7 +144,7 @@ async def test_start_uses_registered_snoop_path_and_binds_clock(
     tmp_path, monkeypatch
 ) -> None:
     topo = BluetoothTopology(make_env(tmp_path), "sim0", tmp_path / "log")
-    exe = tmp_path / "firmware"
+    exe = tmp_path / "host"
     exe.write_text("")
     dev = register_process(topo, exe=exe, label="dev0")
     seen_snoop_paths: list[Path] = []
@@ -208,7 +208,7 @@ def test_snoop_path_uses_the_controller_or_application_log_directory(
     ctl = topo.add_controller(log_subdir="python/bumble")
     assert ctl.hci_snoop_file == tmp_path / "log" / "python/bumble" / "hci0.snoop"
     if application:
-        exe = tmp_path / "firmware"
+        exe = tmp_path / "host"
         exe.touch()
         topo.add_process(
             ProcessInstance(

@@ -216,7 +216,7 @@ async def test_central_receives_notification(topo, peripheral, central):
     await central.wait_log(r"\[NOTIFICATION\]")
 ```
 
-图 2 将示例代码映射到实际执行过程：测试 fixture 创建 Controller、挂载 Host-only 业务程序并登记进程，`set_channel_attenuation()` 配置共享 PHY 上的 RF 路径。阶段 1 对应 `topo.start()`；HCI socket 和全部 BabbleSim 参与者就绪后，该调用才会返回。后续阶段对应三个 `wait_log()`，event loop 推进仿真时间，业务程序依次完成广播、连接和通知交互。
+图 2 展示示例的执行过程。测试 fixture 登记 Host 进程并挂载各自的 Controller，`set_channel_attenuation()` 配置共享 PHY 上的 RF 路径。阶段 1 对应 `topo.start()`，该调用等到 HCI socket 和全部 BabbleSim 参与者就绪后返回。后续阶段对应三个 `wait_log()`，event loop 推进仿真时间，业务程序依次完成广播、连接和通知交互。
 
 <div align="center"><img src="../images/pytest-topology-execution.svg" alt="pytest 拓扑展开为确定性的 Bluetooth LE 执行" width="80%"><br><em>图 2：从 pytest 拓扑到确定性的 Bluetooth LE 执行</em><br><br></div>
 
