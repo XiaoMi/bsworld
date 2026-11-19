@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-`ghcr.io/xiaomi/bsworld-linux` 包含 BSWorld、BabbleSim 和 32 位 UML 测试环境。Guest 根文件系统中有 Ubuntu i386 的 BlueZ、D-Bus 软件包，以及 Zephyr、NuttX 和 NimBLE 可执行文件。Guest 配置和套件说明见 [UML 测试环境指南](../tests/integration/uml/README.zh-CN.md)。
+`ghcr.io/xiaomi/bsworld-linux` 包含 BSWorld、BabbleSim 和 32 位 UML 测试环境。Guest 内置程序及对应测试见 [UML 测试环境指南](../tests/integration/uml/README.zh-CN.md)。
 
 ## 使用已发布镜像
 

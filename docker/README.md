@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-`ghcr.io/xiaomi/bsworld-linux` packages BSWorld, BabbleSim, and the 32-bit UML test environment. The Guest root filesystem contains Ubuntu's i386 BlueZ and D-Bus packages and the Zephyr, NuttX, and NimBLE executables. For Guest setup and suite details, see the [UML test environment guide](../tests/integration/uml/README.md).
+`ghcr.io/xiaomi/bsworld-linux` packages BSWorld, BabbleSim, and the 32-bit UML test environment. For the programs included in the Guest root filesystem and the tests they run, see the [UML test environment guide](../tests/integration/uml/README.md).
 
 ## Use a Published Image
 

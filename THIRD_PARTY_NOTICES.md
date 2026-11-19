@@ -40,6 +40,10 @@ BSWorld uses Bumble's public Python and HCI transport APIs.
 
 BSWorld builds the Bluetooth shell from external Zephyr sources using its [native_sim configuration](tests/integration/uml/zephyr/prj.conf).
 
+## TrouBLE
+
+BSWorld builds TrouBLE's upstream Linux examples for the [UML TrouBLE suite](tests/integration/uml/trouble/README.md). TrouBLE is dual licensed under MIT or Apache License 2.0. See the [upstream source](https://github.com/embassy-rs/trouble).
+
 ## Linux
 
 - Source: https://github.com/torvalds/linux

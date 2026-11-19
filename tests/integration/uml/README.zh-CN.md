@@ -86,6 +86,7 @@ install -m 0755 "$BSWORLD_ROOT/src/bsworld/uml/init.sh" "$BSWORLD_UML_ROOTFS/ini
 | [Zephyr 蓝牙 shell](zephyr/README.zh-CN.md) | `tests/integration/uml/zephyr` |
 | [NuttX BTSak 和 NimBLE](nuttx/README.zh-CN.md) | `tests/integration/uml/nuttx` |
 | [Apache NimBLE Linux](nimble/README.zh-CN.md) | `tests/integration/uml/nimble` |
+| [TrouBLE](trouble/README.zh-CN.md) | `tests/integration/uml/trouble` |
 
 准备好所有 Host 后，在 BSWorld 的虚拟环境中运行全套 UML 测试。
 
