@@ -30,4 +30,4 @@ To run the suite in Docker and keep its output on the host, see [Select a Suite]
 
 ## Artifacts
 
-The test saves `uml_nimble.log` and the Controller's HCI capture under `uml/nimble/` in its log directory. For the full directory layout, see [Test artifacts](../../../../docs/artifacts.md).
+The test saves `uml_nimble.log` alongside the Controller's HCI BTSnoop and radio PCAPNG captures under `uml/nimble/`. For the full directory layout, see [Test artifacts](../../../../docs/artifacts.md).

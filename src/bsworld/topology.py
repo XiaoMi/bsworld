@@ -289,7 +289,7 @@ class BluetoothTopology:
         try:
             async with AsyncExitStack() as cleanup:
                 cleanup.callback(close_log_file)
-                cleanup.callback(self.bsim.finish, log_dir=self.test_log_dir)
+                cleanup.callback(self.bsim.finish)
                 cleanup.callback(self.pm.restore_signal_handlers)
                 cleanup.push_async_callback(asyncio.to_thread, self.pm.cleanup)
                 await self.bsim.stop_controllers()

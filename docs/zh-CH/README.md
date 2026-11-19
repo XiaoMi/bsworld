@@ -13,7 +13,7 @@ BSWorld 是一个在 Linux 上测试蓝牙 Host 和应用的确定性仿真框�
 - 直接测试上游 Host 协议栈，无需蓝牙硬件。
 - 同一场景中的多台设备共享仿真时钟。独立场景可用 pytest-xdist 并行运行。
 - 设置路径衰减，注入干扰或 WLAN 活动，也可以回放录制的无线信号。
-- 通过应用日志、HCI BTSnoop 抓包、PHY 日志和 Ellisys 跟踪文件排查问题。
+- 通过应用日志、HCI BTSnoop 抓包、各 Controller 的空口抓包和共享 Ellisys 跟踪文件排查问题。
 
 ## 快速开始
 
@@ -117,7 +117,7 @@ Bumble 运行在 pytest 事件循环中。各 UML Guest 独立运行，通过各
 
 设备地址、缓冲区大小和蓝牙版本均可按 Controller 单独设置。设置方法见 [BSController 配置](controllers.md)。
 
-用 Wireshark 或其他支持 BTSnoop 的工具打开 `hciN.snoop`，用 Ellisys 打开 `babblesim/ellisys.bttrp` 查看空口交互。完整目录结构见[日志、跟踪文件与抓包](artifacts.md)。
+用 Wireshark 打开 `hciN.snoop` 和 `radioN.pcapng`，即可查看对应 Controller 的 HCI 交互和空口活动。共享文件 `babblesim/ellisys.bttrp` 汇总了各 BSController 的发送记录，可用 Ellisys 打开。抓包范围和文件位置见[日志、跟踪文件与抓包](artifacts.md)。
 
 ### 离散时间调度
 

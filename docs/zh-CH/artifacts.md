@@ -45,8 +45,10 @@ CI 的 UML 作业在同一个镜像中运行 Guest 和 BabbleSim 集成测试。
         uml/nuttx/
             nuttx.log
             hci0.snoop
+            radio0.pcapng
         bumble/scanner/
             hci1.snoop
+            radio1.pcapng
 ```
 
 ## 各类产物
@@ -57,7 +59,8 @@ CI 的 UML 作业在同一个镜像中运行 Guest 和 BabbleSim 集成测试。
 | `babblesim/bs_2G4_phy_v1.log` | BabbleSim PHY | PHY 进程的标准输出和标准错误。正常运行时可能为空。 |
 | `uml/<label>/<label>.log` | UML Guest | 控制台的标准输出和标准错误。测试可指定其他日志目录。 |
 | `hciN.snoop` | BSController | Host 与 Controller 之间的 H4 报文。 |
-| `babblesim/ellisys.bttrp` | BSWorld | 由 PHY 导出并按时间排序的 Bluetooth LE 发送记录。 |
+| `radioN.pcapng` | BSController | 该 Controller 发送的报文，以及接收期间 PHY 返回的报文。 |
+| `babblesim/ellisys.bttrp` | BSController | 用例中各 BSController 的 Bluetooth LE 发送记录，按仿真时间排序。 |
 | `babblesim/att_matrix.txt` | BSWorld | 本测试实际传给 `multiatt` 信道模型的静态路径衰减矩阵。 |
 | `babblesim/timed_att_*.txt` | BSWorld | 时变路径的时间点和衰减值。 |
 
@@ -90,7 +93,6 @@ tail -f "${TEST_LOG_DIR:?}/uml/nuttx/nuttx.log"
 - 每个进程的工作目录、日志路径和 PID。
 - Controller HCI socket 和 BabbleSim 设备锁的就绪状态。
 - 清理阶段仍在运行的进程及停止顺序。
-- Ellisys 转换使用的输入文件和输出位置。
 
 受管理的进程在清理前以非零状态退出时，BSWorld 会记录退出状态和该进程的最后几行输出。
 
@@ -105,11 +107,21 @@ wireshark "${TEST_LOG_DIR:?}/bumble/scanner/hci1.snoop"
 btmon -r "${TEST_LOG_DIR:?}/bumble/scanner/hci1.snoop"
 ```
 
-Controller 默认将抓包写入 `controllers/hciN/`。添加 Controller 时可通过 `log_subdir` 将抓包与 Guest 或 Bumble 的产物放在一起。
+Controller 默认将两个抓包文件写入 `controllers/hciN/`。添加 Controller 时可通过 `log_subdir` 将抓包与 Guest 或 Bumble 的产物放在一起。
+
+## Controller 空口抓包
+
+`radioN.pcapng` 记录该 Controller 发送的报文和接收期间 PHY 返回的报文。每条记录包含仿真时间戳和收发方向。接收记录还包含可用的 RSSI 和 CRC 结果。
+
+用 Wireshark 打开抓包即可对照该 Controller 的发送与接收活动。
+
+```sh
+wireshark "${TEST_LOG_DIR:?}/bumble/scanner/radio1.pcapng"
+```
 
 ## Ellisys 空口跟踪文件
 
-BSWorld 启动仿真时启用 PHY 的设备级 CSV 导出功能。清理时将已有的发送记录合并到 `babblesim/ellisys.bttrp`。
+BSWorld 以 `-nodump` 启动 PHY。各 BSController 提供自己的发送记录，测试清理时将这些记录按仿真时间写入共享文件 `babblesim/ellisys.bttrp`。
 
 在 [Ellisys](https://www.ellisys.com/products/bex400/) 中选择 **File > Import** 和 **Bluetooth packets**，再通过 **Next** 和 **Browse** 打开 `ellisys.bttrp`。
 
@@ -117,14 +129,14 @@ BSWorld 启动仿真时启用 PHY 的设备级 CSV 导出功能。清理时将�
   <img src="../images/ellisys-trace-import.gif" alt="导入 BSWorld Ellisys 跟踪文件" width="760">
 </p>
 
-跟踪文件可用于检查已发送的报文、发送信道和时间，以及多个报文的发送时间是否重叠。文件取自发送记录，使用固定的 RSSI。排查接收失败时，应结合接收端的 HCI 抓包和测试配置中的衰减与干扰设置。
+跟踪文件可用于检查各 Controller 已发送的报文、发送信道和时间，以及多次发送是否重叠。Ellisys 记录使用固定的 RSSI。排查接收失败时，可对照接收端的 `radioN.pcapng` 与测试配置中的衰减、干扰设置。
 
 ## 失败排查顺序
 
 1. 在 `bsworld.log` 中检查启动命令、HCI socket 和设备锁的就绪状态，以及是否有进程提前退出。
 2. 在 Guest 控制台日志中查看程序最后报告的状态，确认 `wait_log()` 等待的日志行是否出现。
 3. 在 `hciN.snoop` 中检查预期的 Host 命令和 Controller 事件。
-4. 在 `ellisys.bttrp` 中检查预期报文及其发送时间。
+4. 在 `radioN.pcapng` 中检查单个 Controller 的发送和接收，在 `ellisys.bttrp` 中检查各 Controller 的发送时序。
 5. 无线路径不符合预期时，对照生成的 `att_matrix.txt` 和 `timed_att_*.txt` 检查设备编号、方向和生效时间。
 
-BSWorld 在输出目录中保留每个用例的产物，并在清理时删除临时 BabbleSim 状态、socket 和原始结果。
+BSWorld 在输出目录中保留每个用例的日志和抓包。清理时移除临时 BabbleSim 状态、socket 和已有的原始结果。

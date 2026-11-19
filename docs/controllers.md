@@ -4,7 +4,7 @@ English | [简体中文](zh-CH/controllers.md)
 
 Each Bluetooth Host uses its own BSController worker. The worker runs the Link Layer, accepts H4 traffic over a Unix socket, and exchanges packets through the shared BabbleSim PHY.
 
-The worker writes its HCI capture to `hciN.snoop`. BSWorld generates the shared radio trace from PHY transmit records. For file locations and analysis tools, see [Logs, traces, and captures](artifacts.md).
+The worker writes HCI traffic to `hciN.snoop` and its radio traffic to `radioN.pcapng`. BSWorld combines Controller transmissions into `babblesim/ellisys.bttrp` for the topology. For capture scope and analysis tools, see [Logs, traces, and captures](artifacts.md).
 
 ## Adding a Controller
 
@@ -20,7 +20,7 @@ For a UML Guest, BSWorld connects the socket to the Guest's `/dev/ttyS0`. The la
 | Argument | Meaning |
 |---|---|
 | `public_address` | Public device address in `AA:BB:CC:DD:EE:FF` format. If omitted, BSController derives a distinct address from the Controller number. |
-| `log_subdir` | Directory for `hciN.snoop`, relative to the test log directory. Defaults to `controllers/hciN/`. |
+| `log_subdir` | Directory for `hciN.snoop` and `radioN.pcapng`, relative to the test log directory. Defaults to `controllers/hciN/`. |
 | `config` | Per-Controller settings supplied as a `ControllerConfig`. |
 | `max_step_us` | Maximum idle simulation step in microseconds. |
 

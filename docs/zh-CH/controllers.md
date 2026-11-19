@@ -4,7 +4,7 @@
 
 每个蓝牙 Host 使用各自的 BSController worker。worker 运行 Link Layer，通过 Unix socket 与 Host 交换 H4 报文，经共享的 BabbleSim PHY 收发空口报文。
 
-worker 将 HCI 抓包写入 `hciN.snoop`。BSWorld 根据 PHY 的发送记录生成共享空口跟踪文件。文件位置和分析工具见[日志、跟踪文件与抓包](artifacts.md)。
+worker 将 HCI 抓包写入 `hciN.snoop`，将自身空口抓包写入 `radioN.pcapng`。BSWorld 汇总同一拓扑内各 Controller 的发送记录，生成 `babblesim/ellisys.bttrp`。抓包范围和分析工具见[日志、跟踪文件与抓包](artifacts.md)。
 
 ## 添加 Controller
 
@@ -20,7 +20,7 @@ await topo.start()
 | 参数 | 含义 |
 |---|---|
 | `public_address` | 公共设备地址，格式为 `AA:BB:CC:DD:EE:FF`。省略时，BSController 根据 Controller 编号生成互不相同的地址。 |
-| `log_subdir` | `hciN.snoop` 的存放目录，相对于测试日志目录，默认为 `controllers/hciN/`。 |
+| `log_subdir` | `hciN.snoop` 和 `radioN.pcapng` 的存放目录，相对于测试日志目录，默认为 `controllers/hciN/`。 |
 | `config` | 以 `ControllerConfig` 传入的 Controller 配置。 |
 | `max_step_us` | worker 空闲时的最大仿真步长，单位为微秒。 |
 

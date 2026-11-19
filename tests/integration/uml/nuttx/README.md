@@ -68,6 +68,6 @@ With `blecent`, NuttX runs as Central. It connects to Bumble, discovers services
 
 ## Artifacts
 
-Single-guest tests save the console log and Controller's HCI capture under `uml/nuttx/`. In the interference test, the two scanners write to `uml/nuttx-protected/` and `uml/nuttx-jammed/`.
+Single-guest tests save the console log, HCI BTSnoop, and Controller radio PCAPNG capture under `uml/nuttx/`. In the interference test, the two scanners write to `uml/nuttx-protected/` and `uml/nuttx-jammed/`.
 
 For the Bumble captures and shared RF trace, see the [test artifact directory layout](../../../../docs/artifacts.md#directory-layout).

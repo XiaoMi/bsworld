@@ -68,6 +68,6 @@ NuttX 以 Central 角色运行 `blecent` 时，会连接 Bumble、发现服务�
 
 ## 测试产物
 
-单 Guest 用例在 `uml/nuttx/` 下保存控制台日志和 Controller 的 HCI 抓包。干扰用例的两个扫描端分别写入 `uml/nuttx-protected/` 和 `uml/nuttx-jammed/`。
+单 Guest 用例在 `uml/nuttx/` 下保存控制台日志、Controller 的 HCI BTSnoop 和空口 PCAPNG 抓包。干扰用例的两个扫描端分别写入 `uml/nuttx-protected/` 和 `uml/nuttx-jammed/`。
 
-Bumble 的 HCI 抓包和共享空口跟踪文件的位置见[测试产物目录](../../../../docs/zh-CH/artifacts.md#目录结构)。
+Bumble 的抓包和共享空口跟踪文件的位置见[测试产物目录](../../../../docs/zh-CH/artifacts.md#目录结构)。

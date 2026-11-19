@@ -30,4 +30,4 @@ To run the suite in Docker and keep its output on the host, see [Select a Suite]
 
 ## Artifacts
 
-Each test saves console logs and HCI captures under `uml/bluez/` in its log directory. The advertising test creates a subdirectory for each Guest. For the full directory layout, see [Test artifacts](../../../../docs/artifacts.md).
+Each test saves console logs, HCI BTSnoop files, and Controller PCAPNG captures under `uml/bluez/` in its log directory. The advertising test creates a subdirectory for each Guest. For the full directory layout, see [Test artifacts](../../../../docs/artifacts.md).

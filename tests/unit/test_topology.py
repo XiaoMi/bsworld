@@ -121,7 +121,7 @@ async def test_start_uses_registered_snoop_path_and_binds_clock(
         seen_snoop_paths.append(controller.hci_snoop_file)
 
     monkeypatch.setattr(topo.bsim, "start", fake_backend_start)
-    monkeypatch.setattr(topo.bsim, "finish", lambda *, log_dir: None)
+    monkeypatch.setattr(topo.bsim, "finish", lambda: None)
 
     loop = asyncio.get_running_loop()
     assert isinstance(loop, BsimEventLoop)
@@ -257,7 +257,7 @@ async def test_stop_finalizes_backend_even_if_process_cleanup_fails(
 
     topo.pm = FakeProcessManager()
     monkeypatch.setattr("bsworld.topology.asyncio.to_thread", fake_to_thread)
-    monkeypatch.setattr(topo.bsim, "finish", lambda *, log_dir: events.append("finish"))
+    monkeypatch.setattr(topo.bsim, "finish", lambda: events.append("finish"))
 
     if cleanup_fails:
         with pytest.raises(RuntimeError, match="cleanup failed"):

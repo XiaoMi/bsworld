@@ -13,7 +13,7 @@ BSWorld tests Bluetooth Hosts and applications on Linux through deterministic si
 - Test open-source Host stacks without hardware or changes to their source code.
 - Run multiple devices on one simulation clock. Run independent scenarios in parallel with pytest-xdist.
 - Set path attenuation, inject interference and WLAN activity, or replay recorded radio signals.
-- Inspect application logs, HCI BTSnoop captures, PHY logs, and Ellisys traces.
+- Inspect application logs, HCI BTSnoop captures, per-Controller radio captures, and shared Ellisys traces.
 
 ## Quick Start
 
@@ -117,7 +117,7 @@ Bumble runs in the pytest event loop. Each UML Guest runs in a separate process 
 
 To set per-Controller options such as device address, buffer sizes, and Bluetooth version, see [BSController configuration](docs/controllers.md).
 
-Open `hciN.snoop` in Wireshark or another BTSnoop-capable tool. Use Ellisys to inspect the radio traffic in `babblesim/ellisys.bttrp`. For the output directory layout, see [Logs, traces, and captures](docs/artifacts.md).
+Open `hciN.snoop` and `radioN.pcapng` in Wireshark to inspect a Controller's HCI traffic and radio activity. The shared `babblesim/ellisys.bttrp` collects BSController transmissions for Ellisys. For capture scope and file locations, see [Logs, traces, and captures](docs/artifacts.md).
 
 ### Discrete-Time Scheduling
 

@@ -6,8 +6,7 @@ The unit suite exercises `src/bsworld` with deterministic fakes for BabbleSim an
 |---|---|
 | `test_topology.py` | BSController allocation and configuration, registration, lifecycle ordering, clock binding, capture placement, and RF endpoint resolution. |
 | `test_interference.py` | Declarative RF input validation, numeric boundaries, window ordering, and defaults. |
-| `backends/test_babblesim.py` | PHY, Controller worker, and interference startup, registration barriers, and artifact finalization. |
-| `backends/test_ellisys.py` | Deterministic trace conversion, record filtering, coding metadata, and ordering. |
+| `backends/test_babblesim.py` | PHY, Controller worker, and interference startup, registration barriers, and capture finalization. |
 | `devices/test_layout.py` | Immutable device IDs for Controllers, the clock, and interference, plus lock paths and RF endpoint identity. |
 | `devices/test_controller.py`, `devices/test_bscontroller.py` | Controller address validation, worker configuration, transport ownership, and cleanup. |
 | `runtime/test_proc.py` | Spawn failures, process-group termination, reaping, diagnostics, and bookkeeping cleanup. |

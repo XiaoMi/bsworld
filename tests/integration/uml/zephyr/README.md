@@ -44,4 +44,4 @@ pytest tests/integration/uml/zephyr --require-integration -q
 
 ## Artifacts
 
-Each test's `uml/zephyr/` directory contains `zephyr.log` and the Controller's HCI capture. See [Logs, Traces, and Captures](../../../../docs/artifacts.md) for output locations and formats.
+Each test's `uml/zephyr/` directory contains `zephyr.log` and the Controller's HCI BTSnoop and radio PCAPNG captures. See [Logs, Traces, and Captures](../../../../docs/artifacts.md) for output locations and formats.

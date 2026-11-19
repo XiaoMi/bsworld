@@ -31,6 +31,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from bscontroller import EllisysCapture
+
 from ..deps import check_babblesim_ready
 from ..devices.bscontroller import BSController
 from ..devices.layout import DeviceLayout
@@ -49,7 +51,6 @@ from ..log import log, warn
 from ..runtime.proc import ProcessManager
 from ..runtime.scheduler import BsimClock
 from ..runtime.wait import wait_for_path, wait_for_paths, wait_for_paths_async
-from .ellisys import convert_tx_csv
 
 if TYPE_CHECKING:
     from bscontroller import ControllerConfig
@@ -73,6 +74,9 @@ class BabbleSimBackend:
         default_factory=dict, init=False
     )
     _layout: DeviceLayout | None = field(default=None, init=False, repr=False)
+    _ellisys_capture: EllisysCapture | None = field(
+        default=None, init=False, repr=False
+    )
     _started: bool = False
     clock: BsimClock | None = None
 
@@ -94,13 +98,14 @@ class BabbleSimBackend:
     ) -> BSController:
         self._ensure_layout_mutable()
         dev_id = len(self.controllers)
-        snoop_dir = snoop_dir or self.env.log_dir / "controllers"
+        capture_dir = snoop_dir or self.env.log_dir / "controllers"
         ctl = BSController(
             controller_dev_id=dev_id,
             sim_id=self.sim_id,
             socket_dir=self.env.sim_dir(self.sim_id),
             public_address=public_address,
-            hci_snoop_file=(snoop_dir / f"hci{dev_id}.snoop").resolve(),
+            hci_snoop_file=(capture_dir / f"hci{dev_id}.snoop").resolve(),
+            rf_pcap_file=(capture_dir / f"radio{dev_id}.pcapng").resolve(),
             config=config,
             max_step_us=max_step_us,
         )
@@ -191,10 +196,9 @@ class BabbleSimBackend:
                 phy_argv.append(f"-atextra={ca.extra_attenuation_db}")
             if matrix_file is not None:
                 phy_argv.append(f"-file={matrix_file}")
-            # switch back to main phy args so subsequent flags (-dump etc.) are
-            # not consumed by the channel plugin
+            # Switch back to main PHY args before disabling CSV dumps.
             phy_argv.append("-argsmain")
-        phy_argv.extend(["-dump", "-dump_imm"])
+        phy_argv.append("-nodump")
         self.prepare()
         phy_process = pm.spawn(
             "bs_2G4_phy_v1",
@@ -213,8 +217,9 @@ class BabbleSimBackend:
             phy_alive=phy_process.alive,
         )
 
+        capture = self._ellisys_capture = EllisysCapture(bsim_log_dir / "ellisys.bttrp")
         for ctl in self.controllers:
-            await ctl.start()
+            await ctl.start(ellisys_capture=capture)
 
         for ref, src in self.interference_sources.items():
             dev_id = layout.interference_dev_id(ref)
@@ -257,8 +262,8 @@ class BabbleSimBackend:
         await wait_for_paths_async(socks, timeout=timeout)
         log("hci socket(s) bound")
 
-    def finish(self, *, log_dir: Path | None = None) -> None:
-        """Release the clock and archive artifacts, including after a failed start."""
+    def finish(self) -> None:
+        """Release the clock and finish the trace after the Controllers stop."""
         if self.clock is not None:
             try:
                 self.clock.close()
@@ -266,29 +271,14 @@ class BabbleSimBackend:
                 warn(f"simulation clock close failed: {exc}")
             finally:
                 self.clock = None
+        capture, self._ellisys_capture = self._ellisys_capture, None
         try:
-            self.convert_ellisys(log_dir=log_dir)
+            if capture is not None:
+                capture.close()
+        except (OSError, ValueError) as exc:
+            warn(f"Ellisys capture failed for {self.sim_id}: {exc}")
         finally:
             self.cleanup_sim_artifacts()
-
-    def convert_ellisys(self, *, log_dir: Path | None = None) -> None:
-        if self.env.bsim_dir is None:
-            return
-        results_dir = self.env.bsim_dir / "results" / self.sim_id
-        tx_files = sorted(results_dir.glob("d_2G4*.Tx.csv"))
-        if not tx_files:
-            warn(f"no BabbleSim Tx CSV dumps found under {results_dir}")
-            return
-
-        out_dir = (log_dir or self.env.log_dir) / "babblesim"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "ellisys.bttrp"
-        log(f"converting BabbleSim dump to Ellisys: {out_path}")
-        try:
-            with out_path.open("w") as out:
-                convert_tx_csv(tx_files, out)
-        except (OSError, ValueError) as exc:
-            warn(f"Ellisys conversion failed for {self.sim_id}: {exc}")
 
     def cleanup_sim_artifacts(self) -> None:
         sim_state_dir = self.env.sim_dir(self.sim_id)
