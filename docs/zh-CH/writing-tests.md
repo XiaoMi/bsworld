@@ -66,7 +66,7 @@ result = await asyncio.wait_for(operation(), timeout=5)
 
 启动拓扑前为每个 Guest 添加一个 Controller。启动拓扑后，用 `bsworld.uml.UmlGuest` 上下文管理器运行 Guest。
 
-Guest 使用指定的内核和只读根文件系统，Controller 的 H4 socket 接到 `/dev/ttyS0`。参数 `init` 使用 Guest 内的绝对路径，例如 `/init`。
+Guest 使用指定的内核和只读根文件系统启动。Virtio Bluetooth 将 Controller 注册为 `hci0`。参数 `init` 使用 Guest 内的绝对路径，例如 `/init`。
 
 ```python
 from bsworld.uml import UmlGuest
@@ -84,8 +84,6 @@ with UmlGuest(
     log_subdir="uml/host",
 ) as guest:
     await guest.wait_log(r"^BSWORLD_UML_READY$")
-    await guest.shell.run("btattach -B /dev/ttyS0 -P h4 &")
-    await guest.wait_log(r"Device index 0 attached")
 ```
 
 同一个测试可启动多个 Guest。每个 Guest 使用独立的名称、Controller、控制台和 time-travel socket。Guest 共享拓扑时钟，自身不占用 PHY 设备 ID。
@@ -94,7 +92,7 @@ with UmlGuest(
 
 ## 向进程发送 Shell 命令
 
-Guest 控制台就绪后，用 `shell.run()` 发送命令。命令写入标准输入后，调用即返回。可用 `wait_log()` 或其他可观察条件确认命令的执行结果。
+Guest 控制台就绪后，用 `shell.run()` 发送命令。可用 `wait_log()` 或其他可观察条件确认命令的执行结果。
 
 ```python
 await dev.shell.run("...")

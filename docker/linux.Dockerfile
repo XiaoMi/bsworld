@@ -368,7 +368,6 @@ ENV TMPDIR=/tmp \
 RUN bsworld-check-binaries "$BSWORLD_UML_KERNEL" \
     && test -x "$BSWORLD_UML_ROOTFS/init" \
     && for binary in "$BSWORLD_UML_KERNEL" \
-            "$BSWORLD_UML_ROOTFS/usr/bin/btattach" \
             "$BSWORLD_UML_ROOTFS/usr/bin/bluetoothctl" \
             "$BSWORLD_UML_ROOTFS/usr/bin/dbus-daemon" \
             "$BSWORLD_UML_ROOTFS/usr/libexec/bluetooth/bluetoothd" \

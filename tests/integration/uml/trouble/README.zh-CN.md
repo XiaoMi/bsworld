@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-套件在 32 位 UML Guest 中运行 TrouBLE 上游的 Linux Battery Service 示例。测试通过 `btattach` 接入 Controller，示例通过 Linux HCI User Channel 打开 `hci0`。
+套件在 32 位 UML Guest 中运行 TrouBLE 上游的 Linux Battery Service 示例。示例通过 Linux HCI User Channel 打开 Guest 的 `hci0`。
 
 ## 构建与运行
 

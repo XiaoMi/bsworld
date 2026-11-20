@@ -15,7 +15,7 @@ controller = topo.add_controller(public_address="F0:F1:F2:F3:F4:01")
 await topo.start()
 ```
 
-For a UML Guest, BSWorld connects the socket to the Guest's `/dev/ttyS0`. The launcher setup is described in [Running Hosts in UML](writing-tests.md#running-hosts-in-uml).
+For a UML Guest, BSWorld bridges the socket to the Guest's virtio Bluetooth Controller. The launcher setup is described in [Running Hosts in UML](writing-tests.md#running-hosts-in-uml).
 
 | Argument | Meaning |
 |---|---|

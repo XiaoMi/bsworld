@@ -90,9 +90,3 @@ async def open_uml_guest(
     )
     await guest.wait_log(r"^BSWORLD_UML_READY$")
     return guest
-
-
-async def attach_hci_uart(guest: UmlGuest) -> None:
-    """Register the virtual UART Controller as hci0 in the guest kernel."""
-    await guest.shell.run("btattach -B /dev/ttyS0 -P h4 &")
-    await guest.wait_log(r"Device index 0 attached")

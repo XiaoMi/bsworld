@@ -19,7 +19,6 @@ from tests.integration.uml.bumble_peer import (
 )
 from tests.integration.uml.common import (
     add_uml_controller,
-    attach_hci_uart,
     open_uml_guest,
     require_guest_program,
 )
@@ -58,7 +57,6 @@ async def _open_peers(
 
 
 async def _run_example(guest: UmlGuest, program: Path) -> None:
-    await attach_hci_uart(guest)
     command = join((str(program), "0"))
     await guest.shell.run(
         f"hciconfig hci0 down && RUST_LOG=info RUST_LOG_STYLE=never exec {command}"

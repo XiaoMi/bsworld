@@ -98,6 +98,12 @@ class LogCapture:
         """
         self._drain_fifo()
 
+    def record(self, chunk: bytes) -> None:
+        """Append console output from an in-process transport."""
+        if self._artifact_fh is not None:
+            self._artifact_fh.write(chunk)
+        self._record_lines(chunk)
+
     def stop(self) -> None:
         loop = self._loop
         self._loop = None
@@ -179,9 +185,7 @@ class LogCapture:
                 return
             if not chunk:
                 return
-            if self._artifact_fh is not None:
-                self._artifact_fh.write(chunk)
-            self._record_lines(chunk)
+            self.record(chunk)
 
     def _record_lines(self, chunk: bytes) -> None:
         self._pending_line.extend(chunk)

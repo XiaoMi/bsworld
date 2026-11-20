@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-The suite runs TrouBLE's upstream Linux Battery Service examples in a 32-bit UML Guest. The tests attach the Controller with `btattach` and open `hci0` through the Linux HCI User Channel.
+The suite runs TrouBLE's upstream Linux Battery Service examples in a 32-bit UML Guest. The examples open the Guest's `hci0` through the Linux HCI User Channel.
 
 ## Build and Run
 

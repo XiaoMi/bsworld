@@ -110,9 +110,9 @@ pytest tests/integration/babblesim -n auto
 
 ## 技术架构
 
-每个 Host 通过 H4 HCI 连接自己的 BSController。Controller、pytest 时钟和配置的干扰源共用一个 BabbleSim PHY。
+每个 Host 使用独立的 BSController。Bumble 直接连接 Controller 的 H4 socket。UML Guest 通过 Virtio Bluetooth 接入，由 BSWorld 将 HCI 包转发到对应的 H4 socket。
 
-Bumble 运行在 pytest 事件循环中。各 UML Guest 独立运行，通过各自的 time-travel socket 从该循环获取仿真时间。同一拓扑可以同时运行多个 Guest。
+Controller、pytest 时钟和配置的干扰源共用一个 BabbleSim PHY。Bumble 运行在 pytest 事件循环中。各 UML Guest 独立运行，通过各自的 time-travel socket 从该循环获取仿真时间。同一拓扑可以同时运行多个 Guest。
 
 <div align="center"><img src="../images/babblesim_arch.svg" alt="蓝牙 Host 通过各自的 BSController worker 连接到共享的 BabbleSim PHY" width="80%"><br><em>图 1：BSWorld 架构</em><br><br></div>
 

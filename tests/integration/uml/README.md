@@ -100,13 +100,14 @@ pytest tests/integration/uml --require-integration -n auto -q
 
 ## Guest Runtime
 
-The Guest boots from a read-only root filesystem. Its `/init` script mounts writable runtime directories and starts a shell connected to the UML process's standard input and output. See [init.sh](../../../components/uml/init.sh).
+The Guest boots from a read-only root filesystem. Its `/init` script mounts writable runtime directories and starts a shell on the virtio console. See [init.sh](../../../components/uml/init.sh).
 
-Each Guest reaches its Controller over H4 through `/dev/ttyS0`. The tests use `btattach -B /dev/ttyS0 -P h4` to register the Controller as `hci0`.
+Virtio Bluetooth registers each Guest's Controller as `hci0`. BSWorld forwards HCI packets between the Guest and the Controller's H4 socket.
 
-The pytest event loop schedules Guests through `time-travel=ext`. A Guest can advance its own clock within the current BabbleSim microsecond. The test clock holds its PHY turn until the Guest yields.
+The pytest event loop schedules Guests through `time-travel=ext`. Guests due in the same microsecond run in Controller ID order. The test clock holds its PHY turn until the running Guest yields.
 
-A periodic Guest tick handles input from the console and serial port. BabbleSim device IDs belong to Controllers, the test clock, and configured RF interference sources.
+The Guest stops the scheduling tick while idle. Virtio notifications request a turn for incoming HCI packets and console input.
+
 
 BSWorld derives each Guest's test seed from its label and passes it to the UML kernel in `UML_RANDOM_SEED` as an unsigned decimal integer.
 
