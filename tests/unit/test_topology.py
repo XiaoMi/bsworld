@@ -20,14 +20,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 from bscontroller import ControllerConfig
+from bscontroller.runtime.event_loop import RadioEventLoop
 from tests.unit.helpers import make_env
 
+from bsworld.backends import babblesim
 from bsworld.devices import BSController
 from bsworld.interference import (
     StaticAttenuation,
     WlanInterference,
 )
-from bsworld.runtime.scheduler import BsimEventLoop
 from bsworld.topology import BluetoothTopology
 
 
@@ -45,18 +46,6 @@ def test_add_controller_allocates_bscontroller_with_its_configuration(tmp_path) 
     assert ctl.config is config
     assert ctl.max_step_us == 250
     assert ctl.hci_sock == tmp_path / "state" / "sim0" / "hci0.sock"
-
-
-def test_topology_rejects_configuration_after_start(tmp_path) -> None:
-    topo = BluetoothTopology(make_env(tmp_path), "sim0", tmp_path / "log")
-    topo._started = True
-
-    with pytest.raises(RuntimeError, match="cannot modify a topology"):
-        topo.add_controller()
-    with pytest.raises(RuntimeError, match="cannot modify a topology"):
-        topo.set_channel_attenuation(default_db=50.0)
-    with pytest.raises(RuntimeError, match="cannot modify a topology"):
-        topo.add_burst_interference(2402.0)
 
 
 def test_add_wlan_interference_exposes_full_wlan_parameters(tmp_path) -> None:
@@ -91,48 +80,107 @@ async def test_start_requires_a_controller(tmp_path) -> None:
     await topo.stop()
 
 
-async def test_start_uses_registered_snoop_path_and_binds_clock(
-    tmp_path, monkeypatch
-) -> None:
+async def test_start_binds_clock_after_the_phy_barrier(tmp_path, monkeypatch) -> None:
     topo = BluetoothTopology(make_env(tmp_path), "sim0", tmp_path / "log")
-    controller = topo.add_controller(log_subdir="dev0")
-    seen_snoop_paths = []
+    topo.add_controller()
+    events = []
 
     class FakeClock:
         now_us = 0
-        synchronized = False
-
-        def synchronize(self) -> None:
-            assert asyncio.get_running_loop().radio_selector.clock is None
-            self.synchronized = True
 
         def advance_to_us(self, target_us: int) -> int:
-            self.now_us = target_us
-            return self.now_us
-
-        def close(self) -> None:
-            return None
+            assert target_us == 0
+            assert loop.radio_selector.clock is None
+            events.append("barrier")
+            return target_us
 
     topo.bsim.clock = FakeClock()
-    monkeypatch.setattr(topo.bsim, "wait_for_hci_sockets", AsyncMock())
-    monkeypatch.setattr(topo.bsim, "wait_for_devices_registered", lambda: None)
-
-    async def fake_backend_start(pm, *, log_dir):  # noqa: ANN001, ARG001
-        seen_snoop_paths.append(controller.hci_snoop_file)
-
-    monkeypatch.setattr(topo.bsim, "start", fake_backend_start)
+    monkeypatch.setattr(topo.bsim, "start", AsyncMock())
+    monkeypatch.setattr(
+        topo.bsim,
+        "wait_for_hci_sockets",
+        AsyncMock(side_effect=lambda: events.append("hci ready")),
+    )
+    monkeypatch.setattr(
+        topo.bsim,
+        "wait_for_devices_registered",
+        AsyncMock(side_effect=lambda: events.append("registered")),
+    )
     monkeypatch.setattr(topo.bsim, "finish", lambda: None)
 
     loop = asyncio.get_running_loop()
-    assert isinstance(loop, BsimEventLoop)
+    assert isinstance(loop, RadioEventLoop)
     await topo.start()
     try:
-        assert seen_snoop_paths == [tmp_path / "log" / "dev0" / "hci0.snoop"]
+        assert events == ["hci ready", "registered", "barrier"]
         assert loop.radio_selector.clock is topo.bsim.clock
-        assert topo.bsim.clock.synchronized
+        with pytest.raises(RuntimeError, match="cannot modify a topology"):
+            topo.add_controller()
+        with pytest.raises(RuntimeError, match="cannot modify a topology"):
+            topo.set_channel_attenuation(default_db=50.0)
+        with pytest.raises(RuntimeError, match="cannot modify a topology"):
+            topo.add_burst_interference(2402.0)
     finally:
         await topo.stop()
     assert loop.radio_selector.clock is None
+
+
+async def test_start_rolls_back_when_second_controller_fails(
+    tmp_path, monkeypatch
+) -> None:
+    topo = BluetoothTopology(make_env(tmp_path), "sim", tmp_path / "log")
+    sim_dir = topo.env.sim_dir(topo.sim_id)
+    topo.add_controller()
+    topo.add_controller()
+    startup_error = RuntimeError("second Controller failed")
+    events = []
+
+    def spawn_phy(name, argv, **options):
+        assert name == "bs_2G4_phy_v1"
+        sim_dir.mkdir(parents=True)
+        (sim_dir / "2G4.phy.lock").touch()
+        events.append("PHY started")
+        return SimpleNamespace(alive=lambda: True)
+
+    class Worker:
+        def __init__(self, name, address, **options):
+            self.name = name
+
+        async def start(self, sim_id, dev_id):
+            events.append(f"{self.name} started")
+            if dev_id == 1:
+                raise startup_error
+
+        async def close(self):
+            events.append(f"{self.name} closed")
+
+    monkeypatch.setattr("bscontroller.RadioController", Worker)
+    monkeypatch.setattr(babblesim, "check_babblesim_ready", lambda env: None)
+    monkeypatch.setattr(topo.bsim, "prepare", lambda: None)
+    monkeypatch.setattr(topo.pm, "spawn", spawn_phy)
+    monkeypatch.setattr(topo.pm, "cleanup", lambda: events.append("PHY stopped"))
+
+    loop = asyncio.get_running_loop()
+    assert isinstance(loop, RadioEventLoop)
+    try:
+        with pytest.raises(RuntimeError) as failure:
+            await topo.start()
+
+        assert failure.value is startup_error
+        assert events == [
+            "PHY started",
+            "hci0 started",
+            "hci1 started",
+            "hci1 closed",
+            "hci0 closed",
+            "PHY stopped",
+        ]
+        assert loop.radio_selector.clock is None
+        assert topo.bsim.clock is None
+        assert not sim_dir.exists()
+        assert (topo.test_log_dir / "babblesim" / "ellisys.bttrp").is_file()
+    finally:
+        await topo.stop()
 
 
 def test_channel_attenuation_keeps_its_own_path_list(tmp_path) -> None:
@@ -160,7 +208,7 @@ async def test_concurrent_starts_share_one_startup(tmp_path, monkeypatch) -> Non
     start = AsyncMock(side_effect=start_backend)
     monkeypatch.setattr(topo.bsim, "start", start)
     monkeypatch.setattr(topo.bsim, "wait_for_hci_sockets", AsyncMock())
-    monkeypatch.setattr(topo.bsim, "wait_for_devices_registered", lambda: None)
+    monkeypatch.setattr(topo.bsim, "wait_for_devices_registered", AsyncMock())
     first = asyncio.create_task(topo.start())
     await entered.wait()
     second = asyncio.create_task(topo.start())
@@ -181,38 +229,35 @@ async def test_concurrent_starts_share_one_startup(tmp_path, monkeypatch) -> Non
         await topo.start()
 
 
-async def test_cancelled_start_waits_for_registration_before_closing_clock(
+async def test_cancelled_start_cleans_up_registration_before_closing_clock(
     tmp_path, monkeypatch
 ) -> None:
     topo = BluetoothTopology(make_env(tmp_path), "sim", tmp_path / "log")
     topo.add_controller()
     registering = asyncio.Event()
-    release = asyncio.Event()
     events = []
     monkeypatch.setattr(topo.bsim, "start", AsyncMock())
     monkeypatch.setattr(topo.bsim, "wait_for_hci_sockets", AsyncMock())
     monkeypatch.setattr(topo.bsim, "finish", lambda **kwargs: events.append("finish"))
 
-    async def run_worker(fn, *args, **kwargs):
-        if fn == topo.bsim.wait_for_devices_registered:
-            registering.set()
-            await release.wait()
-            events.append("registered")
-        else:
-            fn(*args, **kwargs)
+    async def connect(timeout):
+        registering.set()
+        try:
+            await asyncio.Future()
+        finally:
+            events.append("connection cancelled")
 
-    monkeypatch.setattr("bsworld.topology.asyncio.to_thread", run_worker)
+    topo.bsim.clock = SimpleNamespace(connection=SimpleNamespace(connect=connect))
     start = asyncio.create_task(topo.start())
     await registering.wait()
 
-    start.cancel()
-    await asyncio.sleep(0)
-    assert events == []
-    release.set()
-    with pytest.raises(asyncio.CancelledError):
-        await start
-    await topo.stop()
-    assert events == ["registered", "finish"]
+    try:
+        start.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await start
+        assert events == ["connection cancelled", "finish"]
+    finally:
+        await topo.stop()
 
 
 async def test_stop_reports_guest_failure_after_releasing_the_topology(
@@ -235,9 +280,27 @@ async def test_stop_reports_guest_failure_after_releasing_the_topology(
     assert events == ["guest", "unbind", "finish"]
 
 
-@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_stop_releases_other_controllers_and_phy_after_worker_failure(
+    tmp_path, monkeypatch
+):
+    topo = BluetoothTopology(make_env(tmp_path), "sim", tmp_path / "log")
+    first = topo.add_controller()
+    second = topo.add_controller()
+    stop_second = AsyncMock()
+    stopped = []
+
+    fail_stop = AsyncMock(side_effect=RuntimeError("worker failed"))
+    monkeypatch.setattr(first, "stop", fail_stop)
+    monkeypatch.setattr(second, "stop", stop_second)
+    monkeypatch.setattr(topo.pm, "cleanup", lambda: stopped.append("PHY"))
+    with pytest.raises(RuntimeError, match="worker failed"):
+        await topo.stop()
+    stop_second.assert_awaited_once()
+    assert stopped == ["PHY"]
+
+
 async def test_stop_finalizes_backend_even_if_process_cleanup_fails(
-    tmp_path, monkeypatch, cleanup_fails
+    tmp_path, monkeypatch
 ) -> None:
     events: list[str] = []
     topo = BluetoothTopology(make_env(tmp_path), "sim0", tmp_path / "log")
@@ -245,24 +308,15 @@ async def test_stop_finalizes_backend_even_if_process_cleanup_fails(
     class FakeProcessManager:
         def cleanup(self) -> None:
             events.append("cleanup")
-            if cleanup_fails:
-                raise RuntimeError("cleanup failed")
+            raise RuntimeError("cleanup failed")
 
         def restore_signal_handlers(self) -> None:
             events.append("restore")
 
-    async def fake_to_thread(fn, *args, **kwargs):
-        events.append("to_thread")
-        return fn(*args, **kwargs)
-
     topo.pm = FakeProcessManager()
-    monkeypatch.setattr("bsworld.topology.asyncio.to_thread", fake_to_thread)
     monkeypatch.setattr(topo.bsim, "finish", lambda: events.append("finish"))
 
-    if cleanup_fails:
-        with pytest.raises(RuntimeError, match="cleanup failed"):
-            await topo.stop()
-    else:
+    with pytest.raises(RuntimeError, match="cleanup failed"):
         await topo.stop()
 
-    assert events == ["to_thread", "cleanup", "restore", "finish"]
+    assert events == ["cleanup", "restore", "finish"]

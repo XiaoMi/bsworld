@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -29,91 +30,69 @@ from bsworld.runtime.wait import (
 )
 
 
-def test_wait_for_returns_when_predicate_true_immediately() -> None:
-    wait_for(lambda: True, timeout=1.0)
-
-
 def test_wait_for_polls_until_predicate_true(monkeypatch) -> None:
     sleeps: list[float] = []
-    monkeypatch.setattr(wait_mod.time, "sleep", lambda s: sleeps.append(s))
-    state = {"n": 0}
+    monkeypatch.setattr(
+        wait_mod, "time", SimpleNamespace(monotonic=lambda: 0, sleep=sleeps.append)
+    )
+    ready = iter([False, False, True])
 
-    def pred() -> bool:
-        state["n"] += 1
-        return state["n"] >= 3
+    wait_for(lambda: next(ready), timeout=1.0, poll=0.01)
 
-    wait_for(pred, timeout=1.0, poll=0.01)
-
-    assert state["n"] == 3
-    assert sleeps  # slept at least once while waiting
+    assert sleeps == [0.01, 0.01]
 
 
-def test_wait_for_raises_timeout(monkeypatch) -> None:
-    times = iter([0.0, 0.0, 100.0])
-    monkeypatch.setattr(wait_mod.time, "monotonic", lambda: next(times))
-    monkeypatch.setattr(wait_mod.time, "sleep", lambda s: None)
+def test_wait_for_limits_polling_to_the_remaining_deadline(monkeypatch) -> None:
+    sleeps: list[float] = []
+    times = iter([0.0, 0.75, 1.0])
+    monkeypatch.setattr(
+        wait_mod,
+        "time",
+        SimpleNamespace(monotonic=lambda: next(times), sleep=sleeps.append),
+    )
 
     with pytest.raises(TimeoutError, match="waiting for my-thing"):
-        wait_for(lambda: False, timeout=1.0, desc="my-thing")
+        wait_for(lambda: False, timeout=1.0, poll=0.5, desc="my-thing")
+
+    assert sleeps == [0.25]
 
 
-def test_wait_for_path_detects_existing_file(tmp_path) -> None:
-    f = tmp_path / "ready"
-    f.write_text("x")
-    wait_for_path(f, timeout=1.0)
+def test_sync_path_wait_accepts_symlinks_and_requires_all_paths(tmp_path) -> None:
+    link = tmp_path / "ready.lock"
+    link.symlink_to(tmp_path / "not-yet-created")
+    wait_for_path(link, timeout=0)
+
+    missing = tmp_path / "missing.sock"
+    with pytest.raises(TimeoutError, match=r"missing\.sock"):
+        wait_for_paths([link, missing], timeout=0)
+
+    missing.touch()
+    wait_for_paths([link, missing], timeout=0)
 
 
-def test_wait_for_path_times_out_for_missing_file(tmp_path, monkeypatch) -> None:
-    times = iter([0.0, 0.0, 100.0])
-    monkeypatch.setattr(wait_mod.time, "monotonic", lambda: next(times))
-    monkeypatch.setattr(wait_mod.time, "sleep", lambda s: None)
-
-    with pytest.raises(TimeoutError):
-        wait_for_path(tmp_path / "never", timeout=1.0)
-
-
-def test_wait_for_paths_detects_all_present(tmp_path) -> None:
-    a = tmp_path / "a"
-    b = tmp_path / "b"
-    a.write_text("")
-    b.write_text("")
-    wait_for_paths([a, b], timeout=1.0)
-
-
-async def test_async_path_wait_allows_other_tasks_to_create_paths(
-    tmp_path, monkeypatch
-):
+async def test_async_path_wait_allows_other_tasks_to_create_all_paths(tmp_path):
     paths = [tmp_path / "first", tmp_path / "second"]
-
-    def unexpected_executor(*args, **kwargs):
-        raise AssertionError("path readiness must not use an executor thread")
-
-    async def create_paths():
-        for path in paths:
-            await asyncio.sleep(0)
-            path.touch()
-
-    monkeypatch.setattr(
-        asyncio.get_running_loop(), "run_in_executor", unexpected_executor
-    )
-    producer = asyncio.create_task(create_paths())
+    waiter = asyncio.create_task(wait_for_paths_async(paths, timeout=1, poll=0.001))
     try:
-        await wait_for_paths_async(paths, timeout=1, poll=0.001)
-        await producer
+        paths[0].touch()
+        await asyncio.sleep(0)
+        assert not waiter.done()
+        paths[1].touch()
+        await waiter
     finally:
-        producer.cancel()
-        await asyncio.gather(producer, return_exceptions=True)
-    assert all(path.exists() for path in paths)
+        waiter.cancel()
+        await asyncio.gather(waiter, return_exceptions=True)
 
 
 async def test_async_path_wait_times_out_with_missing_path(tmp_path):
     missing = tmp_path / "missing.sock"
-    with pytest.raises(TimeoutError, match="missing.sock"):
-        await wait_for_paths_async([missing], timeout=0.001)
+    with pytest.raises(TimeoutError, match=r"missing\.sock"):
+        await wait_for_paths_async([missing], timeout=0)
 
 
 async def test_async_path_wait_can_be_cancelled(tmp_path):
-    task = asyncio.create_task(wait_for_paths_async([tmp_path / "missing.sock"]))
+    missing = tmp_path / "missing.sock"
+    task = asyncio.create_task(wait_for_paths_async([missing], timeout=1))
     await asyncio.sleep(0)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):

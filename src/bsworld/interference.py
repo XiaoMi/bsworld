@@ -266,7 +266,7 @@ class PlaybackInterference:
     """Replay recorded interference from BabbleSim CSV dumps.
 
     Maps to bs_device_2G4_playbackv2.
-    input_file: path prefix (without extension); expects .Tx.csv / .Rx.csv /
+    input_file: path prefix (without extension); expects .Txv2.csv / .Rxv2.csv /
     .RSSI.csv / .CCA.csv alongside.
     """
 

@@ -3,21 +3,24 @@
 
 """Protocol contracts of the UML time-travel calendar, without a kernel.
 
-A socket client plays the guest and sends its messages ahead of time, since
-the calendar answers each in order. A fake loop records the calendar's timers
-and readers, so each test fires them at the simulated time it chooses.
+A socket client plays the guest. Most tests use a fake loop to inspect the
+calendar's timers and select when to fire them.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
+import select
 import socket
 import threading
 from collections.abc import Callable
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from tests.unit.helpers import bind_test_clock
 
 from bsworld.runtime.pipe import LogCapture
 from bsworld.uml import timetravel
@@ -108,8 +111,13 @@ class _Guest:
 
 
 @pytest.fixture
-def calendar(tmp_path):
-    calendar = TimeTravelCalendar(tmp_path / "guest.tt")
+def failures():
+    return []
+
+
+@pytest.fixture
+def calendar(tmp_path, failures):
+    calendar = TimeTravelCalendar(tmp_path / "guest.tt", on_failure=failures.append)
     calendar.listen()
     yield calendar
     calendar.close()
@@ -224,6 +232,51 @@ def test_request_within_the_current_microsecond_runs_without_a_timer(
     assert [timer.when for timer in loop.pending()] == [_us(5_000)]
 
 
+async def test_two_calendars_run_serially_at_the_same_simulated_time(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(timetravel, "_TIMEOUT", 1)
+    loop = asyncio.get_running_loop()
+    guests = {}
+
+    with bind_test_clock(lambda: None), ExitStack() as resources:
+        clock = loop.radio_selector.clock
+        for label, target_ns in (("first", 2_000_400), ("second", 2_000_900)):
+            calendar = TimeTravelCalendar(tmp_path / f"{label}.tt")
+            calendar.listen()
+            resources.callback(calendar.close)
+            guest = _Guest(calendar.path)
+            resources.callback(guest.close)
+            guest.sock.settimeout(1)
+            console = LogCapture.open(tmp_path / f"{label}.log")
+            resources.callback(console.stop)
+            request = guest.send(_Op.REQUEST, target_ns)
+            wait = guest.send(_Op.WAIT, _WAIT_FOREVER)
+            _connect(calendar, loop, console, clock)
+            assert guest.acks(2) == [request, wait]
+            guests[guest.sock] = (guest, target_ns)
+
+        def exchange_turns() -> None:
+            ready, _, _ = select.select(list(guests), [], [], 1)
+            (first_sock,) = ready
+            (second_sock,) = (sock for sock in guests if sock is not first_sock)
+
+            for sock in (first_sock, second_sock):
+                guest, target_ns = guests[sock]
+                assert guest.receive() == (_Op.FREE_UNTIL, 1, 2_001_000)
+                assert guest.receive() == (_Op.RUN, 2, target_ns)
+                get = guest.send(_Op.GET)
+                assert guest.receive() == (_Op.ACK, get, target_ns)
+                assert clock.now_us == 2_000
+                if sock is first_sock:
+                    # Keep the first guest running long enough to detect another grant.
+                    assert not select.select([second_sock], [], [], 0.05)[0]
+                wait = guest.send(_Op.WAIT, _WAIT_FOREVER)
+                assert guest.acks(1) == [wait]
+
+        await asyncio.to_thread(exchange_turns)
+
+
 @pytest.mark.parametrize(
     ("requests", "resumed_ns"),
     [((3_000_000, 5_000_000), 5_000_000), ((5_000_000, 3_000_000), 3_000_000)],
@@ -285,7 +338,7 @@ def test_close_disconnects_the_guest(calendar, loop, console, guest) -> None:
 
 
 def test_guest_exit_while_waiting_closes_quietly(
-    calendar, loop, console, guest, capsys
+    calendar, loop, console, guest, failures, capsys
 ) -> None:
     guest.send(_Op.WAIT, _WAIT_FOREVER)
     _connect(calendar, loop, console, SimpleNamespace(now_us=0))
@@ -296,11 +349,14 @@ def test_guest_exit_while_waiting_closes_quietly(
     on_readable()
 
     assert loop.readers == {}
+    (failure,) = failures
+    assert isinstance(failure, EOFError)
+    assert "exited while waiting" in str(failure)
     assert "time-travel calendar" not in capsys.readouterr().err
 
 
 def test_message_from_a_waiting_guest_disconnects_it(
-    calendar, loop, console, guest, capsys
+    calendar, loop, console, guest, failures
 ) -> None:
     guest.send(_Op.WAIT, _WAIT_FOREVER)
     _connect(calendar, loop, console, SimpleNamespace(now_us=0))
@@ -312,7 +368,32 @@ def test_message_from_a_waiting_guest_disconnects_it(
 
     assert loop.readers == {}
     assert guest.disconnected()
-    assert "sent a message while waiting" in capsys.readouterr().err
+    (failure,) = failures
+    assert isinstance(failure, RuntimeError)
+    assert "sent a message while waiting" in str(failure)
+
+
+def test_guest_exit_during_a_turn_reports_failure(
+    calendar, loop, console, guest, failures
+) -> None:
+    clock = SimpleNamespace(now_us=0)
+    request = guest.send(_Op.REQUEST, 2_000_000)
+    wait = guest.send(_Op.WAIT, _WAIT_FOREVER)
+    _connect(calendar, loop, console, clock)
+    assert guest.acks(2) == [request, wait]
+
+    (timer,) = loop.pending()
+    guest.sock.shutdown(socket.SHUT_WR)
+    clock.now_us = 2_000
+    timer.fire()
+
+    assert guest.receive() == (_Op.FREE_UNTIL, 1, 2_001_000)
+    assert guest.receive() == (_Op.RUN, 2, 2_000_000)
+    assert guest.disconnected()
+    assert loop.readers == {}
+    (failure,) = failures
+    assert isinstance(failure, EOFError)
+    assert "closed its time-travel socket" in str(failure)
 
 
 def test_unexpected_operation_fails_the_boot(calendar, loop, console, guest) -> None:

@@ -23,7 +23,7 @@ sudo docker run --rm \
   ghcr.io/xiaomi/bsworld-linux:latest pytest tests/unit -q -p no:cacheprovider
 ```
 
-单元测试验证 `src/bsworld/` 中的框架代码，覆盖拓扑和 Controller 生命周期、RF 配置、仿真时间调度、FIFO 时钟通信、UML Guest 生命周期和 time-travel，以及日志收集。
+单元测试验证 `src/bsworld/` 中的框架代码，覆盖拓扑和 Controller 生命周期、RF 配置、仿真时钟绑定、UML Guest 生命周期和 time-travel，以及日志收集。
 
 ## 代码格式
 
@@ -49,7 +49,7 @@ ruff format .
 
 ## 测试覆盖率
 
-`pyproject.toml` 为 `bsworld` 包配置了分支覆盖率统计，范围包括运行时调度器。在本地环境中运行单元测试并生成报告。
+`pyproject.toml` 为 `bsworld` 包配置了分支覆盖率统计。在本地环境中运行单元测试并生成报告。
 
 ```sh
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \

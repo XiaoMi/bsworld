@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import socket
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -13,7 +14,7 @@ from zlib import crc32
 import pytest
 
 from bsworld.topology import BluetoothTopology
-from bsworld.uml import UmlGuest
+from bsworld.uml import UmlGuest, timetravel
 from bsworld.uml import guest as guest_module
 
 
@@ -154,15 +155,40 @@ async def test_guest_context_preserves_body_failure(model_guest) -> None:
     assert any("Guest did not yield" in note for note in exc_info.value.__notes__)
 
 
-async def test_guest_does_not_repeat_a_failure_reported_by_wait_log(
-    model_guest,
+async def test_guest_reports_a_calendar_socket_failure_once(
+    model_guest, monkeypatch
 ) -> None:
     guest, _, _ = model_guest
+    guest.controller.hci_sock.parent.mkdir(parents=True)
+    monkeypatch.setattr(
+        guest_module, "TimeTravelCalendar", timetravel.TimeTravelCalendar
+    )
+    monkeypatch.setattr(timetravel, "_TIMEOUT", 1)
+    spawn = guest.topo.pm.spawn
 
-    with guest:
-        guest._calendar.on_failure(EOFError("Guest exited"))
-        with pytest.raises(EOFError, match="Guest exited"):
-            await guest.wait_log("ready")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
+        peer.settimeout(1)
+
+        def connect_peer(name, command, *, cwd, **options):
+            prefix = "time-travel=ext:"
+            path = next(
+                value.removeprefix(prefix)
+                for value in map(str, command)
+                if value.startswith(prefix)
+            )
+            peer.connect(str(cwd / path))
+            peer.sendall(timetravel._MESSAGE.pack(timetravel._Op.WAIT, 1, 0))
+            return spawn(name, command, cwd=cwd, **options)
+
+        monkeypatch.setattr(guest.topo.pm, "spawn", connect_peer)
+
+        with guest:
+            result = asyncio.create_task(guest.wait_log("ready", timeout=1))
+            await asyncio.sleep(0)
+            peer.shutdown(socket.SHUT_WR)
+
+            with pytest.raises(EOFError, match="UML guest exited while waiting"):
+                await result
 
 
 async def test_failed_launch_releases_guest_resources(

@@ -4,16 +4,15 @@ The unit suite exercises `src/bsworld` with deterministic fakes for BabbleSim an
 
 | Tests | Coverage |
 |---|---|
-| `test_topology.py` | BSController allocation and configuration, registration, lifecycle ordering, clock binding, capture placement, and RF endpoint resolution. |
+| `test_topology.py` | Participant registration, clock binding, startup rollback, and teardown ordering. |
 | `test_interference.py` | Declarative RF input validation, numeric boundaries, window ordering, and defaults. |
-| `backends/test_babblesim.py` | PHY, Controller worker, and interference startup, registration barriers, and capture finalization. |
+| `backends/test_babblesim.py` | PHY and participant startup, RF input and device ID mapping, registration barriers, and capture finalization. |
 | `devices/test_layout.py` | Immutable device IDs for Controllers, the clock, and interference, plus lock paths and RF endpoint identity. |
 | `devices/test_controller.py`, `devices/test_bscontroller.py` | Controller address validation, worker configuration, transport ownership, and cleanup. |
 | `runtime/test_proc.py` | Spawn failures, process-group termination, reaping, diagnostics, and bookkeeping cleanup. |
 | `runtime/test_pipe.py`, `runtime/test_shell.py`, `runtime/test_wait.py` | Complete-line log matching, command input, path/predicate waiting, cancellation, and timeout diagnostics. |
-| `runtime/scheduler/` | FIFO clock protocol and the rule that ready callbacks and I/O drain before simulation time advances. |
-| `uml/` | Guest lifecycle and Controller ownership, time-travel messages, simulation scheduling, and failure cleanup. |
-| `test_plugin.py`, `test_env.py`, `test_deps.py`, `test_log.py` | Pytest identity/configuration, explicit artifact discovery, setup failures, and log routing. |
+| `uml/` | Guest lifecycle and Controller ownership, serial Guest scheduling, time-travel messages, and failure propagation. |
+| `test_plugin.py`, `test_env.py`, `test_deps.py`, `test_log.py` | Pytest artifact isolation, explicit artifact discovery, setup failures, and log routing. |
 | `test_version.py` | Package version from the installed distribution metadata, with a fallback when the metadata is missing. |
 
 ## Test Design

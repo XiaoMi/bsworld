@@ -39,7 +39,7 @@ await topo.start()
 
 ## 异步等待与仿真时间
 
-测试在 `BsimEventLoop` 上使用标准 asyncio 任务、Future、队列、Event、stream 和 socket。事件循环在准备阶段使用墙钟时间。`await topo.start()` 完成 BabbleSim 参与者注册后，BSWorld 将事件循环绑定到仿真时钟。
+测试使用标准 asyncio 任务、Future、队列、Event、stream 和 socket。事件循环在准备阶段使用墙钟时间。`await topo.start()` 完成 BabbleSim 参与者注册后，将事件循环绑定到 BSController 提供的仿真时钟。
 
 此后，`loop.time()`、`asyncio.sleep()` 和 `asyncio.wait_for()` 使用仿真时间。示例中的 `timeout=30` 表示最多等待 30 秒仿真时间。
 
@@ -189,7 +189,7 @@ topo.add_wlan_interference(
 topo.add_playback_interference("path/to/recording")
 ```
 
-传入的路径是文件名前缀。BabbleSim 要求该前缀对应的 `.Tx.csv`、`.Rx.csv`、`.RSSI.csv` 和 `.CCA.csv` 文件同时存在。
+传入的路径是文件名前缀。BabbleSim 要求该前缀对应的 `.Txv2.csv`、`.Rxv2.csv`、`.RSSI.csv` 和 `.CCA.csv` 文件同时存在。
 
 ### 参数约束
 

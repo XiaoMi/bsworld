@@ -39,7 +39,7 @@ To adjust the Controller's address, buffers, or other limits, see [BSController 
 
 ## Async Waiting and Simulation Time
 
-Tests use standard asyncio tasks, futures, queues, events, streams, and sockets on a `BsimEventLoop`. The loop follows wall-clock time during setup. When `await topo.start()` finishes registering the BabbleSim participants, BSWorld binds the loop to the simulation clock.
+Tests use standard asyncio tasks, futures, queues, events, streams, and sockets. The event loop follows wall-clock time during setup. After registering the BabbleSim participants, `await topo.start()` binds the loop to BSController's simulation clock.
 
 From then on, `loop.time()`, `asyncio.sleep()`, and `asyncio.wait_for()` use simulation time. The example's `timeout=30` allows 30 simulated seconds.
 
@@ -153,7 +153,7 @@ topo.set_channel_attenuation(
 
 Paths are directional. Configure both `tx -> rx` and `rx -> tx` when the two directions require distinct loss values. A `TimedAttenuation` curve pairs each timestamp with one attenuation value and linearly interpolates between adjacent points.
 
-`tx` and `rx` accept registered `BSController` objects, `InterferenceRef` objects from `add_*_interference()`, and raw BabbleSim device IDs.
+`tx` and `rx` accept registered `BSController` objects, `InterferenceRef` objects from `add_*_interference()`, and BabbleSim device IDs in the current topology.
 
 ### Burst Interference
 
@@ -189,7 +189,7 @@ Specify either a channel from 1 to 14 or a center frequency in MHz. Use `config_
 topo.add_playback_interference("path/to/recording")
 ```
 
-The input path is a prefix. BabbleSim expects `.Tx.csv`, `.Rx.csv`, `.RSSI.csv`, and `.CCA.csv` files with that prefix.
+The input path is a prefix. BabbleSim expects `.Txv2.csv`, `.Rxv2.csv`, `.RSSI.csv`, and `.CCA.csv` files with that prefix.
 
 ### Parameter Constraints
 

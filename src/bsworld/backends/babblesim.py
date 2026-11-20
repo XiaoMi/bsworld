@@ -32,6 +32,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from bscontroller import EllisysCapture
+from bscontroller.radio.babblesim import PhyConnection
+from bscontroller.runtime.session import BabbleSimClock
 
 from ..deps import check_babblesim_ready
 from ..devices.bscontroller import BSController
@@ -48,9 +50,8 @@ from ..interference import (
     WlanInterference,
 )
 from ..log import log, warn
-from ..runtime.proc import ProcessManager
-from ..runtime.scheduler import BsimClock
-from ..runtime.wait import wait_for_path, wait_for_paths, wait_for_paths_async
+from ..runtime.proc import Proc, ProcessManager
+from ..runtime.wait import wait_for_path, wait_for_paths_async
 
 if TYPE_CHECKING:
     from bscontroller import ControllerConfig
@@ -77,8 +78,9 @@ class BabbleSimBackend:
     _ellisys_capture: EllisysCapture | None = field(
         default=None, init=False, repr=False
     )
+    _phy_process: Proc | None = field(default=None, init=False, repr=False)
     _started: bool = False
-    clock: BsimClock | None = None
+    clock: BabbleSimClock | None = None
 
     def _ensure_layout_mutable(self) -> None:
         """Reject registrations once PHY identities have been published.
@@ -195,12 +197,12 @@ class BabbleSimBackend:
             if ca.extra_attenuation_db:
                 phy_argv.append(f"-atextra={ca.extra_attenuation_db}")
             if matrix_file is not None:
-                phy_argv.append(f"-file={matrix_file}")
+                phy_argv.append(f"-file={Path(matrix_file).resolve()}")
             # Switch back to main PHY args before disabling CSV dumps.
             phy_argv.append("-argsmain")
         phy_argv.append("-nodump")
         self.prepare()
-        phy_process = pm.spawn(
+        self._phy_process = pm.spawn(
             "bs_2G4_phy_v1",
             phy_argv,
             cwd=self.env.bsim_bin_dir,
@@ -210,11 +212,8 @@ class BabbleSimBackend:
         wait_for_path(sim_dir / "2G4.phy.lock", timeout=ready_timeout)
         log("phy ready")
 
-        self.clock = BsimClock(
-            sim_dir=sim_dir,
-            phy_id=_PHY_ID,
-            dev_id=layout.clock_dev_id,
-            phy_alive=phy_process.alive,
+        self.clock = BabbleSimClock(
+            PhyConnection(sim_dir, layout.clock_dev_id, _PHY_ID)
         )
 
         capture = self._ellisys_capture = EllisysCapture(bsim_log_dir / "ellisys.bttrp")
@@ -246,12 +245,24 @@ class BabbleSimBackend:
     def device_lock_paths(self) -> list[Path]:
         return self.plan_devices().lock_paths(self.env.sim_dir(self.sim_id))
 
-    def wait_for_devices_registered(self, *, timeout: float = 30.0) -> None:
+    async def wait_for_devices_registered(self, *, timeout: float = 30.0) -> None:
         locks = self.device_lock_paths()
         log(f"waiting for {len(locks)} BabbleSim device lock(s)")
         if self.clock is not None:
-            self.clock.connect(timeout=timeout)
-        wait_for_paths(locks, timeout=timeout)
+            connecting = asyncio.create_task(self.clock.connection.connect(timeout))
+            phy = self._phy_process
+            try:
+                while not connecting.done():
+                    if phy is not None and not phy.alive():
+                        raise RuntimeError(
+                            "BabbleSim PHY exited before clock connection"
+                        )
+                    await asyncio.wait((connecting,), timeout=0.01)
+                await connecting
+            finally:
+                connecting.cancel()
+                await asyncio.gather(connecting, return_exceptions=True)
+        await wait_for_paths_async(locks, timeout=timeout)
         log("all devices registered to phy")
 
     async def wait_for_hci_sockets(self, *, timeout: float = 30.0) -> None:
@@ -264,9 +275,10 @@ class BabbleSimBackend:
 
     def finish(self) -> None:
         """Release the clock and finish the trace after the Controllers stop."""
+        self._phy_process = None
         if self.clock is not None:
             try:
-                self.clock.close()
+                self.clock.connection.close()
             except Exception as exc:
                 warn(f"simulation clock close failed: {exc}")
             finally:
@@ -369,7 +381,7 @@ def _build_interf_argv(
 
     if isinstance(src, PlaybackInterference):
         argv = [bin_dir / "bs_device_2G4_playbackv2"] + common
-        argv.append(f"-inputf={src.input_file}")
+        argv.append(f"-inputf={Path(src.input_file).resolve()}")
         if not src.tx:
             argv.append("-txoff")
         if not src.rx:

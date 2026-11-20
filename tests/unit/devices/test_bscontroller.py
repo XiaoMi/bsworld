@@ -16,15 +16,10 @@
 
 from __future__ import annotations
 
-import asyncio
-from types import SimpleNamespace
-
 import pytest
 from bscontroller import EllisysCapture
-from tests.unit.helpers import make_env
 
 from bsworld.devices import BSController
-from bsworld.topology import BluetoothTopology
 
 
 def _controller(tmp_path, **options):
@@ -44,19 +39,14 @@ class Worker:
         self.options = options
         # A distinct worker default detects defaults duplicated by the adapter.
         self.max_step_us = options.get("max_step_us", 1750)
-        self.started = asyncio.Event()
-        self.terminated = asyncio.get_running_loop().create_future()
         self.closed = False
         self.instances.append(self)
 
     async def start(self, sim_id, dev_id):
         self.identity = (sim_id, dev_id)
-        self.started.set()
 
     async def close(self):
         self.closed = True
-        if not self.terminated.done():
-            self.terminated.set_result(None)
         if self.failure is not None:
             raise self.failure
 
@@ -87,7 +77,6 @@ async def test_controller_delegates_h4_and_capture_to_worker(tmp_path, worker):
     )
     await ctl.start(ellisys_capture=ellisys_capture)
     instance = worker.instances[0]
-    await instance.started.wait()
     assert instance.identity == ("sim", 0)
     assert instance.address == "C0:FF:EE:00:00:01"
     assert instance.max_step_us == 250
@@ -98,21 +87,7 @@ async def test_controller_delegates_h4_and_capture_to_worker(tmp_path, worker):
     assert ctl.hci_snoop_file == tmp_path / "bscontroller" / "hci0.snoop"
     await ctl.stop()
     assert instance.closed
-    assert not ctl.hci_sock.exists()
     await ctl.stop()
-
-
-async def test_controller_uses_worker_defaults(tmp_path, worker):
-    ctl = _controller(tmp_path)
-    await ctl.start()
-    await ctl.stop()
-    assert worker.instances[0].options == {
-        "hci_snoop_file": ctl.hci_snoop_file,
-        "hci_socket": ctl.hci_sock,
-    }
-    assert worker.instances[0].max_step_us == 1750
-    assert worker.instances[0].closed
-    assert not ctl.hci_sock.exists()
 
 
 async def test_controller_propagates_worker_failure_during_cleanup(
@@ -121,15 +96,15 @@ async def test_controller_propagates_worker_failure_during_cleanup(
     monkeypatch.setattr(worker, "failure", RuntimeError("worker failed"))
     ctl = _controller(tmp_path)
     await ctl.start()
-    await worker.instances[0].started.wait()
     with pytest.raises(RuntimeError, match="worker failed"):
         await ctl.stop()
     assert worker.instances[0].closed
-    assert not ctl.hci_sock.exists()
     await ctl.stop()
 
 
-async def test_controller_passes_application_capture_path(tmp_path, worker):
+async def test_controller_passes_capture_path_and_preserves_worker_defaults(
+    tmp_path, worker
+):
     path = tmp_path / "application" / "hci0.snoop"
     ctl = _controller(tmp_path, hci_snoop_file=path)
     try:
@@ -138,6 +113,7 @@ async def test_controller_passes_application_capture_path(tmp_path, worker):
             "hci_snoop_file": path,
             "hci_socket": ctl.hci_sock,
         }
+        assert worker.instances[0].max_step_us == 1750
     finally:
         await ctl.stop()
 
@@ -170,30 +146,6 @@ async def test_controllers_have_distinct_default_addresses(tmp_path, worker):
     finally:
         await first.stop()
         await second.stop()
-
-
-async def test_stop_releases_other_controllers_and_phy_after_worker_failure(
-    tmp_path, monkeypatch
-):
-    topo = BluetoothTopology(make_env(tmp_path), "sim", tmp_path / "log")
-    first = topo.add_controller()
-    second = topo.add_controller()
-    events = []
-
-    async def fail_stop():
-        events.append("first")
-        raise RuntimeError("worker failed")
-
-    async def stop_second():
-        events.append("second")
-
-    monkeypatch.setattr(first, "stop", fail_stop)
-    monkeypatch.setattr(second, "stop", stop_second)
-    monkeypatch.setattr(topo.pm, "cleanup", lambda: events.append("processes"))
-    topo.bsim._ellisys_capture = SimpleNamespace(close=lambda: events.append("capture"))
-    with pytest.raises(RuntimeError, match="worker failed"):
-        await topo.stop()
-    assert events == ["first", "second", "processes", "capture"]
 
 
 async def test_controller_passes_its_config_to_the_worker(tmp_path, worker):

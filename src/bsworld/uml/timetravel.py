@@ -19,8 +19,9 @@ from typing import TYPE_CHECKING
 from bsworld.log import warn
 
 if TYPE_CHECKING:
+    from bscontroller.runtime.event_loop import RadioClock
+
     from bsworld.runtime.pipe import LogCapture
-    from bsworld.runtime.scheduler import BsimClock
 
 # op, seq, time in nanoseconds, in the host's byte order.
 _MESSAGE = struct.Struct("=IIQ")
@@ -70,7 +71,7 @@ class TimeTravelCalendar:
         self._server: socket.socket | None = None
         self._conn: socket.socket | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._clock: BsimClock | None = None
+        self._clock: RadioClock | None = None
         self._console: LogCapture | None = None
         # Last time granted by the calendar, in nanoseconds.
         self._guest_ns = 0
@@ -93,7 +94,7 @@ class TimeTravelCalendar:
     def connect(
         self,
         loop: asyncio.AbstractEventLoop,
-        clock: "BsimClock",
+        clock: "RadioClock",
         *,
         alive: Callable[[], bool],
         console: "LogCapture",

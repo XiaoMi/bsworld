@@ -15,9 +15,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+
+from bscontroller.runtime.event_loop import RadioEventLoop
 
 from bsworld.env import Env
 
@@ -47,3 +52,26 @@ class SpawnRecorder:
             stdin=self.stdin if kwargs.get("stdin") is not None else None
         )
         return SimpleNamespace(pid=1234, popen=popen, alive=lambda: True)
+
+
+@contextmanager
+def bind_test_clock(on_advance: Callable[[], None]) -> Iterator[list[int]]:
+    """Run a test's I/O callback when the pytest loop advances time."""
+    targets: list[int] = []
+
+    class Clock:
+        now_us = 0
+
+        def advance_to_us(self, target_us: int) -> int:
+            targets.append(target_us)
+            on_advance()
+            self.now_us = target_us
+            return target_us
+
+    loop = asyncio.get_running_loop()
+    assert isinstance(loop, RadioEventLoop)
+    loop.bind_clock(Clock())
+    try:
+        yield targets
+    finally:
+        loop.unbind_clock()

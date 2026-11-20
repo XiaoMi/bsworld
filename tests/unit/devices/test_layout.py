@@ -22,18 +22,20 @@ from bsworld.backends.babblesim import BabbleSimBackend
 from bsworld.interference import BurstInterference
 
 
-def test_layout_assigns_controllers_clock_and_interference(tmp_path) -> None:
+def test_layout_assigns_and_resolves_participant_ids(tmp_path) -> None:
     backend = BabbleSimBackend(make_env(tmp_path), "sim")
     first = backend.add_controller()
     second = backend.add_controller()
     jammer = backend.add_interference_source(BurstInterference(2402.0))
     layout = backend.plan_devices()
 
-    assert layout.controller_dev_id(first) == 0
-    assert layout.controller_dev_id(second) == 1
+    assert layout.resolve_endpoint(first) == 0
+    assert layout.resolve_endpoint(second) == 1
     assert layout.clock_dev_id == 2
-    assert layout.interference_dev_id(jammer) == 3
+    assert layout.resolve_endpoint(jammer) == 3
     assert layout.device_count == 4
+    assert layout.resolve_endpoint(0) == 0
+    assert layout.resolve_endpoint(3) == 3
     assert layout.lock_paths(tmp_path) == [
         tmp_path / f"2G4.d{index}.lock" for index in range(4)
     ]
@@ -42,24 +44,16 @@ def test_layout_assigns_controllers_clock_and_interference(tmp_path) -> None:
         layout.controllers = ()
 
 
-def test_layout_resolves_declared_rf_endpoints_by_identity(tmp_path) -> None:
+@pytest.mark.parametrize(
+    "endpoint, error",
+    [(-1, ValueError), (2, ValueError), (True, TypeError), (object(), TypeError)],
+)
+def test_layout_rejects_invalid_raw_endpoint(tmp_path, endpoint, error) -> None:
     backend = BabbleSimBackend(make_env(tmp_path), "sim")
-    first = backend.add_controller()
-    second = backend.add_controller()
-    jammer = backend.add_interference_source(BurstInterference(2402.0))
+    backend.add_controller()
     layout = backend.plan_devices()
 
-    assert layout.resolve_endpoint(7) == 7
-    assert layout.resolve_endpoint(first) == 0
-    assert layout.resolve_endpoint(second) == 1
-    assert layout.resolve_endpoint(jammer) == 3
-
-
-@pytest.mark.parametrize("endpoint", [-1, True, object()])
-def test_layout_rejects_invalid_raw_endpoint(tmp_path, endpoint: object) -> None:
-    layout = BabbleSimBackend(make_env(tmp_path), "sim").plan_devices()
-
-    with pytest.raises((TypeError, ValueError), match="attenuation endpoint"):
+    with pytest.raises(error, match="attenuation endpoint"):
         layout.resolve_endpoint(endpoint)
 
 

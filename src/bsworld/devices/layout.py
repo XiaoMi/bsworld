@@ -85,8 +85,11 @@ class DeviceLayout:
         if isinstance(endpoint, bool):
             raise TypeError(f"unsupported attenuation endpoint: {endpoint!r}")
         if isinstance(endpoint, int):
-            if endpoint < 0:
-                raise ValueError("attenuation endpoint device id must be non-negative")
+            if not 0 <= endpoint < self.device_count:
+                raise ValueError(
+                    f"attenuation endpoint device id {endpoint} is outside "
+                    f"0..{self.device_count - 1}"
+                )
             return endpoint
         if isinstance(endpoint, InterferenceRef):
             return self.interference_dev_id(endpoint)
