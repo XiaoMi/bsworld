@@ -23,17 +23,19 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-
-from bsworld.runtime.scheduler import PYTEST_MAX_STEP_US, BsimEventLoop
+from bscontroller.runtime.event_loop import RadioEventLoop
 
 from .env import Env, resolve_run_identity
 from .topology import BluetoothTopology
+
+# The idle pytest loop can skip up to 10 ms of simulation time per PHY request.
+_PYTEST_MAX_STEP_US = 10_000
 
 
 def pytest_asyncio_loop_factories(config, item):  # noqa: ANN001, ARG001
     """Run every async test on a loop that can switch to BabbleSim time."""
 
-    return {"bsim": partial(BsimEventLoop, PYTEST_MAX_STEP_US)}
+    return {"bsim": partial(RadioEventLoop, _PYTEST_MAX_STEP_US)}
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -112,10 +114,12 @@ async def topo(
     bsworld_env: Env,
     request: pytest.FixtureRequest,
 ):
+    nodeid = request.node.nodeid
+    case_hash = hashlib.md5(nodeid.encode()).hexdigest()[:8]
     t = BluetoothTopology(
         bsworld_env,
-        sim_id=_sim_id_for_node(request.node.nodeid, bsworld_env.run_uid),
-        test_log_dir=_test_log_dir_for_node(request.node.nodeid, bsworld_env.log_dir),
+        sim_id=f"bsw_{bsworld_env.run_uid}_{case_hash}",
+        test_log_dir=_test_log_dir_for_node(nodeid, bsworld_env.log_dir, case_hash),
     )
     try:
         yield t
@@ -123,15 +127,13 @@ async def topo(
         await t.stop()
 
 
-def _sim_id_for_node(nodeid: str, run_uid: str) -> str:
-    case_hash = hashlib.md5(nodeid.encode()).hexdigest()[:8]
-    return f"bsw_{run_uid}_{case_hash}"
-
-
-def _test_log_dir_for_node(nodeid: str, log_dir: Path) -> Path:
+def _test_log_dir_for_node(nodeid: str, log_dir: Path, case_hash: str) -> Path:
     # nodeid: tests/integration/uml/nuttx/test_foo.py::test_bar
     # -> log_dir / tests/integration/uml/nuttx/test_foo/test_bar
     file_part, _, func_part = nodeid.partition("::")
     parts = Path(file_part).with_suffix("").parts
-    func_safe = re.sub(r"[^A-Za-z0-9_]+", "_", func_part).strip("_") or "test"
+    func_safe = re.sub(r"[^A-Za-z0-9_]+", "_", func_part)
+    if not func_safe or func_safe != func_part:
+        # Distinct node IDs can have the same sanitized label.
+        func_safe = f"{func_safe.strip('_') or 'test'}-{case_hash}"
     return log_dir.joinpath(*parts, func_safe)

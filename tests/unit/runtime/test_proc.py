@@ -67,42 +67,37 @@ def test_spawn_launches_process_and_writes_log(tmp_path) -> None:
         pm.cleanup()
 
 
-def test_cleanup_reports_only_running_processes(tmp_path, monkeypatch) -> None:
+def test_cleanup_reaps_and_reports_running_processes(tmp_path, monkeypatch) -> None:
     logs: list[str] = []
     monkeypatch.setattr(proc_mod, "log", lambda msg, *, tag="bsworld": logs.append(msg))
     pm = ProcessManager()
-    short = pm.spawn(
-        "short", ["/bin/sh", "-c", "true"], cwd=tmp_path, log_dir=tmp_path / "log"
-    )
-    long = pm.spawn(
-        "long", ["/bin/sh", "-c", "sleep 30"], cwd=tmp_path, log_dir=tmp_path / "log"
-    )
-    short.popen.wait(timeout=5)
-    assert long.alive() and not short.alive()
+    sleeper = None
+    try:
+        short = pm.spawn("short", ["/bin/true"], cwd=tmp_path, log_dir=tmp_path)
+        short.popen.wait(timeout=5)
+        sleeper = pm.spawn("long", ["/bin/sleep", "30"], cwd=tmp_path, log_dir=tmp_path)
+        assert sleeper.alive()
 
-    pm.cleanup()
+        pm.cleanup()
+        pm.cleanup()
 
-    # Only the still-running process is counted and killed.
-    assert "stopping 1 background process(es)" in logs
-    assert any("kill long" in msg for msg in logs)
-    assert not any("kill short" in msg for msg in logs)
-
-
-def test_cleanup_kills_running_processes(tmp_path) -> None:
-    pm = ProcessManager()
-    p = pm.spawn(
-        "sleeper", ["/bin/sh", "-c", "sleep 30"], cwd=tmp_path, log_dir=tmp_path / "log"
-    )
-    assert p.alive()
-
-    pm.cleanup()
-
-    assert not p.alive()
-    assert pm.procs == []
+        assert short.popen.returncode == 0
+        assert sleeper.popen.returncode == -signal.SIGKILL
+        assert short.log_fh.closed and sleeper.log_fh.closed
+        assert pm.procs == []
+        assert logs.count("stopping 1 background process(es)") == 1
+        assert any("kill long" in message for message in logs)
+        assert not any("kill short" in message for message in logs)
+    finally:
+        if sleeper is not None and sleeper.alive():
+            sleeper.popen.kill()
+            sleeper.popen.wait(timeout=5)
+        pm.cleanup()
 
 
-def test_cleanup_dumps_tail_for_unexpectedly_exited_process(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("has_log", [True, False], ids=["with-log", "missing-log"])
+def test_cleanup_reports_unexpected_exit_and_available_log_tail(
+    tmp_path, monkeypatch, has_log
 ) -> None:
     logs: list[tuple[str, str]] = []
     warns: list[str] = []
@@ -118,25 +113,15 @@ def test_cleanup_dumps_tail_for_unexpectedly_exited_process(
         cwd=tmp_path,
         log_dir=tmp_path / "log",
     )
-    p.popen.wait(timeout=5)
+    try:
+        p.popen.wait(timeout=5)
+        if not has_log:
+            p.log_path.unlink()
+    finally:
+        pm.cleanup()
 
-    pm.cleanup()
-
-    assert any("exited unexpectedly (rc=3)" in w for w in warns)
-    assert any("boom" in msg for _tag, msg in logs)
-
-
-def test_dump_tail_handles_missing_log_file(tmp_path, monkeypatch) -> None:
-    calls: list[str] = []
-    monkeypatch.setattr(
-        proc_mod, "log", lambda msg, *, tag="bsworld": calls.append(msg)
-    )
-    pm = ProcessManager()
-    fake = Proc(name="x", popen=None, log_path=tmp_path / "absent.log", log_fh=None)
-
-    pm._dump_tail(fake, lines=5)
-
-    assert calls == []
+    assert warns == ["crasher: exited unexpectedly (rc=3)"]
+    assert (("crasher", "boom") in logs) is has_log
 
 
 def test_kill_session_falls_back_to_os_kill_on_permission_error(monkeypatch) -> None:
@@ -193,17 +178,13 @@ def test_install_signal_handlers_is_idempotent(monkeypatch) -> None:
     assert current == previous
 
 
-def test_cleanup_is_noop_without_processes() -> None:
-    pm = ProcessManager()
-    pm.cleanup()  # should not raise
-    assert pm.procs == []
-
-
 def test_stop_releases_only_the_selected_process(tmp_path):
     pm = ProcessManager()
-    first = pm.spawn("first", ["/bin/sleep", "30"], cwd=tmp_path, log_dir=tmp_path)
-    second = pm.spawn("second", ["/bin/sleep", "30"], cwd=tmp_path, log_dir=tmp_path)
     try:
+        first = pm.spawn("first", ["/bin/sleep", "30"], cwd=tmp_path, log_dir=tmp_path)
+        second = pm.spawn(
+            "second", ["/bin/sleep", "30"], cwd=tmp_path, log_dir=tmp_path
+        )
         pm.stop(first)
         pm.stop(first)
         assert not first.alive()

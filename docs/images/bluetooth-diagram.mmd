@@ -1,8 +1,8 @@
 sequenceDiagram
     autonumber
     participant TEST as pytest / asyncio
-    participant SEL as BsimSelector
-    participant CLK as BsimClock<br/>(in pytest)
+    participant SEL as RadioSelector
+    participant CLK as PHY clock<br/>(in pytest)
     participant PHY as BabbleSim PHY
     participant DEV as Simulated Devices
 

@@ -21,12 +21,12 @@ before opening H4 connections or booting UML guests.
 from __future__ import annotations
 
 import asyncio
-from contextlib import AsyncExitStack, suppress
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from bsworld.runtime.scheduler import BsimEventLoop
+from bscontroller.runtime.event_loop import RadioEventLoop
 
 from .backends.babblesim import BabbleSimBackend
 from .devices.bscontroller import BSController
@@ -48,8 +48,8 @@ from .runtime.proc import ProcessManager
 
 if TYPE_CHECKING:
     from bscontroller import ControllerConfig
+    from bscontroller.runtime.session import BabbleSimClock
 
-    from .runtime.scheduler import BsimClock
     from .uml import UmlGuest
 
 
@@ -60,7 +60,7 @@ class BluetoothTopology:
     test_log_dir: Path
     pm: ProcessManager = field(default_factory=ProcessManager)
     bsim: BabbleSimBackend = field(init=False)
-    _event_loop: BsimEventLoop | None = field(default=None, init=False, repr=False)
+    _event_loop: RadioEventLoop | None = field(default=None, init=False, repr=False)
     _uml_guests: list[UmlGuest] = field(default_factory=list, init=False, repr=False)
     _lifecycle_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
@@ -105,7 +105,7 @@ class BluetoothTopology:
             max_step_us=max_step_us,
         )
 
-    def _claim_uml_guest(self, guest: UmlGuest) -> BsimClock:
+    def _claim_uml_guest(self, guest: UmlGuest) -> BabbleSimClock:
         clock = self.bsim.clock
         if (
             clock is None
@@ -207,8 +207,7 @@ class BluetoothTopology:
     def add_playback_interference(self, input_file: "Path | str") -> InterferenceRef:
         """Replay recorded interference from BabbleSim CSV dumps.
 
-        input_file: path prefix without extension (.Tx/.Rx/.RSSI/.CCA.csv expected
-        alongside).
+        The prefix identifies the .Txv2.csv, .Rxv2.csv, .RSSI.csv and .CCA.csv files.
         """
         return self._add_interference_source(
             PlaybackInterference(input_file=Path(input_file))
@@ -232,15 +231,15 @@ class BluetoothTopology:
                 self.pm.install_signal_handlers()
                 await self.bsim.start(self.pm, log_dir=self.test_log_dir)
                 await self.bsim.wait_for_hci_sockets()
-                await self._wait_for_registration()
+                await self.bsim.wait_for_devices_registered()
                 if self.bsim.clock is not None:
                     loop = asyncio.get_running_loop()
-                    if not isinstance(loop, BsimEventLoop):
+                    if not isinstance(loop, RadioEventLoop):
                         raise RuntimeError(
                             "the active asyncio event loop is not BSIM-aware"
                         )
                     # Registration alone does not mean every device has yielded to PHY.
-                    self.bsim.clock.synchronize()
+                    self.bsim.clock.advance_to_us(0)
                     self._event_loop = loop
                     self._event_loop.bind_clock(self.bsim.clock)
             except BaseException as exc:
@@ -250,19 +249,6 @@ class BluetoothTopology:
                     exc.add_note(f"topology cleanup failed: {cleanup_error}")
                 raise
             self._started = True
-
-    async def _wait_for_registration(self) -> None:
-        # The worker owns the clock while connecting. Let its bounded wait
-        # finish before startup cancellation can close the clock.
-        registration = asyncio.create_task(
-            asyncio.to_thread(self.bsim.wait_for_devices_registered)
-        )
-        try:
-            await asyncio.shield(registration)
-        except asyncio.CancelledError:
-            with suppress(Exception):
-                await registration
-            raise
 
     async def stop(self) -> None:
         """Stop Guests before releasing their Controllers and clock."""

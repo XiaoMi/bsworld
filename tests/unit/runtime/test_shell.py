@@ -20,9 +20,10 @@ import asyncio
 import fcntl
 import io
 import os
+from threading import Timer
 
 import pytest
-from tests.unit.runtime.scheduler.support import ManualClock, run_on_clock
+from tests.unit.helpers import bind_test_clock
 
 from bsworld.runtime.shell import ProcessShell
 
@@ -48,6 +49,19 @@ def console_pipe():
             yield shell, stdin, output
 
 
+@pytest.fixture
+def bounded_console_pipe(console_pipe):
+    _, _, output = console_pipe
+    # Close the reader if a blocking write traps the event loop before its timeout.
+    watchdog = Timer(5, output.close)
+    watchdog.start()
+    try:
+        yield console_pipe
+    finally:
+        watchdog.cancel()
+        watchdog.join()
+
+
 async def test_process_shell_run_writes_line_to_stdin(console_pipe) -> None:
     shell, _, output = console_pipe
     await shell.run("ifup bnep0")
@@ -62,30 +76,54 @@ async def test_process_shell_run_many_is_noop_for_empty_commands() -> None:
     await shell.run_many(())
 
 
-def test_process_shell_yields_on_full_pipe_and_preserves_order(console_pipe) -> None:
-    shell, stdin, output = console_pipe
+async def test_process_shell_yields_on_full_pipe_and_preserves_order(
+    bounded_console_pipe,
+) -> None:
+    shell, stdin, output = bounded_console_pipe
     capacity = fcntl.fcntl(stdin, fcntl.F_SETPIPE_SZ, 4096)
-    # A blocking implementation fails the output check without hanging pytest.
-    os.set_blocking(stdin.fileno(), False)
+    assert os.get_blocking(stdin.fileno())
     commands = ("true",) * (capacity // 5 + 20)
     received = bytearray()
 
-    def drain(_before: int, _after: int) -> None:
+    def drain() -> None:
         received.extend(output.read() or b"")
 
-    clock = ManualClock(before_advance=drain)
-
-    async def send() -> None:
+    with bind_test_clock(drain) as targets:
         await asyncio.wait_for(
             asyncio.gather(shell.run_many(commands), shell.run("echo ready")),
             timeout=0.1,
         )
 
-    run_on_clock(send(), clock=clock)
     received.extend(output.read() or b"")
 
     assert received == b"true\n" * len(commands) + b"echo ready\n"
-    assert clock.targets_us == [10_000]
+    assert len(targets) == 1
+    assert os.get_blocking(stdin.fileno())
+
+
+async def test_process_shell_cancellation_releases_full_pipe(
+    bounded_console_pipe,
+) -> None:
+    shell, stdin, output = bounded_console_pipe
+    fd = stdin.fileno()
+    filler = b"x" * fcntl.fcntl(fd, fcntl.F_GETPIPE_SZ)
+    assert os.write(fd, filler) == len(filler)
+
+    writer = asyncio.create_task(shell.run("echo discarded"))
+    try:
+        await asyncio.sleep(0)
+        assert not writer.done()
+        writer.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await writer
+    finally:
+        writer.cancel()
+        await asyncio.gather(writer, return_exceptions=True)
+
+    assert os.get_blocking(fd)
+    assert output.read() == filler
+    await asyncio.wait_for(shell.run("echo next"), timeout=1)
+    assert output.read() == b"echo next\n"
 
 
 def test_process_shell_sends_lines_synchronously_outside_an_event_loop() -> None:

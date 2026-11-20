@@ -23,7 +23,7 @@ sudo docker run --rm \
   ghcr.io/xiaomi/bsworld-linux:latest pytest tests/unit -q -p no:cacheprovider
 ```
 
-The unit suite exercises the framework in `src/bsworld/`, including topology and Controller lifecycle, RF configuration, simulation-time scheduling, FIFO clock communication, UML Guest lifecycle and time-travel, and log collection.
+The unit suite exercises the framework in `src/bsworld/`, including topology and Controller lifecycle, RF configuration, simulation clock binding, UML Guest lifecycle and time-travel, and log collection.
 
 ## Code Style
 
@@ -49,7 +49,7 @@ CI runs both Ruff checks and the unit suite in `Checks` for pull requests to `ma
 
 ## Coverage
 
-`pyproject.toml` configures branch coverage for the `bsworld` package, including the runtime scheduler. Run the unit suite under coverage in the local environment.
+`pyproject.toml` configures branch coverage for the `bsworld` package. Run the unit suite under coverage in the local environment.
 
 ```sh
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
