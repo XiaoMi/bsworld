@@ -249,8 +249,7 @@ RUN cd "$NUTTX_NIMBLE_DIR" \
     && make -j"$BUILD_JOBS" \
     && strip --strip-unneeded nuttx
 
-# User Mode Linux: the pinned mainline kernel, built as a host program with the
-# suite's configuration fragment, and the library that fixes the guest's seed.
+# User Mode Linux with the suite's configuration and reproducible seed input.
 FROM native-build AS uml
 USER root
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -268,17 +267,16 @@ RUN git init "$LINUX_DIR" \
     && git -C "$LINUX_DIR" checkout --detach FETCH_HEAD \
     && test "$(git -C "$LINUX_DIR" rev-parse HEAD)" = "$LINUX_REVISION"
 
-# Copy each input alone, so editing init.sh does not rebuild the kernel.
 ARG BUILD_JOBS=4
-COPY --chown=$BUILD_UID:$BUILD_GID src/bsworld/uml/linux.fragment /opt/bsworld-build/uml/linux.fragment
+COPY --chown=$BUILD_UID:$BUILD_GID components/uml/linux.fragment \
+    components/uml/random-seed.patch /opt/bsworld-build/uml/
 RUN cd "$LINUX_DIR" \
+    && git apply /opt/bsworld-build/uml/random-seed.patch \
     && make ARCH=um SUBARCH=i386 defconfig \
     && scripts/kconfig/merge_config.sh -m .config /opt/bsworld-build/uml/linux.fragment \
     && make ARCH=um SUBARCH=i386 olddefconfig \
     && make ARCH=um SUBARCH=i386 -j"$BUILD_JOBS" \
     && strip --strip-unneeded -o /opt/uml/kernel linux
-COPY --chown=$BUILD_UID:$BUILD_GID src/bsworld/uml/getrandom.c /opt/bsworld-build/uml/getrandom.c
-RUN cc -m32 -shared -fPIC -O2 -o /opt/uml/getrandom.so /opt/bsworld-build/uml/getrandom.c
 
 # NimBLE Linux: the upstream 32-bit Host demo. Use the compiler directly in
 # place of the Makefile's ccache wrapper.
@@ -339,11 +337,11 @@ RUN --mount=type=cache,id=bsworld-trouble-cargo-${BUILD_UID}-${BUILD_GID},target
 # The guest's rootfs is assembled independently of the 64-bit test runner.
 FROM build-base AS uml-rootfs
 USER root
-COPY docker/uml-rootfs.sh /opt/bsworld-build/uml/rootfs.sh
+COPY components/uml/rootfs.sh /opt/bsworld-build/uml/rootfs.sh
 RUN apt-get -o APT::Architecture=i386 update \
     && sh /opt/bsworld-build/uml/rootfs.sh /opt/uml/rootfs \
     && rm -rf /var/lib/apt/lists/*
-COPY --chmod=755 src/bsworld/uml/init.sh /opt/uml/rootfs/init
+COPY --chmod=755 components/uml/init.sh /opt/uml/rootfs/init
 COPY tests/integration/uml/bluez/main.conf /opt/uml/rootfs/opt/bsworld/bluez.conf
 COPY --from=nimble-linux /opt/nimble/porting/examples/linux/nimble-linux /opt/uml/rootfs/opt/bsworld/nimble-linux
 COPY --from=zephyr-uml /opt/zephyrproject/build/bsworld_uml_zephyr/zephyr/zephyr.exe /opt/uml/rootfs/opt/bsworld/zephyr-shell
@@ -356,12 +354,10 @@ COPY --from=trouble-uml /opt/trouble/examples/linux/target/i686-unknown-linux-gn
 # TMPDIR avoids Docker's noexec mount on /dev/shm for UML's memory mapping.
 FROM runtime-base AS runtime-linux
 COPY --from=uml /opt/uml/kernel /opt/firmware/uml/linux
-COPY --from=uml /opt/uml/getrandom.so /opt/firmware/uml/getrandom.so
 COPY --from=uml-rootfs /opt/uml/rootfs /opt/firmware/uml/rootfs
 COPY --from=trouble-uml /opt/trouble/LICENSE-APACHE /opt/trouble/LICENSE-MIT /usr/share/doc/bsworld/trouble/
 ENV TMPDIR=/tmp \
     BSWORLD_UML_KERNEL=/opt/firmware/uml/linux \
-    BSWORLD_UML_GETRANDOM=/opt/firmware/uml/getrandom.so \
     BSWORLD_UML_ROOTFS=/opt/firmware/uml/rootfs \
     BSWORLD_UML_NIMBLE_BIN=/opt/bsworld/nimble-linux \
     BSWORLD_UML_ZEPHYR_BIN=/opt/bsworld/zephyr-shell \
@@ -371,7 +367,6 @@ ENV TMPDIR=/tmp \
     BSWORLD_UML_TROUBLE_PERIPHERAL_BIN=/opt/bsworld/trouble/ble_bas_peripheral
 RUN bsworld-check-binaries "$BSWORLD_UML_KERNEL" \
     && test -x "$BSWORLD_UML_ROOTFS/init" \
-    && file -b "$BSWORLD_UML_GETRANDOM" | grep -q '^ELF 32-bit' \
     && for binary in "$BSWORLD_UML_KERNEL" \
             "$BSWORLD_UML_ROOTFS/usr/bin/btattach" \
             "$BSWORLD_UML_ROOTFS/usr/bin/bluetoothctl" \

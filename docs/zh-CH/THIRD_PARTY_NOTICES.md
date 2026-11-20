@@ -50,11 +50,7 @@ BSWorld 为 [UML TrouBLE 套件](../../tests/integration/uml/trouble/README.zh-C
 - 用途：以 User Mode Linux 形式运行 [Linux Guest](../../tests/integration/uml/README.zh-CN.md)，并通过 time-travel 与 BabbleSim 同步时间
 - 许可证：GNU General Public License version 2。个别文件使用的兼容许可证见上游 `COPYING`。
 
-Guest 内核使用未修改的上游提交和 BSWorld 的[配置片段](../../src/bsworld/uml/linux.fragment)编译。
-
-## Moby seccomp 配置
-
-[UML seccomp 配置](../../docker/uml-seccomp.json)基于 [Moby seccomp/v0.2.4 的默认配置](https://github.com/moby/profiles/blob/245180c51918481c0525424b3ee025d2b435d46c/seccomp/default.json)，额外放行 `personality(ADDR_NO_RANDOMIZE)`。
+BSWorld 使用[配置片段](../../components/uml/linux.fragment)和 [UML 测试种子补丁](../../components/uml/random-seed.patch)编译 Guest 内核。
 
 ## BlueZ
 

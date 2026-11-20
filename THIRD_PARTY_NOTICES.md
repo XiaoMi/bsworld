@@ -50,11 +50,7 @@ BSWorld builds TrouBLE's upstream Linux examples for the [UML TrouBLE suite](tes
 - Usage: [Linux Guest execution](tests/integration/uml/README.md) as User Mode Linux, with time-travel synchronized to BabbleSim
 - License: GNU General Public License version 2. The upstream `COPYING` file describes compatible licenses used by individual files.
 
-The Guest kernel is built from an unmodified upstream commit with BSWorld's [configuration fragment](src/bsworld/uml/linux.fragment).
-
-## Moby seccomp profile
-
-The [UML seccomp profile](docker/uml-seccomp.json) adds permission for `personality(ADDR_NO_RANDOMIZE)` to the [Moby seccomp/v0.2.4 defaults](https://github.com/moby/profiles/blob/245180c51918481c0525424b3ee025d2b435d46c/seccomp/default.json).
+BSWorld builds the Guest kernel with its [configuration fragment](components/uml/linux.fragment) and [UML test seed patch](components/uml/random-seed.patch).
 
 ## BlueZ
 

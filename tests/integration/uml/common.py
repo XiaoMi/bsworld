@@ -34,18 +34,6 @@ if TYPE_CHECKING:
 _GUIDE = "tests/integration/uml/README.md"
 
 
-def _require_artifact(variable: str, *, executable: bool = True) -> Path:
-    path = env_path(variable)
-    if (
-        path is None
-        or not path.is_file()
-        or (executable and not path.stat().st_mode & 0o111)
-    ):
-        kind = "compiled executable" if executable else "built artifact"
-        pytest.skip(f"Set {variable} to the {kind}; see {_GUIDE}.")
-    return path
-
-
 def _rootfs() -> Path:
     rootfs = env_path("BSWORLD_UML_ROOTFS")
     if rootfs is None or not (rootfs / "init").is_file():
@@ -53,10 +41,11 @@ def _rootfs() -> Path:
     return rootfs
 
 
-def _artifacts() -> tuple[Path, Path, Path]:
-    kernel = _require_artifact("BSWORLD_UML_KERNEL")
-    seed_library = _require_artifact("BSWORLD_UML_GETRANDOM", executable=False)
-    return kernel, seed_library, _rootfs()
+def _artifacts() -> tuple[Path, Path]:
+    kernel = env_path("BSWORLD_UML_KERNEL")
+    if kernel is None or not kernel.is_file() or not os.access(kernel, os.X_OK):
+        pytest.skip(f"Set BSWORLD_UML_KERNEL to the compiled executable; see {_GUIDE}.")
+    return kernel, _rootfs()
 
 
 def require_guest_program(variable: str, default: str) -> Path:
@@ -87,7 +76,7 @@ async def open_uml_guest(
     log_subdir: Path,
 ) -> UmlGuest:
     """Boot a guest on a started topology and wait for its root console."""
-    kernel, seed_library, rootfs = _artifacts()
+    kernel, rootfs = _artifacts()
     guest = stack.enter_context(
         UmlGuest(
             topo,
@@ -95,7 +84,6 @@ async def open_uml_guest(
             kernel=kernel,
             rootfs=rootfs,
             init="/init",
-            getrandom_library=seed_library,
             label=label,
             log_subdir=log_subdir,
         )

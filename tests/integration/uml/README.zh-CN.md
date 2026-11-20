@@ -37,43 +37,45 @@ LINUX_DIR="$UML_DIR/linux-src"
 mkdir -p "$UML_DIR"
 
 export BSWORLD_UML_KERNEL="$LINUX_DIR/linux"
-export BSWORLD_UML_GETRANDOM="$UML_DIR/getrandom.so"
 export BSWORLD_UML_ROOTFS="$UML_DIR/rootfs"
 ```
 
 | 环境变量 | 宿主机路径 |
 |---|---|
-| `BSWORLD_UML_KERNEL` | 可执行的 i386 UML 内核 |
-| `BSWORLD_UML_GETRANDOM` | UML 进程加载的 i386 种子库 |
+| `BSWORLD_UML_KERNEL` | 应用了测试种子补丁的 i386 UML 内核可执行文件 |
 | `BSWORLD_UML_ROOTFS` | 包含 `/init`、i386 程序和库的 Guest 根目录 |
 
-#### 编译内核和种子库
+#### 编译内核
 
-获取 [Dockerfile](../../../docker/linux.Dockerfile) 固定的 Linux 版本，编译 i386 UML 内核和种子库。
+获取 [Dockerfile](../../../docker/linux.Dockerfile) 固定的 Linux 版本，应用 [UML 测试种子补丁](../../../components/uml/random-seed.patch)，再编译 i386 UML 内核。
 
 ```sh
 LINUX_REVISION=$(sed -n 's/^ARG LINUX_REVISION=//p' "$BSWORLD_ROOT/docker/linux.Dockerfile")
-git init "$LINUX_DIR"
-git -C "$LINUX_DIR" fetch --depth=1 https://github.com/torvalds/linux.git "${LINUX_REVISION:?}"
-git -C "$LINUX_DIR" checkout --detach FETCH_HEAD
-
+UML_SEED_PATCH="$BSWORLD_ROOT/components/uml/random-seed.patch"
 (
-  cd "${LINUX_DIR:?}" &&
-  make ARCH=um SUBARCH=i386 defconfig &&
-  scripts/kconfig/merge_config.sh -m .config "$BSWORLD_ROOT/src/bsworld/uml/linux.fragment" &&
-  make ARCH=um SUBARCH=i386 olddefconfig &&
+  set -e
+  git init "$LINUX_DIR"
+  git -C "$LINUX_DIR" fetch --depth=1 https://github.com/torvalds/linux.git "${LINUX_REVISION:?}"
+  git -C "$LINUX_DIR" checkout --detach FETCH_HEAD
+  if ! git -C "$LINUX_DIR" apply --reverse --check "$UML_SEED_PATCH" 2>/dev/null; then
+    git -C "$LINUX_DIR" apply "$UML_SEED_PATCH"
+  fi
+
+  cd "${LINUX_DIR:?}"
+  make ARCH=um SUBARCH=i386 defconfig
+  scripts/kconfig/merge_config.sh -m .config "$BSWORLD_ROOT/components/uml/linux.fragment"
+  make ARCH=um SUBARCH=i386 olddefconfig
   make ARCH=um SUBARCH=i386 -j"$(nproc)"
-) && cc -m32 -shared -fPIC -O2 -o "${BSWORLD_UML_GETRANDOM:?}" \
-  "$BSWORLD_ROOT/src/bsworld/uml/getrandom.c"
+)
 ```
 
 #### 组装 Guest 根文件系统
 
-用当前用户运行[根文件系统脚本](../../../docker/uml-rootfs.sh)，解包 Ubuntu i386 运行时软件包，并把 UML 启动脚本安装为 `/init`。
+用当前用户运行[根文件系统脚本](../../../components/uml/rootfs.sh)，解包 Ubuntu i386 运行时软件包，并把 UML 启动脚本安装为 `/init`。
 
 ```sh
-sh "$BSWORLD_ROOT/docker/uml-rootfs.sh" "${BSWORLD_UML_ROOTFS:?}" &&
-install -m 0755 "$BSWORLD_ROOT/src/bsworld/uml/init.sh" "$BSWORLD_UML_ROOTFS/init"
+sh "$BSWORLD_ROOT/components/uml/rootfs.sh" "${BSWORLD_UML_ROOTFS:?}" &&
+install -m 0755 "$BSWORLD_ROOT/components/uml/init.sh" "$BSWORLD_UML_ROOTFS/init"
 ```
 
 按下表对应的 Host 指南准备要跑的套件。如需替换程序，覆盖变量使用 **Guest 内的绝对路径**。例如，程序安装到 `$BSWORLD_UML_ROOTFS/opt/bsworld/my-shell` 时，设置 `BSWORLD_UML_ZEPHYR_BIN=/opt/bsworld/my-shell`。
@@ -98,11 +100,13 @@ pytest tests/integration/uml --require-integration -n auto -q
 
 ## Guest 运行机制
 
-Guest 从只读根文件系统启动。`/init` 挂载可写的运行目录并启动 shell，测试通过 UML 进程的标准输入和输出与 shell 交互。启动步骤见 [init.sh](../../../src/bsworld/uml/init.sh)。
+Guest 从只读根文件系统启动。`/init` 挂载可写的运行目录并启动 shell，测试通过 UML 进程的标准输入和输出与 shell 交互。启动步骤见 [init.sh](../../../components/uml/init.sh)。
 
 每个 Guest 通过 `/dev/ttyS0` 上的 H4 连接接入对应的 Controller。测试使用 `btattach -B /dev/ttyS0 -P h4` 将 Controller 注册为 `hci0`。
 
 pytest 的事件循环通过 `time-travel=ext` 推进各 Guest 的时钟。Guest 运行时仿真时间暂停，控制台和串口输入在 Guest 的周期 tick 到来时处理。BabbleSim 设备编号分配给 Controller、测试时钟和配置的干扰源。
+
+BSWorld 根据各 Guest 的标签生成测试种子，并通过环境变量 `UML_RANDOM_SEED` 将无符号十进制种子传给 UML 内核。
 
 ## 添加场景
 

@@ -7,6 +7,8 @@ import asyncio
 import os
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
+from zlib import crc32
 
 import pytest
 
@@ -72,6 +74,21 @@ def model_guest(tmp_path, unit_env, monkeypatch):
         topo, controller, kernel=tmp_path / "linux", init="/init", label="g"
     )
     return guest, events, Calendar
+
+
+async def test_guest_passes_label_derived_seed(model_guest, monkeypatch) -> None:
+    guest, _, _ = model_guest
+    monkeypatch.setenv("UML_RANDOM_SEED", "0")
+    monkeypatch.delenv("LD_PRELOAD", raising=False)
+    spawn = Mock(wraps=guest.topo.pm.spawn)
+    monkeypatch.setattr(guest.topo.pm, "spawn", spawn)
+
+    with guest:
+        env = spawn.call_args.kwargs["env"]
+
+    assert env["UML_RANDOM_SEED"] == str(crc32(guest.label.encode()))
+    assert "LD_PRELOAD" not in env
+    assert os.environ["UML_RANDOM_SEED"] == "0"
 
 
 async def test_guest_suspends_calendar_before_stopping_process(model_guest) -> None:
