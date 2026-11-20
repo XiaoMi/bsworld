@@ -52,10 +52,9 @@ class UmlGuest:
     Neither the serial line nor the console can wake a waiting guest, so
     the kernel needs a periodic tick to handle input.
 
-    An optional getrandom_library overrides randomness during kernel startup
-    using BSWORLD_UML_SEED, derived from the guest label. The kernel also
-    mixes its command line into the seed, so the guest's socket and instance
-    paths are relative and its serial descriptor number stays fixed.
+    The test kernel uses UML_RANDOM_SEED derived from the guest label. It also
+    mixes its command line into the random pool, so the guest uses relative
+    socket and instance paths and a fixed serial descriptor number.
     """
 
     def __init__(
@@ -67,7 +66,6 @@ class UmlGuest:
         init: str | Path,
         label: str,
         rootfs: Path = Path("/"),
-        getrandom_library: Path | None = None,
         log_subdir: Path | str | None = None,
     ) -> None:
         if not label or Path(label).name != label or label in {".", ".."}:
@@ -81,9 +79,6 @@ class UmlGuest:
         self.topo = topo
         self.controller = controller
         self.kernel = kernel.resolve()
-        self.getrandom_library = (
-            getrandom_library.resolve() if getrandom_library is not None else None
-        )
         self.label = label
         self.log_subdir = log_subdir if log_subdir is not None else Path("uml") / label
         self.shell = ProcessShell(label=label, enabled=True)
@@ -123,9 +118,7 @@ class UmlGuest:
             calendar.listen()
             pipe = self._pipe = LogCapture.open(log_dir / f"{self.label}.log")
             env = os.environ.copy()
-            if self.getrandom_library is not None:
-                env["LD_PRELOAD"] = str(self.getrandom_library)
-                env["BSWORLD_UML_SEED"] = str(zlib.crc32(self.label.encode()))
+            env["UML_RANDOM_SEED"] = str(zlib.crc32(self.label.encode()))
             hci_fd = _connect_controller(self.controller.hci_sock)
             try:
                 self._proc = self.topo.pm.spawn(

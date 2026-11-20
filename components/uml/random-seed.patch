@@ -1,0 +1,44 @@
+diff --git a/arch/um/os-Linux/util.c b/arch/um/os-Linux/util.c
+--- a/arch/um/os-Linux/util.c
++++ b/arch/um/os-Linux/util.c
+@@ -4,6 +4,7 @@
+  */
+
+ #include <stdarg.h>
++#include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <unistd.h>
+@@ -98,7 +99,31 @@
+
+ ssize_t os_getrandom(void *buf, size_t len, unsigned int flags)
+ {
+-	return getrandom(buf, len, flags);
++	const char *seed = getenv("UML_RANDOM_SEED");
++	unsigned char *out = buf;
++	char *end;
++	uint64_t state;
++	size_t i;
++
++	if (!seed)
++		return getrandom(buf, len, flags);
++
++	errno = 0;
++	state = strtoull(seed, &end, 10);
++	if (*seed < '0' || *seed > '9' || *end || errno == ERANGE) {
++		os_warn("UML_RANDOM_SEED must be an unsigned decimal 64-bit integer\n");
++		exit(EXIT_FAILURE);
++	}
++
++	/* Restart the SplitMix64 stream at the seed for each call. */
++	for (i = 0; i < len; i++) {
++		uint64_t z = (state += 0x9e3779b97f4a7c15ULL);
++
++		z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
++		z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
++		out[i] = (unsigned char)(z ^ (z >> 31));
++	}
++	return len;
+ }
+
+ /*

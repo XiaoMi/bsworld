@@ -82,7 +82,6 @@ with UmlGuest(
     init="/init",
     label="host",
     log_subdir="uml/host",
-    getrandom_library=seed_library,
 ) as guest:
     await guest.wait_log(r"^BSWORLD_UML_READY$")
     await guest.shell.run("btattach -B /dev/ttyS0 -P h4 &")
@@ -91,7 +90,7 @@ with UmlGuest(
 
 Give each Guest its own label and Controller when testing several Guests. Each Guest has a separate console and time-travel socket. All Guests share the topology's clock and use no PHY device IDs of their own.
 
-For instructions on preparing the kernel, root filesystem, and seed library, see the [UML test environment](../tests/integration/uml/README.md).
+For instructions on preparing the test kernel and root filesystem, see the [UML test environment](../tests/integration/uml/README.md).
 
 ## Process Shell Commands
 

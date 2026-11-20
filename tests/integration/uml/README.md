@@ -37,43 +37,45 @@ LINUX_DIR="$UML_DIR/linux-src"
 mkdir -p "$UML_DIR"
 
 export BSWORLD_UML_KERNEL="$LINUX_DIR/linux"
-export BSWORLD_UML_GETRANDOM="$UML_DIR/getrandom.so"
 export BSWORLD_UML_ROOTFS="$UML_DIR/rootfs"
 ```
 
 | Variable | Host path |
 |---|---|
-| `BSWORLD_UML_KERNEL` | Executable i386 UML kernel |
-| `BSWORLD_UML_GETRANDOM` | i386 seed library loaded by the UML process |
+| `BSWORLD_UML_KERNEL` | Executable i386 UML kernel built with the test seed patch |
 | `BSWORLD_UML_ROOTFS` | Guest root directory containing `/init`, the i386 programs and their libraries |
 
-#### Build the Kernel and Seed Library
+#### Build the Kernel
 
-Fetch the Linux revision pinned in the [Dockerfile](../../../docker/linux.Dockerfile). Build the UML kernel and seed library for i386.
+Fetch the Linux revision pinned in the [Dockerfile](../../../docker/linux.Dockerfile), apply the [UML test seed patch](../../../components/uml/random-seed.patch), and build the i386 UML kernel.
 
 ```sh
 LINUX_REVISION=$(sed -n 's/^ARG LINUX_REVISION=//p' "$BSWORLD_ROOT/docker/linux.Dockerfile")
-git init "$LINUX_DIR"
-git -C "$LINUX_DIR" fetch --depth=1 https://github.com/torvalds/linux.git "${LINUX_REVISION:?}"
-git -C "$LINUX_DIR" checkout --detach FETCH_HEAD
-
+UML_SEED_PATCH="$BSWORLD_ROOT/components/uml/random-seed.patch"
 (
-  cd "${LINUX_DIR:?}" &&
-  make ARCH=um SUBARCH=i386 defconfig &&
-  scripts/kconfig/merge_config.sh -m .config "$BSWORLD_ROOT/src/bsworld/uml/linux.fragment" &&
-  make ARCH=um SUBARCH=i386 olddefconfig &&
+  set -e
+  git init "$LINUX_DIR"
+  git -C "$LINUX_DIR" fetch --depth=1 https://github.com/torvalds/linux.git "${LINUX_REVISION:?}"
+  git -C "$LINUX_DIR" checkout --detach FETCH_HEAD
+  if ! git -C "$LINUX_DIR" apply --reverse --check "$UML_SEED_PATCH" 2>/dev/null; then
+    git -C "$LINUX_DIR" apply "$UML_SEED_PATCH"
+  fi
+
+  cd "${LINUX_DIR:?}"
+  make ARCH=um SUBARCH=i386 defconfig
+  scripts/kconfig/merge_config.sh -m .config "$BSWORLD_ROOT/components/uml/linux.fragment"
+  make ARCH=um SUBARCH=i386 olddefconfig
   make ARCH=um SUBARCH=i386 -j"$(nproc)"
-) && cc -m32 -shared -fPIC -O2 -o "${BSWORLD_UML_GETRANDOM:?}" \
-  "$BSWORLD_ROOT/src/bsworld/uml/getrandom.c"
+)
 ```
 
 #### Prepare the Guest Root Filesystem
 
-Run the [rootfs script](../../../docker/uml-rootfs.sh) as your local user to extract the Ubuntu i386 runtime packages. Install the UML startup script as `/init`.
+Run the [rootfs script](../../../components/uml/rootfs.sh) as your local user to extract the Ubuntu i386 runtime packages. Install the UML startup script as `/init`.
 
 ```sh
-sh "$BSWORLD_ROOT/docker/uml-rootfs.sh" "${BSWORLD_UML_ROOTFS:?}" &&
-install -m 0755 "$BSWORLD_ROOT/src/bsworld/uml/init.sh" "$BSWORLD_UML_ROOTFS/init"
+sh "$BSWORLD_ROOT/components/uml/rootfs.sh" "${BSWORLD_UML_ROOTFS:?}" &&
+install -m 0755 "$BSWORLD_ROOT/components/uml/init.sh" "$BSWORLD_UML_ROOTFS/init"
 ```
 
 Use the Host guides below to prepare the programs for the suites you want to run. Their executable overrides take absolute paths **inside the Guest**. For example, a binary installed at `$BSWORLD_UML_ROOTFS/opt/bsworld/my-shell` is selected with `BSWORLD_UML_ZEPHYR_BIN=/opt/bsworld/my-shell`.
@@ -98,11 +100,13 @@ pytest tests/integration/uml --require-integration -n auto -q
 
 ## Guest Runtime
 
-The Guest boots from a read-only root filesystem. Its `/init` script mounts writable runtime directories and starts a shell connected to the UML process's standard input and output. See [init.sh](../../../src/bsworld/uml/init.sh).
+The Guest boots from a read-only root filesystem. Its `/init` script mounts writable runtime directories and starts a shell connected to the UML process's standard input and output. See [init.sh](../../../components/uml/init.sh).
 
 Each Guest reaches its Controller over H4 through `/dev/ttyS0`. The tests use `btattach -B /dev/ttyS0 -P h4` to register the Controller as `hci0`.
 
 The pytest event loop advances Guest clocks through `time-travel=ext`. Simulation time pauses while a Guest runs. A periodic Guest tick handles input from the console and serial port. BabbleSim device IDs belong to Controllers, the test clock, and configured RF interference sources.
+
+BSWorld derives each Guest's test seed from its label and passes it to the UML kernel in `UML_RANDOM_SEED` as an unsigned decimal integer.
 
 ## Adding Scenarios
 

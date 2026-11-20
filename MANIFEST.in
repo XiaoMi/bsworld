@@ -1,6 +1,8 @@
 # bscontroller is released as its own package; CI and image files are not
 # part of the bsworld source distribution.
 prune components
+include components/uml/init.sh components/uml/linux.fragment
+include components/uml/random-seed.patch components/uml/rootfs.sh
 prune docker
 prune .github
 exclude .dockerignore

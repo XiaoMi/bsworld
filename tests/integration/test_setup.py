@@ -6,28 +6,29 @@
 from pathlib import Path
 
 import pytest
-from tests.integration.uml.common import _require_artifact
+from tests.integration.uml.common import _artifacts
 
 pytest_plugins = ("pytester",)
 
 
-@pytest.mark.parametrize("executable", [False, True])
-def test_artifacts_are_resolved_on_every_call(
-    tmp_path, monkeypatch, executable
-) -> None:
-    artifact = tmp_path / "artifact"
-    artifact.write_text("output")
-    monkeypatch.setenv("BSWORLD_TEST_BIN", str(artifact))
+def test_artifacts_are_resolved_on_every_call(tmp_path, monkeypatch) -> None:
+    kernel = tmp_path / "linux"
+    kernel.touch()
+    monkeypatch.setenv("BSWORLD_UML_KERNEL", str(kernel))
+    monkeypatch.setenv("BSWORLD_UML_ROOTFS", str(tmp_path))
 
-    if executable:
-        with pytest.raises(pytest.skip.Exception, match="compiled executable"):
-            _require_artifact("BSWORLD_TEST_BIN")
-        artifact.chmod(0o755)
-    assert _require_artifact("BSWORLD_TEST_BIN", executable=executable) == artifact
+    with pytest.raises(pytest.skip.Exception, match="compiled executable"):
+        _artifacts()
+    kernel.chmod(0o755)
 
-    monkeypatch.setenv("BSWORLD_TEST_BIN", str(tmp_path / "missing"))
-    with pytest.raises(pytest.skip.Exception, match="BSWORLD_TEST_BIN"):
-        _require_artifact("BSWORLD_TEST_BIN", executable=executable)
+    with pytest.raises(pytest.skip.Exception, match="BSWORLD_UML_ROOTFS"):
+        _artifacts()
+    (tmp_path / "init").touch()
+    assert _artifacts() == (kernel, tmp_path)
+
+    monkeypatch.setenv("BSWORLD_UML_KERNEL", str(tmp_path / "missing"))
+    with pytest.raises(pytest.skip.Exception, match="BSWORLD_UML_KERNEL"):
+        _artifacts()
 
 
 @pytest.mark.parametrize("workers", [0, 2])

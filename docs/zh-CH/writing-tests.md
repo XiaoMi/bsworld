@@ -82,7 +82,6 @@ with UmlGuest(
     init="/init",
     label="host",
     log_subdir="uml/host",
-    getrandom_library=seed_library,
 ) as guest:
     await guest.wait_log(r"^BSWORLD_UML_READY$")
     await guest.shell.run("btattach -B /dev/ttyS0 -P h4 &")
@@ -91,7 +90,7 @@ with UmlGuest(
 
 同一个测试可启动多个 Guest。每个 Guest 使用独立的名称、Controller、控制台和 time-travel socket。Guest 共享拓扑时钟，自身不占用 PHY 设备 ID。
 
-内核、根文件系统和随机数种子库的准备方式见 [UML 测试环境](../../tests/integration/uml/README.zh-CN.md)。
+测试内核和根文件系统的准备方式见 [UML 测试环境](../../tests/integration/uml/README.zh-CN.md)。
 
 ## 向进程发送 Shell 命令
 

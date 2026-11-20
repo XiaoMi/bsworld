@@ -17,8 +17,7 @@ CONFIG_DEVTMPFS=y
 CONFIG_TMPFS=y
 # CONFIG_BLK_DEV_UBD is not set
 # CONFIG_MCONSOLE is not set
-# The guest's randomness comes from a fixed seed alone, not from the host's
-# /dev/random, so random addresses and keys repeat on every run.
+# Disable UML's host /dev/random driver when testing with a fixed seed.
 # CONFIG_UML_RANDOM is not set
 
 # The Virtual Controller is attached to the serial line ttyS0 with btattach.
