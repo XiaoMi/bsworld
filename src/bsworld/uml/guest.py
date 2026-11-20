@@ -12,17 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-"""User Mode Linux guests using the topology clock and a serial HCI endpoint."""
+"""User Mode Linux guests using the topology clock and Virtio devices."""
 
 from __future__ import annotations
 
 import asyncio
-import errno
-import fcntl
 import os
-import resource
-import socket
-import subprocess
 import zlib
 from contextlib import ExitStack, suppress
 from pathlib import Path
@@ -32,6 +27,7 @@ from bsworld.runtime.pipe import LogCapture
 from bsworld.runtime.shell import ProcessShell
 
 from .timetravel import TimeTravelCalendar
+from .virtio import GuestVirtio
 
 if TYPE_CHECKING:
     from bsworld.devices import BSController
@@ -40,7 +36,7 @@ if TYPE_CHECKING:
 
 
 class UmlGuest:
-    """A UML kernel whose serial line ttyS0 is its Controller's H:4 socket.
+    """A UML kernel with Virtio Bluetooth and a Virtio console.
 
     The guest does not join the PHY. Its clock follows the pytest loop's
     simulation time through UML time-travel, so it starts at the simulated
@@ -48,15 +44,13 @@ class UmlGuest:
     simulation time is still bound. Starting and stopping block the loop on
     purpose: simulation time stands still meanwhile.
 
-    The supplied rootfs is mounted read-only through hostfs. The init path
-    is absolute within that root. The console is the process's stdin and
-    stdout. Send commands through shell and match output with wait_log().
-    Neither the serial line nor the console can wake a waiting guest, so
-    the kernel needs a periodic tick to handle input.
+    The supplied rootfs is mounted read-only through hostfs. The init path is
+    absolute within that root. Send commands through shell and match output
+    with wait_log(). Both Virtio devices can wake a guest that is waiting.
 
     The test kernel uses UML_RANDOM_SEED derived from the guest label. It also
-    mixes its command line into the random pool, so the guest uses relative
-    socket and instance paths and a fixed serial descriptor number.
+    mixes its command line into the random pool, so the guest uses stable
+    relative socket and instance paths.
     """
 
     def __init__(
@@ -85,6 +79,7 @@ class UmlGuest:
         self.log_subdir = log_subdir if log_subdir is not None else Path("uml") / label
         self.shell = ProcessShell(label=label, enabled=True)
         self._calendar: TimeTravelCalendar | None = None
+        self._devices: GuestVirtio | None = None
         self._pipe: LogCapture | None = None
         self._proc: Proc | None = None
         self._failure: asyncio.Future[Exception] | None = None
@@ -104,7 +99,7 @@ class UmlGuest:
         """Boot the guest and run it until it first waits for simulated time."""
         if self._calendar is not None:
             raise RuntimeError(f"{self.label}: UML guest is already started")
-        clock = self.topo._claim_uml_guest(self)
+        scheduler = self.topo._claim_uml_guest(self)
         try:
             # The guest works beside its Controller's socket, so its own
             # sockets need no absolute path or separate PHY device number.
@@ -115,31 +110,32 @@ class UmlGuest:
             self._failure = failure = loop.create_future()
             self._failure_reported = False
             self._calendar = calendar = TimeTravelCalendar(
-                state_dir / f"{umid}.tt", on_failure=failure.set_result
+                state_dir / f"{umid}.tt",
+                on_failure=failure.set_result,
+                order=self.controller.controller_dev_id,
             )
             calendar.listen()
             pipe = self._pipe = LogCapture.open(log_dir / f"{self.label}.log")
+            self._devices = devices = GuestVirtio(
+                state_dir, umid, self.controller.hci_sock, pipe
+            )
+            devices.listen()
             env = os.environ.copy()
             env["UML_RANDOM_SEED"] = str(zlib.crc32(self.label.encode()))
-            hci_fd = _connect_controller(self.controller.hci_sock)
-            try:
-                self._proc = self.topo.pm.spawn(
-                    self.label,
-                    self._command(calendar, hci_fd, umid),
-                    cwd=state_dir,
-                    log_dir=log_dir,
-                    stdin=subprocess.PIPE,
-                    stdout=pipe.write_fd,
-                    stderr=pipe.write_fd,
-                    log_fh=pipe.log_fh,
-                    env=env,
-                    pass_fds=(hci_fd,),
-                )
-            finally:
-                # The guest owns the Controller connection from here on.
-                os.close(hci_fd)
-            self.shell.attach(self._proc)
-            calendar.connect(loop, clock, alive=self._proc.alive, console=pipe)
+            self._proc = self.topo.pm.spawn(
+                self.label,
+                self._command(calendar, devices, umid),
+                cwd=state_dir,
+                log_dir=log_dir,
+                stdout=pipe.write_fd,
+                stderr=pipe.write_fd,
+                log_fh=pipe.log_fh,
+                env=env,
+            )
+            self.shell.attach_writer(self._write_console)
+            calendar.connect(
+                scheduler, alive=self._proc.alive, console=pipe, devices=devices
+            )
         except BaseException as error:
             self._stop_with_error(error)
             raise
@@ -184,6 +180,11 @@ class UmlGuest:
                 cleanup.callback(self._pipe.stop)
                 self._pipe = None
             cleanup.callback(self.shell.detach)
+            if self._devices is not None:
+                devices, self._devices = self._devices, None
+                cleanup.callback(
+                    devices.close, disconnect_hci=self.controller._disconnect_hci
+                )
             if self._calendar is not None:
                 calendar, self._calendar = self._calendar, None
                 # UML panics on calendar EOF. Stop it synchronously before
@@ -217,7 +218,7 @@ class UmlGuest:
                     await log
 
     def _command(
-        self, calendar: TimeTravelCalendar, hci_fd: int, umid: str
+        self, calendar: TimeTravelCalendar, devices: GuestVirtio, umid: str
     ) -> list[str | Path]:
         return [
             self.kernel,
@@ -231,33 +232,18 @@ class UmlGuest:
             f'init="{self.init}"',
             f"time-travel=ext:{calendar.path.name}",
             "con=null",
+            # Keep host stdout available for low-level UML diagnostics.
             "con0=fd:0,fd:1",
-            "ssl=null",
-            f"ssl0=fd:{hci_fd}",
+            "console=hvc0",
+            *devices.arguments,
             f"umid={umid}",
             "uml_dir=.",
         ]
 
-
-def _connect_controller(hci_sock: Path) -> int:
-    """Connect to the Controller's H:4 socket for the guest to inherit.
-
-    The guest kernel mixes its command line, ssl0=fd:N included, into its
-    random pool. The connection therefore takes the highest descriptor the
-    process may open, which no other descriptor reaches, so N is the same on
-    every run.
-    """
-    fd = resource.getrlimit(resource.RLIMIT_NOFILE)[0] - 1
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as hci:
-        hci.connect(str(hci_sock))
-        try:
-            return fcntl.fcntl(hci.fileno(), fcntl.F_DUPFD_CLOEXEC, fd)
-        except OSError as exc:
-            if exc.errno != errno.EMFILE:
-                raise
-            raise RuntimeError(
-                f"descriptor {fd} for the UML guest is already open"
-            ) from exc
+    def _write_console(self, payload: bytes) -> None:
+        assert self._devices is not None and self._calendar is not None
+        self._devices.write_console(payload)
+        self._calendar.devices_changed()
 
 
 __all__ = ["UmlGuest"]

@@ -25,11 +25,7 @@ from tests.integration.uml.bumble_peer import (
     advertising_data,
     open_bumble_device,
 )
-from tests.integration.uml.common import (
-    add_uml_controller,
-    attach_hci_uart,
-    open_uml_guest,
-)
+from tests.integration.uml.common import add_uml_controller, open_uml_guest
 
 from bsworld.devices import BSController
 from bsworld.topology import BluetoothTopology
@@ -71,8 +67,6 @@ async def _open_bluez(
             "--configfile=/opt/bsworld/bluez.conf &",
         )
     )
-    await attach_hci_uart(guest)
-
     await guest.shell.run("bluetoothctl")
     await guest.wait_log(r"Agent registered", timeout=10)
     await guest.shell.run("list")

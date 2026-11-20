@@ -23,7 +23,9 @@ import pytest
 from tests.unit.helpers import bind_test_clock
 
 from bsworld.runtime.pipe import LogCapture
+from bsworld.uml import scheduler as scheduler_module
 from bsworld.uml import timetravel
+from bsworld.uml.scheduler import TimeTravelScheduler
 from bsworld.uml.timetravel import TimeTravelCalendar, _Op
 
 _MESSAGE = timetravel._MESSAGE
@@ -143,7 +145,9 @@ def guest(calendar):
 
 
 def _connect(calendar, loop, console, clock) -> None:
-    calendar.connect(loop, clock, alive=lambda: True, console=console)
+    calendar.connect(
+        TimeTravelScheduler(loop, clock), alive=lambda: True, console=console
+    )
 
 
 def _us(value: int) -> float:
@@ -232,27 +236,86 @@ def test_request_within_the_current_microsecond_runs_without_a_timer(
     assert [timer.when for timer in loop.pending()] == [_us(5_000)]
 
 
+def test_virtio_notification_after_a_run_uses_the_next_microsecond(
+    calendar, loop, console, guest
+) -> None:
+    clock = SimpleNamespace(now_us=0)
+    requests = []
+
+    def notify():
+        if devices.has_notifications:
+            devices.has_notifications = False
+            devices.notifications_pending = True
+            requests.append(guest.send(_Op.GET))
+
+    def service(readable, writable):
+        if readable:
+            devices.notifications_pending = False
+
+    devices = SimpleNamespace(
+        read_fds=(),
+        transport_read_fds=(),
+        write_fds=(),
+        has_notifications=False,
+        notifications_pending=False,
+        service=service,
+        flush_notifications=notify,
+    )
+    guest.send(_Op.REQUEST, 2_000_768)
+    guest.send(_Op.WAIT, _WAIT_FOREVER)
+    calendar.connect(
+        TimeTravelScheduler(loop, clock),
+        alive=lambda: True,
+        console=console,
+        devices=devices,
+    )
+    guest.acks(2)
+
+    wait = guest.send(_Op.WAIT, _WAIT_FOREVER)
+    clock.now_us = 2_000
+    (turn,) = loop.pending()
+    turn.fire()
+    assert guest.receive() == (_Op.FREE_UNTIL, 1, 2_001_000)
+    assert guest.receive() == (_Op.RUN, 2, 2_000_768)
+    assert guest.acks(1) == [wait]
+
+    devices.has_notifications = True
+    calendar.devices_changed()
+    (io_ready,) = loop.pending()
+    io_ready.fire()
+    assert requests == []
+    (notification,) = loop.pending()
+    assert notification.when == _us(2_001)
+
+    clock.now_us = 2_001
+    notification.fire()
+    (get,) = requests
+    assert guest.receive() == (_Op.ACK, get, 2_001_000)
+    assert loop.pending() == []
+
+
 async def test_two_calendars_run_serially_at_the_same_simulated_time(
     tmp_path, monkeypatch
 ) -> None:
-    monkeypatch.setattr(timetravel, "_TIMEOUT", 1)
+    monkeypatch.setattr(scheduler_module, "UML_TIMEOUT", 1)
     loop = asyncio.get_running_loop()
     guests = {}
 
     with bind_test_clock(lambda: None), ExitStack() as resources:
         clock = loop.radio_selector.clock
-        for label, target_ns in (("first", 2_000_400), ("second", 2_000_900)):
-            calendar = TimeTravelCalendar(tmp_path / f"{label}.tt")
+        scheduler = TimeTravelScheduler(loop, clock)
+        for order, target_ns in ((1, 2_000_400), (0, 2_000_900)):
+            calendar = TimeTravelCalendar(tmp_path / f"{order}.tt", order=order)
             calendar.listen()
             resources.callback(calendar.close)
             guest = _Guest(calendar.path)
             resources.callback(guest.close)
             guest.sock.settimeout(1)
-            console = LogCapture.open(tmp_path / f"{label}.log")
+            console = LogCapture.open(tmp_path / f"{order}.log")
             resources.callback(console.stop)
             request = guest.send(_Op.REQUEST, target_ns)
             wait = guest.send(_Op.WAIT, _WAIT_FOREVER)
-            _connect(calendar, loop, console, clock)
+            calendar.connect(scheduler, alive=lambda: True, console=console)
             assert guest.acks(2) == [request, wait]
             guests[guest.sock] = (guest, target_ns)
 
@@ -260,6 +323,7 @@ async def test_two_calendars_run_serially_at_the_same_simulated_time(
             ready, _, _ = select.select(list(guests), [], [], 1)
             (first_sock,) = ready
             (second_sock,) = (sock for sock in guests if sock is not first_sock)
+            assert guests[first_sock][1] == 2_000_900
 
             for sock in (first_sock, second_sock):
                 guest, target_ns = guests[sock]
@@ -407,12 +471,14 @@ def test_guest_that_exits_before_connecting_fails_at_once(
 ) -> None:
     with pytest.raises(RuntimeError, match="exited before it connected"):
         calendar.connect(
-            loop, SimpleNamespace(now_us=0), alive=lambda: False, console=console
+            TimeTravelScheduler(loop, SimpleNamespace(now_us=0)),
+            alive=lambda: False,
+            console=console,
         )
 
 
 def test_silent_guest_times_out(calendar, loop, console, guest, monkeypatch) -> None:
-    monkeypatch.setattr(timetravel, "_TIMEOUT", 0.2)
+    monkeypatch.setattr(timetravel, "UML_TIMEOUT", 0.2)
     with pytest.raises(TimeoutError, match="did not yield"):
         _connect(calendar, loop, console, SimpleNamespace(now_us=0))
 
@@ -424,7 +490,7 @@ def test_guest_must_yield_even_when_it_keeps_requesting_time(
     monkeypatch.setattr(
         timetravel, "time", SimpleNamespace(monotonic=lambda: wall_clock.now)
     )
-    monkeypatch.setattr(timetravel, "_TIMEOUT", 2)
+    monkeypatch.setattr(timetravel, "UML_TIMEOUT", 2)
     answer = calendar._answer
 
     def answer_after_delay(op: int, seq: int, value: int) -> None:
@@ -445,7 +511,7 @@ def test_console_is_drained_while_the_guest_runs(
     calendar, loop, console, guest, monkeypatch
 ) -> None:
     # Without draining, the guest blocks on the full FIFO until the timeout.
-    monkeypatch.setattr(timetravel, "_TIMEOUT", 5)
+    monkeypatch.setattr(timetravel, "UML_TIMEOUT", 5)
     line = b"x" * 1023 + b"\n"
     lines = 256
     # Like UML in external time-travel mode: blocking writes, then WAIT.

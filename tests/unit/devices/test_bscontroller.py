@@ -16,6 +16,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import socket
+
 import pytest
 from bscontroller import EllisysCapture
 
@@ -100,6 +103,26 @@ async def test_controller_propagates_worker_failure_during_cleanup(
         await ctl.stop()
     assert worker.instances[0].closed
     await ctl.stop()
+
+
+async def test_hci_disconnect_drains_output_until_peer_eof(tmp_path):
+    ctl = _controller(tmp_path)
+    loop = asyncio.get_running_loop()
+    host, peer = socket.socketpair()
+    with host, peer:
+        host.setblocking(False)
+        peer.setblocking(False)
+        await loop.sock_sendall(peer, b"queued output")
+        ctl._disconnect_hci(host)
+        try:
+            async with asyncio.timeout(1):
+                assert await loop.sock_recv(peer, 1) == b""
+                await loop.sock_sendall(peer, b"final output")
+                peer.shutdown(socket.SHUT_WR)
+                while host.fileno() != -1:
+                    await asyncio.sleep(0)
+        finally:
+            await ctl.stop()
 
 
 async def test_controller_passes_capture_path_and_preserves_worker_defaults(

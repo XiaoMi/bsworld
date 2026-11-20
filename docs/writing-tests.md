@@ -66,7 +66,7 @@ The scheduler handles ready callbacks and I/O at the current simulated instant b
 
 Add one Controller per Guest before starting the topology. After startup, open each Guest with `bsworld.uml.UmlGuest` as a context manager.
 
-The Guest boots the supplied kernel with a read-only root filesystem and connects the Controller's H4 socket to `/dev/ttyS0`. Set `init` to an absolute path inside the Guest, such as `/init`.
+The Guest boots the supplied kernel with a read-only root filesystem. Virtio Bluetooth registers the Controller as `hci0`. Set `init` to an absolute path inside the Guest, such as `/init`.
 
 ```python
 from bsworld.uml import UmlGuest
@@ -84,8 +84,6 @@ with UmlGuest(
     log_subdir="uml/host",
 ) as guest:
     await guest.wait_log(r"^BSWORLD_UML_READY$")
-    await guest.shell.run("btattach -B /dev/ttyS0 -P h4 &")
-    await guest.wait_log(r"Device index 0 attached")
 ```
 
 Give each Guest its own label and Controller when testing several Guests. Each Guest has a separate console and time-travel socket. All Guests share the topology's clock and use no PHY device IDs of their own.
@@ -94,7 +92,7 @@ For instructions on preparing the test kernel and root filesystem, see the [UML 
 
 ## Process Shell Commands
 
-Once the Guest console is ready, send a command with `shell.run()`. It returns as soon as the line has been written to standard input. Use `wait_log()` or another observable condition to confirm the command's result.
+Once the Guest console is ready, send a command with `shell.run()`. Use `wait_log()` or another observable condition to confirm the command's result.
 
 ```python
 await dev.shell.run("...")

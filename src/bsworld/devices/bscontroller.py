@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import socket
 from dataclasses import dataclass, field
 from pathlib import Path
 from string import hexdigits
@@ -53,6 +55,9 @@ class BSController:
     config: ControllerConfig | None = None
     rf_pcap_file: Path | None = None
     _worker: RadioController | None = field(default=None, init=False, repr=False)
+    _closing_hci: dict[socket.socket, asyncio.AbstractEventLoop] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if self.public_address is not None:
@@ -111,10 +116,44 @@ class BSController:
                 self._worker = None
             raise
 
+    def _disconnect_hci(self, hci: socket.socket) -> None:
+        """End host input and drain Controller output until its endpoint closes."""
+        try:
+            hci.shutdown(socket.SHUT_WR)
+        except OSError:
+            hci.close()
+            return
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.add_reader(hci, self._drain_hci, hci)
+        except BaseException:
+            hci.close()
+            raise
+        self._closing_hci[hci] = loop
+
+    def _drain_hci(self, hci: socket.socket) -> None:
+        try:
+            if hci.recv(65536):
+                return
+        except BlockingIOError:
+            return
+        except OSError:
+            pass
+        self._close_hci(hci)
+
+    def _close_hci(self, hci: socket.socket) -> None:
+        loop = self._closing_hci.pop(hci)
+        if not loop.is_closed():
+            loop.remove_reader(hci)
+        hci.close()
+
     async def stop(self) -> None:
         """Release the worker and its transport resources."""
-        if self._worker is not None:
-            try:
+        try:
+            if self._worker is not None:
                 await self._worker.close()
-            finally:
-                self._worker = None
+        finally:
+            self._worker = None
+            for hci in tuple(self._closing_hci):
+                self._close_hci(hci)

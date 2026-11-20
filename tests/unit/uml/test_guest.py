@@ -6,7 +6,6 @@ from __future__ import annotations
 import asyncio
 import os
 import socket
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 from zlib import crc32
@@ -16,6 +15,7 @@ import pytest
 from bsworld.topology import BluetoothTopology
 from bsworld.uml import UmlGuest, timetravel
 from bsworld.uml import guest as guest_module
+from bsworld.uml.scheduler import TimeTravelScheduler
 
 
 @pytest.fixture
@@ -28,29 +28,61 @@ def model_guest(tmp_path, unit_env, monkeypatch):
 
     def claim(guest):
         events.append("claim")
-        return clock
+        return TimeTravelScheduler(asyncio.get_running_loop(), clock)
 
     def release(guest):
         events.append("release")
 
     class Calendar:
-        def __init__(self, path, *, on_failure):
+        def __init__(self, path, *, on_failure, order):
             self.path = path
             self.on_failure = on_failure
+            assert order == controller.controller_dev_id
 
         def listen(self):
             events.append("listen")
 
-        def connect(self, loop, guest_clock, *, alive, console):
-            assert loop is asyncio.get_running_loop()
-            assert guest_clock is clock
+        def connect(self, scheduler, *, alive, console, devices):
+            assert scheduler.clock is clock
             events.append("connect")
+
+        def devices_changed(self):
+            events.append("input ready")
 
         def close(self):
             events.append("close calendar")
 
-    def spawn(*args, **options):
-        assert len(options["pass_fds"]) == 1
+    class Devices:
+        read_fds = ()
+        transport_read_fds = ()
+        write_fds = ()
+        has_notifications = False
+        notifications_pending = False
+
+        def __init__(self, state_dir, name, hci_path, log):
+            self.arguments = (
+                f"virtio_uml.device={name}.bt:40",
+                f"virtio_uml.device={name}.con:3",
+            )
+
+        def listen(self):
+            events.append("listen devices")
+
+        def write_console(self, payload):
+            events.append(payload)
+
+        def service(self, readable, writable):
+            pass
+
+        def close(self, *, disconnect_hci):
+            assert disconnect_hci == controller._disconnect_hci
+            events.append("close devices")
+
+    def spawn(name, command, **options):
+        assert not options.get("pass_fds")
+        assert not options.get("stdin")
+        assert f"virtio_uml.device=uml-{controller.controller_dev_id}.bt:40" in command
+        assert f"virtio_uml.device=uml-{controller.controller_dev_id}.con:3" in command
         events.append("spawn")
         return proc
 
@@ -59,11 +91,7 @@ def model_guest(tmp_path, unit_env, monkeypatch):
         events.append("stop process")
 
     monkeypatch.setattr(guest_module, "TimeTravelCalendar", Calendar)
-    monkeypatch.setattr(
-        guest_module,
-        "_connect_controller",
-        lambda path: os.open(os.devnull, os.O_RDONLY),
-    )
+    monkeypatch.setattr(guest_module, "GuestVirtio", Devices)
     monkeypatch.setattr(topo, "_claim_uml_guest", claim)
     monkeypatch.setattr(topo, "_release_uml_guest", release)
     monkeypatch.setattr(topo.pm, "spawn", spawn)
@@ -93,12 +121,22 @@ async def test_guest_stops_process_before_closing_calendar(model_guest) -> None:
     guest, events, _ = model_guest
 
     with guest:
-        assert events == ["claim", "listen", "spawn", "connect"]
+        assert events == ["claim", "listen", "listen devices", "spawn", "connect"]
         capture = guest._pipe
 
-    assert events[4:] == ["stop process", "close calendar", "release"]
+    assert events[5:] == ["stop process", "close calendar", "close devices", "release"]
     assert capture.read_fd is None
-    assert guest.shell._proc is None
+    with pytest.raises(RuntimeError, match="shell input is not available"):
+        await guest.shell.run("echo closed")
+
+
+async def test_guest_routes_shell_input_to_virtio(model_guest) -> None:
+    guest, events, _ = model_guest
+
+    with guest:
+        await guest.shell.run_many(("echo first", "echo second"))
+
+        assert events[-2:] == [b"echo first\necho second\n", "input ready"]
 
 
 async def test_guest_rolls_back_a_spawned_process_after_handshake_failure(
@@ -117,9 +155,11 @@ async def test_guest_rolls_back_a_spawned_process_after_handshake_failure(
     assert events == [
         "claim",
         "listen",
+        "listen devices",
         "spawn",
         "stop process",
         "close calendar",
+        "close devices",
         "release",
     ]
     assert list(guest.topo.test_log_dir.rglob("*.fifo")) == []
@@ -163,7 +203,7 @@ async def test_guest_reports_a_calendar_socket_failure_once(
     monkeypatch.setattr(
         guest_module, "TimeTravelCalendar", timetravel.TimeTravelCalendar
     )
-    monkeypatch.setattr(timetravel, "_TIMEOUT", 1)
+    monkeypatch.setattr(timetravel, "UML_TIMEOUT", 1)
     spawn = guest.topo.pm.spawn
 
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
@@ -191,9 +231,7 @@ async def test_guest_reports_a_calendar_socket_failure_once(
                 await result
 
 
-async def test_failed_launch_releases_guest_resources(
-    tmp_path, unit_env, monkeypatch
-) -> None:
+async def test_failed_launch_releases_guest_resources(tmp_path, unit_env) -> None:
     topo = BluetoothTopology(unit_env, "sim", tmp_path / "log")
     controller = topo.add_controller()
     socket_dir = controller.hci_sock.parent
@@ -202,16 +240,12 @@ async def test_failed_launch_releases_guest_resources(
     topo._event_loop = asyncio.get_running_loop()
     topo._started = True
 
-    def unavailable(socket_path: Path) -> int:
-        raise ConnectionRefusedError(socket_path)
-
-    monkeypatch.setattr(guest_module, "_connect_controller", unavailable)
     guest = UmlGuest(
         topo, controller, kernel=tmp_path / "linux", init="/init", label="g"
     )
 
     for _ in range(2):
-        with pytest.raises(ConnectionRefusedError, match="hci0.sock"):
+        with pytest.raises(FileNotFoundError):
             guest.start()
         assert list(socket_dir.iterdir()) == []
         assert list(topo.test_log_dir.rglob("*.fifo")) == []

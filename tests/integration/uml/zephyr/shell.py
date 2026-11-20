@@ -7,13 +7,10 @@ import re
 from pathlib import Path
 from shlex import join
 
-from tests.integration.uml.common import attach_hci_uart
-
 from bsworld.uml import UmlGuest
 
 
 async def initialize_shell(guest: UmlGuest, program: Path) -> None:
-    await attach_hci_uart(guest)
     # The native_sim driver binds HCI_CHANNEL_USER on a powered-off device.
     command = join((str(program), "--bt-dev=hci0", "-rt"))
     await guest.shell.run(f"hciconfig hci0 down && exec {command}")

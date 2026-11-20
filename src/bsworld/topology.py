@@ -45,10 +45,10 @@ from .interference import (
 )
 from .log import close_log_file, open_log_file, warn
 from .runtime.proc import ProcessManager
+from .uml.scheduler import TimeTravelScheduler
 
 if TYPE_CHECKING:
     from bscontroller import ControllerConfig
-    from bscontroller.runtime.session import BabbleSimClock
 
     from .uml import UmlGuest
 
@@ -62,6 +62,9 @@ class BluetoothTopology:
     bsim: BabbleSimBackend = field(init=False)
     _event_loop: RadioEventLoop | None = field(default=None, init=False, repr=False)
     _uml_guests: list[UmlGuest] = field(default_factory=list, init=False, repr=False)
+    _uml_scheduler: TimeTravelScheduler | None = field(
+        default=None, init=False, repr=False
+    )
     _lifecycle_lock: asyncio.Lock = field(
         default_factory=asyncio.Lock, init=False, repr=False
     )
@@ -105,12 +108,14 @@ class BluetoothTopology:
             max_step_us=max_step_us,
         )
 
-    def _claim_uml_guest(self, guest: UmlGuest) -> BabbleSimClock:
+    def _claim_uml_guest(self, guest: UmlGuest) -> TimeTravelScheduler:
         clock = self.bsim.clock
+        loop = self._event_loop
         if (
             clock is None
             or not self._started
-            or self._event_loop is not asyncio.get_running_loop()
+            or loop is None
+            or loop is not asyncio.get_running_loop()
         ):
             raise RuntimeError(f"{guest.label}: start the topology before the guest")
         if guest.controller not in self.bsim.controllers:
@@ -121,8 +126,10 @@ class BluetoothTopology:
             raise ValueError(f"{guest.label}: UML guest label is already in use")
         if any(other.controller is guest.controller for other in self._uml_guests):
             raise ValueError(f"{guest.label}: Controller is already attached to a Host")
+        if self._uml_scheduler is None:
+            self._uml_scheduler = TimeTravelScheduler(loop, clock)
         self._uml_guests.append(guest)
-        return clock
+        return self._uml_scheduler
 
     def _release_uml_guest(self, guest: UmlGuest) -> None:
         if guest in self._uml_guests:
@@ -265,6 +272,7 @@ class BluetoothTopology:
                 guest.stop()
             except Exception as exc:
                 failures.append(exc)
+        self._uml_scheduler = None
         if self._event_loop is not None:
             try:
                 self._event_loop.unbind_clock()

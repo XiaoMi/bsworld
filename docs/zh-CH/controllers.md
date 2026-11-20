@@ -15,7 +15,7 @@ controller = topo.add_controller(public_address="F0:F1:F2:F3:F4:01")
 await topo.start()
 ```
 
-使用 UML Guest 时，BSWorld 将该 socket 接到 Guest 的 `/dev/ttyS0`。启动方式见[在 UML 中运行 Host](writing-tests.md#在-uml-中运行-host)。
+使用 UML Guest 时，BSWorld 将该 socket 接到 Guest 的 virtio Bluetooth Controller。启动方式见[在 UML 中运行 Host](writing-tests.md#在-uml-中运行-host)。
 
 | 参数 | 含义 |
 |---|---|

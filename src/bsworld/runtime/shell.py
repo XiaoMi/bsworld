@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from typing import TYPE_CHECKING, BinaryIO
 
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 
 class ProcessShell:
-    """Small wrapper around a child process stdin pipe.
+    """Write commands to a process stdin pipe or an in-process console.
 
     The object is intentionally platform-neutral. Zephyr shell, NuttX NSH, or
     another future firmware console can all consume line-oriented commands from
@@ -38,13 +38,20 @@ class ProcessShell:
         self.label = label
         self.enabled = enabled
         self._proc: Proc | None = None
+        self._writer: Callable[[bytes], None] | None = None
         self._write_lock = asyncio.Lock()
 
     def attach(self, proc: "Proc") -> None:
+        self.detach()
         self._proc = proc
+
+    def attach_writer(self, writer: Callable[[bytes], None]) -> None:
+        self.detach()
+        self._writer = writer
 
     def detach(self) -> None:
         self._proc = None
+        self._writer = None
 
     async def run(self, command: str) -> None:
         """Send one command line to the child process."""
@@ -55,10 +62,14 @@ class ProcessShell:
         if not commands:
             return
         async with self._write_lock:
-            stdin = self._stdin()
+            if not self.enabled:
+                raise RuntimeError(f"{self.label}: shell input is not enabled")
             payload = "".join(_as_line(command) for command in commands).encode()
             try:
-                await _write_all(stdin.fileno(), payload)
+                if self._writer is not None:
+                    self._writer(payload)
+                else:
+                    await _write_all(self._stdin().fileno(), payload)
             except (OSError, ValueError) as exc:
                 raise RuntimeError(f"{self.label}: shell input is closed") from exc
 
@@ -70,7 +81,8 @@ class ProcessShell:
         """Send command lines to a child that can read without an event loop."""
         if not commands:
             return
-        stdin = self._stdin()
+        if not self.enabled:
+            raise RuntimeError(f"{self.label}: shell input is not enabled")
         try:
             asyncio.get_running_loop()
         except RuntimeError:
@@ -79,14 +91,16 @@ class ProcessShell:
             raise RuntimeError(f"{self.label}: use await shell.run() in an event loop")
         payload = "".join(_as_line(command) for command in commands).encode()
         try:
-            stdin.write(payload)
-            stdin.flush()
+            if self._writer is not None:
+                self._writer(payload)
+            else:
+                stdin = self._stdin()
+                stdin.write(payload)
+                stdin.flush()
         except (OSError, ValueError) as exc:
             raise RuntimeError(f"{self.label}: shell input is closed") from exc
 
     def _stdin(self) -> BinaryIO:
-        if not self.enabled:
-            raise RuntimeError(f"{self.label}: shell input is not enabled")
         if self._proc is None or self._proc.popen.stdin is None:
             raise RuntimeError(f"{self.label}: shell input is not available")
         return self._proc.popen.stdin

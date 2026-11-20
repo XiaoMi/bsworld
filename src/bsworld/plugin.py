@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-from functools import partial
 from pathlib import Path
 
 import pytest
@@ -28,14 +27,11 @@ from bscontroller.runtime.event_loop import RadioEventLoop
 from .env import Env, resolve_run_identity
 from .topology import BluetoothTopology
 
-# The idle pytest loop can skip up to 10 ms of simulation time per PHY request.
-_PYTEST_MAX_STEP_US = 10_000
-
 
 def pytest_asyncio_loop_factories(config, item):  # noqa: ANN001, ARG001
     """Run every async test on a loop that can switch to BabbleSim time."""
 
-    return {"bsim": partial(RadioEventLoop, _PYTEST_MAX_STEP_US)}
+    return {"bsim": RadioEventLoop}
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

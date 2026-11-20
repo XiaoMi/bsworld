@@ -110,9 +110,9 @@ Each suite runs its Host in a UML Guest and tests it against Bumble on the same 
 
 ## Technical Architecture
 
-Each Host connects to its own BSController over H4 HCI. The Controllers, the pytest clock, and any configured interference sources share a BabbleSim PHY.
+Each Host has its own BSController. Bumble uses its Controller's H4 socket directly. UML Guests use Virtio Bluetooth, which BSWorld bridges to the corresponding H4 socket.
 
-Bumble runs in the pytest event loop. Each UML Guest runs in a separate process and receives simulation time from that loop through its own time-travel socket. A topology can run several Guests together.
+The Controllers, the pytest clock, and any configured interference sources share a BabbleSim PHY. Bumble runs in the pytest event loop. Each UML Guest runs in a separate process and receives simulation time from that loop through its own time-travel socket. A topology can run several Guests together.
 
 <div align="center"><img src="docs/images/babblesim_arch.svg" alt="Bluetooth Hosts connected through BSController workers to a shared BabbleSim PHY" width="80%"><br><em>Figure 1: BSWorld architecture</em><br><br></div>
 

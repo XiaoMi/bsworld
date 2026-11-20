@@ -100,13 +100,14 @@ pytest tests/integration/uml --require-integration -n auto -q
 
 ## Guest 运行机制
 
-Guest 从只读根文件系统启动。`/init` 挂载可写的运行目录并启动 shell，测试通过 UML 进程的标准输入和输出与 shell 交互。启动步骤见 [init.sh](../../../components/uml/init.sh)。
+Guest 从只读根文件系统启动。`/init` 挂载可写的运行目录，并在 virtio 控制台启动 shell。启动步骤见 [init.sh](../../../components/uml/init.sh)。
 
-每个 Guest 通过 `/dev/ttyS0` 上的 H4 连接接入对应的 Controller。测试使用 `btattach -B /dev/ttyS0 -P h4` 将 Controller 注册为 `hci0`。
+Virtio Bluetooth 将每个 Guest 的 Controller 注册为 `hci0`。BSWorld 在 Guest 与 Controller 的 H4 socket 之间转发 HCI 报文。
 
-pytest 的事件循环通过 `time-travel=ext` 调度 Guest。Guest 可以在当前 BabbleSim 微秒内自行推进时钟，测试时钟持有 PHY 调度权，直到 Guest 交回控制权。
+pytest 的事件循环通过 `time-travel=ext` 调度 Guest。同一仿真微秒内到期的 Guest 按 Controller ID 依次运行。测试时钟持有 PHY 调度权，直到当前 Guest 交回控制权。
 
-控制台和串口输入在 Guest 的周期 tick 到来时处理。BabbleSim 设备编号分配给 Controller、测试时钟和配置的干扰源。
+Guest 在空闲时停止调度 tick。收到 HCI 报文或控制台输入时，virtio 通知触发 Guest 的调度请求。
+
 
 BSWorld 根据各 Guest 的标签生成测试种子，并通过环境变量 `UML_RANDOM_SEED` 将无符号十进制种子传给 UML 内核。
 
