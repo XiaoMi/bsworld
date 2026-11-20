@@ -104,7 +104,9 @@ Guest 从只读根文件系统启动。`/init` 挂载可写的运行目录并启
 
 每个 Guest 通过 `/dev/ttyS0` 上的 H4 连接接入对应的 Controller。测试使用 `btattach -B /dev/ttyS0 -P h4` 将 Controller 注册为 `hci0`。
 
-pytest 的事件循环通过 `time-travel=ext` 推进各 Guest 的时钟。Guest 运行时仿真时间暂停，控制台和串口输入在 Guest 的周期 tick 到来时处理。BabbleSim 设备编号分配给 Controller、测试时钟和配置的干扰源。
+pytest 的事件循环通过 `time-travel=ext` 调度 Guest。Guest 可以在当前 BabbleSim 微秒内自行推进时钟，测试时钟持有 PHY 调度权，直到 Guest 交回控制权。
+
+控制台和串口输入在 Guest 的周期 tick 到来时处理。BabbleSim 设备编号分配给 Controller、测试时钟和配置的干扰源。
 
 BSWorld 根据各 Guest 的标签生成测试种子，并通过环境变量 `UML_RANDOM_SEED` 将无符号十进制种子传给 UML 内核。
 

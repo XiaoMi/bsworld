@@ -178,18 +178,30 @@ def test_request_is_due_at_its_microsecond_and_resumed_at_its_nanosecond(
     (timer,) = loop.pending()
     assert timer.when == _us(2_000)
 
-    # The guest acknowledges RUN, reads its clock and waits again.
+    # The guest acknowledges the grant and requests the next microsecond.
+    guest.send(_Op.ACK)
     guest.send(_Op.ACK)
     get = guest.send(_Op.GET)
-    guest.send(_Op.REQUEST, 3_000_000)
-    guest.send(_Op.WAIT, _WAIT_FOREVER)
+    request = guest.send(_Op.REQUEST, 2_001_000)
+    wait = guest.send(_Op.WAIT, _WAIT_FOREVER)
     clock.now_us = 2_000
     timer.fire()
 
-    assert guest.receive() == (_Op.RUN, 1, 2_000_999)
+    assert guest.receive() == (_Op.FREE_UNTIL, 1, 2_001_000)
+    assert guest.receive() == (_Op.RUN, 2, 2_000_999)
     assert guest.receive() == (_Op.ACK, get, 2_000_999)
-    guest.acks(2)
-    assert [timer.when for timer in loop.pending()] == [_us(3_000)]
+    assert guest.acks(2) == [request, wait]
+    (next_timer,) = loop.pending()
+    assert next_timer.when == _us(2_001)
+
+    wait = guest.send(_Op.WAIT, _WAIT_FOREVER)
+    clock.now_us = 2_001
+    next_timer.fire()
+
+    assert guest.receive() == (_Op.FREE_UNTIL, 3, 2_002_000)
+    assert guest.receive() == (_Op.RUN, 4, 2_001_000)
+    assert guest.acks(1) == [wait]
+    assert loop.pending() == []
 
 
 def test_request_within_the_current_microsecond_runs_without_a_timer(
@@ -199,13 +211,15 @@ def test_request_within_the_current_microsecond_runs_without_a_timer(
     guest.send(_Op.REQUEST, 2_000_400)
     guest.send(_Op.WAIT, _WAIT_FOREVER)
     guest.send(_Op.ACK)
+    guest.send(_Op.ACK)
     guest.send(_Op.REQUEST, 5_000_000)
     guest.send(_Op.WAIT, _WAIT_FOREVER)
 
     _connect(calendar, loop, console, clock)
 
     guest.acks(2)
-    assert guest.receive() == (_Op.RUN, 1, 2_000_400)
+    assert guest.receive() == (_Op.FREE_UNTIL, 1, 2_001_000)
+    assert guest.receive() == (_Op.RUN, 2, 2_000_400)
     guest.acks(2)
     assert [timer.when for timer in loop.pending()] == [_us(5_000)]
 
@@ -230,7 +244,8 @@ def test_each_request_replaces_the_previous_one(
     guest.send(_Op.WAIT, _WAIT_FOREVER)
     clock.now_us = resumed_ns // 1_000
     timer.fire()
-    assert guest.receive() == (_Op.RUN, 1, resumed_ns)
+    assert guest.receive() == (_Op.FREE_UNTIL, 1, resumed_ns + 1_000)
+    assert guest.receive() == (_Op.RUN, 2, resumed_ns)
 
 
 def test_wait_without_a_request_arms_no_timer(calendar, loop, console, guest) -> None:
@@ -241,23 +256,19 @@ def test_wait_without_a_request_arms_no_timer(calendar, loop, console, guest) ->
     assert list(loop.readers) == [calendar._conn]
 
 
-def test_suspend_cancels_the_timer_and_keeps_the_guest_connected(
-    calendar, loop, console, guest
+def test_reads_a_frame_across_short_socket_reads(
+    calendar, loop, console, guest, monkeypatch
 ) -> None:
-    guest.send(_Op.REQUEST, 5_000_000)
-    guest.send(_Op.WAIT, _WAIT_FOREVER)
+    def short_read(fd: int, size: int) -> bytes:
+        return os.read(fd, min(size, 5))
+
+    monkeypatch.setattr(timetravel, "os", SimpleNamespace(read=short_read))
+    request = guest.send(_Op.REQUEST, 5_000_000)
+    wait = guest.send(_Op.WAIT, _WAIT_FOREVER)
     _connect(calendar, loop, console, SimpleNamespace(now_us=1_000))
-    guest.acks(2)
-    (timer,) = loop.pending()
 
-    calendar.suspend()
-    # A handle that fires anyway resumes nothing.
-    timer.fire()
-
-    assert timer.cancelled
-    guest.sock.settimeout(0.2)
-    with pytest.raises(TimeoutError):
-        guest.sock.recv(1)
+    assert guest.acks(2) == [request, wait]
+    assert [timer.when for timer in loop.pending()] == [_us(5_000)]
 
 
 def test_close_disconnects_the_guest(calendar, loop, console, guest) -> None:

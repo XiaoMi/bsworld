@@ -45,9 +45,6 @@ def model_guest(tmp_path, unit_env, monkeypatch):
             assert guest_clock is clock
             events.append("connect")
 
-        def suspend(self):
-            events.append("suspend")
-
         def close(self):
             events.append("close calendar")
 
@@ -91,14 +88,14 @@ async def test_guest_passes_label_derived_seed(model_guest, monkeypatch) -> None
     assert os.environ["UML_RANDOM_SEED"] == "0"
 
 
-async def test_guest_suspends_calendar_before_stopping_process(model_guest) -> None:
+async def test_guest_stops_process_before_closing_calendar(model_guest) -> None:
     guest, events, _ = model_guest
 
     with guest:
         assert events == ["claim", "listen", "spawn", "connect"]
         capture = guest._pipe
 
-    assert events[4:] == ["suspend", "stop process", "close calendar", "release"]
+    assert events[4:] == ["stop process", "close calendar", "release"]
     assert capture.read_fd is None
     assert guest.shell._proc is None
 
@@ -120,7 +117,6 @@ async def test_guest_rolls_back_a_spawned_process_after_handshake_failure(
         "claim",
         "listen",
         "spawn",
-        "suspend",
         "stop process",
         "close calendar",
         "release",
