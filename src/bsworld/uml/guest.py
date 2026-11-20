@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import asyncio
+import errno
+import fcntl
 import os
 import resource
 import socket
@@ -184,8 +186,9 @@ class UmlGuest:
             cleanup.callback(self.shell.detach)
             if self._calendar is not None:
                 calendar, self._calendar = self._calendar, None
+                # UML panics on calendar EOF. Stop it synchronously before
+                # closing the socket and returning to the event loop.
                 cleanup.callback(calendar.close)
-                calendar.suspend()
             if self._proc is not None:
                 proc, self._proc = self._proc, None
                 self.topo.pm.stop(proc)
@@ -248,11 +251,13 @@ def _connect_controller(hci_sock: Path) -> int:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as hci:
         hci.connect(str(hci_sock))
         try:
-            os.fstat(fd)
-        except OSError:
-            os.dup2(hci.fileno(), fd, inheritable=False)
-            return fd
-    raise RuntimeError(f"descriptor {fd} for the UML guest is already open")
+            return fcntl.fcntl(hci.fileno(), fcntl.F_DUPFD_CLOEXEC, fd)
+        except OSError as exc:
+            if exc.errno != errno.EMFILE:
+                raise
+            raise RuntimeError(
+                f"descriptor {fd} for the UML guest is already open"
+            ) from exc
 
 
 __all__ = ["UmlGuest"]

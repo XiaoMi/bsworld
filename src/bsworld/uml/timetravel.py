@@ -1,14 +1,7 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-"""Grant User Mode Linux its simulated time from the pytest event loop.
-
-A UML kernel booted with ``time-travel=ext:<socket>`` asks this calendar for
-every advance of its clock (include/uapi/linux/um_timetravel.h). A requested
-time becomes an asyncio timer on the BabbleSim-bound loop, and the loop does
-not advance while the guest runs. The guest therefore consumes no simulated
-time and runs at the same simulated instants on every run.
-"""
+"""Grant User Mode Linux simulated time on the BabbleSim-bound pytest loop."""
 
 from __future__ import annotations
 
@@ -57,12 +50,12 @@ class TimeTravelCalendar:
 
     BabbleSim counts microseconds while UML counts nanoseconds. A guest that
     asks to run at T is resumed when simulation time reaches the microsecond
-    containing T, and is handed T itself: UML requires RUN to carry exactly
-    the requested time. The guest is thus never behind simulation time and
-    less than a microsecond ahead of it.
+    containing T, and RUN carries the requested T. FREE_UNTIL lets the guest
+    handle its own events strictly before the next microsecond boundary.
+    The pytest loop holds its PHY turn until the guest yields.
 
-    The guest only talks while it runs. Its serial line and console have no
-    time-travel interrupt, so a waiting guest sends nothing until RUN.
+    The guest's serial line and console use ordinary interrupts, so a waiting
+    guest sends nothing until RUN.
 
     The calendar holds the event loop while the guest runs, so it also drains
     the guest's console: UML writes its output blocking in this mode, and a
@@ -79,11 +72,10 @@ class TimeTravelCalendar:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._clock: BsimClock | None = None
         self._console: LogCapture | None = None
-        # The guest's clock: the last time it was given, in nanoseconds.
+        # Last time granted by the calendar, in nanoseconds.
         self._guest_ns = 0
         self._request_ns: int | None = None
         self._timer: asyncio.TimerHandle | None = None
-        self._suspended = False
         self._seq = 0
 
     def listen(self) -> None:
@@ -135,17 +127,10 @@ class TimeTravelCalendar:
         self._serve_until_wait()
         loop.add_reader(self._conn, self._on_readable)
 
-    def suspend(self) -> None:
-        """Leave the waiting guest where it is, before the loop is unbound.
-
-        The connection stays open: a guest whose calendar disconnects panics
-        and prints, while a suspended one waits silently until it is killed.
-        """
-        self._suspended = True
-        self._cancel_timer()
-
     def close(self) -> None:
-        self._cancel_timer()
+        if self._timer is not None:
+            self._timer.cancel()
+            self._timer = None
         if self._conn is not None:
             if self._loop is not None and not self._loop.is_closed():
                 self._loop.remove_reader(self._conn)
@@ -167,7 +152,7 @@ class TimeTravelCalendar:
         while True:
             op, seq, value = self._receive(deadline)
             if op == _Op.ACK:
-                # The guest acknowledging RUN.
+                # The guest acknowledges FREE_UNTIL and RUN.
                 continue
             if op != _Op.WAIT:
                 self._answer(op, seq, value)
@@ -184,39 +169,42 @@ class TimeTravelCalendar:
 
     def _answer(self, op: int, seq: int, value: int) -> None:
         if op == _Op.START:
-            # UML closes the two shared-memory fds it expects in this ACK even
-            # when none arrive, which would close its own stdin. /dev/null
-            # cannot be mapped, so the guest falls back to plain messages.
-            fds = [os.open(os.devnull, os.O_RDWR) for _ in range(2)]
+            # UML closes both fds after processing the START ACK. Sending
+            # /dev/null twice provides two descriptors and selects socket mode.
+            fd = os.open(os.devnull, os.O_RDWR)
             try:
-                self._send(_Op.ACK, seq, 0, fds)
+                self._send(_Op.ACK, seq, 0, [fd, fd])
             finally:
-                for fd in fds:
-                    os.close(fd)
-        elif op == _Op.REQUEST:
+                os.close(fd)
+            return
+
+        reply = 0
+        if op == _Op.REQUEST:
             # Each request replaces the previous one.
             self._request_ns = value
-            self._send(_Op.ACK, seq, 0)
         elif op == _Op.GET:
-            self._send(_Op.ACK, seq, self._guest_ns)
+            reply = self._guest_ns
         elif op == _Op.GET_TOD:
-            self._send(_Op.ACK, seq, _TIME_OF_DAY_NS + self._guest_ns)
-        elif op in (_Op.UPDATE, _Op.BROADCAST):
-            # The guest only reports times it was given.
-            self._send(_Op.ACK, seq, 0)
-        else:
+            reply = _TIME_OF_DAY_NS + self._guest_ns
+        elif op not in (_Op.UPDATE, _Op.BROADCAST):
             raise RuntimeError(f"unexpected UML time-travel message: op={op}")
+        self._send(_Op.ACK, seq, reply)
 
     def _run(self) -> None:
         """Resume the guest at exactly the time it requested."""
-        assert self._request_ns is not None
+        assert self._conn is not None and self._request_ns is not None
         self._guest_ns, self._request_ns = self._request_ns, None
-        self._seq += 1
-        self._send(_Op.RUN, self._seq, self._guest_ns)
+        free_until = (self._guest_ns // _NS_PER_US + 1) * _NS_PER_US
+        free_seq = (self._seq + 1) % (1 << 32)
+        self._seq = (free_seq + 1) % (1 << 32)
+        self._conn.sendall(
+            _MESSAGE.pack(_Op.FREE_UNTIL, free_seq, free_until)
+            + _MESSAGE.pack(_Op.RUN, self._seq, self._guest_ns)
+        )
 
     def _on_due(self) -> None:
         self._timer = None
-        if self._suspended or self._conn is None:
+        if self._conn is None:
             return
         try:
             self._run()
@@ -229,7 +217,7 @@ class TimeTravelCalendar:
         if self._conn is None:
             return
         try:
-            data = self._conn.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT)
+            data = os.read(self._conn.fileno(), 1)
         except BlockingIOError:
             return
         except OSError:
@@ -238,7 +226,7 @@ class TimeTravelCalendar:
             self._fail(RuntimeError("UML guest sent a message while waiting"))
         else:
             self.close()
-            if not self._suspended and self._on_failure is not None:
+            if self._on_failure is not None:
                 self._on_failure(EOFError("UML guest exited while waiting"))
 
     def _fail(self, exc: Exception) -> None:
@@ -247,44 +235,40 @@ class TimeTravelCalendar:
         if self._on_failure is not None:
             self._on_failure(exc)
 
-    def _cancel_timer(self) -> None:
-        if self._timer is not None:
-            self._timer.cancel()
-            self._timer = None
-
     def _receive(self, deadline: float) -> tuple[int, int, int]:
+        """Read one frame and drain any console output while the guest runs."""
         assert self._conn is not None
+        fd = self._conn.fileno()
+        console = self._console
+        console_fd = console.read_fd if console is not None else None
+        watched = [fd]
+        if console_fd is not None:
+            watched.append(console_fd)
+
         data = b""
         while len(data) < _MESSAGE.size:
-            self._wait_readable(deadline)
-            chunk = self._conn.recv(_MESSAGE.size - len(data))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"UML guest did not yield within {_TIMEOUT:g} s")
+            readable = select.select(watched, [], [], remaining)[0]
+            if console is not None and console_fd in readable:
+                console.drain()
+            if fd not in readable:
+                continue
+            try:
+                # The socket timeout bounds writes. Read the nonblocking fd
+                # directly after select to avoid socket.recv polling again.
+                chunk = os.read(fd, _MESSAGE.size - len(data))
+            except BlockingIOError:
+                continue
             if not chunk:
                 raise EOFError("UML guest closed its time-travel socket")
             data += chunk
         return _MESSAGE.unpack(data)
 
-    def _wait_readable(self, deadline: float) -> None:
-        """Wait for the guest's next message, draining its console meanwhile.
-
-        Draining runs no event loop callback, so simulation time stands still.
-        """
-        assert self._conn is not None
-        console_fd = self._console.read_fd if self._console is not None else None
-        watched: list[socket.socket | int] = [self._conn]
-        if console_fd is not None:
-            watched.append(console_fd)
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(f"UML guest did not yield within {_TIMEOUT:g} s")
-            readable = select.select(watched, [], [], remaining)[0]
-            if console_fd is not None and console_fd in readable:
-                assert self._console is not None
-                self._console.drain()
-            if self._conn in readable:
-                return
-
-    def _send(self, op: int, seq: int, value: int, fds: list[int] | None = None):
+    def _send(
+        self, op: int, seq: int, value: int, fds: list[int] | None = None
+    ) -> None:
         assert self._conn is not None
         data = _MESSAGE.pack(op, seq, value)
         if fds:
