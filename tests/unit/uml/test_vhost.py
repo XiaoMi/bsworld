@@ -55,7 +55,8 @@ def test_split_queue_and_inband_call(tmp_path) -> None:
         resources.callback(os.close, fd)
         os.ftruncate(fd, 8192)
         memory = resources.enter_context(mmap.mmap(fd, 4096, offset=4096))
-        request(5, struct.pack("=IIQQQQ", 1, 0, 0x1000, 4096, 0x3000, 4096), fd)
+        memory_table = struct.pack("=IIQQQQ", 1, 0, 0x1000, 4096, 0x3000, 4096)
+        request(5, memory_table, fd)  # SET_MEM_TABLE
         response(5)
         request(8, _STATE.pack(1, 2))  # SET_VRING_NUM
         response(8)
@@ -80,10 +81,33 @@ def test_split_queue_and_inband_call(tmp_path) -> None:
         assert backend.pop(1) is None
         response(35)
 
-        backend.notify(1)
+        assert backend.has_notifications
+        assert not backend.notification_pending
+        assert backend.write_fds == ()
+        backend.flush_notifications()
+        assert not backend.has_notifications
         assert backend.notification_pending
         backend.service((), backend.write_fds)
         assert guest_calls.recv(20) == _HEADER.pack(4, 9, 8) + _STATE.pack(1, 0)
         guest_calls.sendall(_HEADER.pack(4, 5, 8) + _ACK)
         backend.service(backend.read_fds)
         assert not backend.notification_pending
+
+        # Leave a completed buffer's notification unsent when replacing its ring.
+        struct.pack_into("<HHHH", memory, 0x200, 0, 2, 0, 0)
+        assert request(35, _STATE.pack(1, 0)) == (1,)
+        buffer = backend.pop(1)
+        assert buffer is not None
+        backend.complete(1, buffer, buffer.write(b"again"))
+        response(35)
+        assert backend.has_notifications
+        assert not backend.notification_pending
+
+        request(18, _STATE.pack(1, 0))  # SET_VRING_ENABLE
+        response(18)
+        request(5, memory_table, fd)  # SET_MEM_TABLE
+        response(5)
+        assert not backend.has_notifications
+        assert not backend.notification_pending
+        backend.flush_notifications()
+        assert backend.write_fds == ()
