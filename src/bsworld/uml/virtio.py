@@ -44,8 +44,6 @@ class GuestVirtio:
         self._hci_input: deque[bytes] = deque()
         self._hci_output = bytearray()
         self._console_input = bytearray()
-        self._bt_notify: set[int] = set()
-        self._console_notify = False
 
     @property
     def arguments(self) -> tuple[str, str]:
@@ -100,7 +98,7 @@ class GuestVirtio:
 
     @property
     def has_notifications(self) -> bool:
-        return bool(self._bt_notify or self._console_notify)
+        return self._bluetooth.has_notifications or self._console.has_notifications
 
     @property
     def notifications_pending(self) -> bool:
@@ -110,12 +108,8 @@ class GuestVirtio:
 
     def flush_notifications(self) -> None:
         """Send completions when the calendar can schedule the resulting IRQs."""
-        for index in sorted(self._bt_notify):
-            self._bluetooth.notify(index)
-        self._bt_notify.clear()
-        if self._console_notify:
-            self._console.notify(_CONSOLE_RX)
-            self._console_notify = False
+        self._bluetooth.flush_notifications()
+        self._console.flush_notifications()
 
     def write_console(self, payload: bytes) -> None:
         self._console_input.extend(payload)
@@ -166,21 +160,19 @@ class GuestVirtio:
         while (buffer := self._bluetooth.pop(_BT_TX)) is not None:
             self._hci_output.extend(buffer.read())
             self._bluetooth.complete(_BT_TX, buffer, 0)
-            self._bt_notify.add(_BT_TX)
 
     def _drain_console(self) -> None:
         self._log.drain()
         while (buffer := self._console.pop(_CONSOLE_TX)) is not None:
             self._log.record(buffer.read())
             # Linux hvc spins for this used-ring entry with interrupts disabled.
-            self._console.complete(_CONSOLE_TX, buffer, 0)
+            self._console.complete(_CONSOLE_TX, buffer, 0, notify=False)
 
     def _fill_bluetooth(self) -> None:
         while self._hci_input and (buffer := self._bluetooth.pop(_BT_RX)) is not None:
             # The driver expects one whole H4 packet per receive descriptor.
             length = buffer.write(self._hci_input.popleft())
             self._bluetooth.complete(_BT_RX, buffer, length)
-            self._bt_notify.add(_BT_RX)
 
     def _fill_console(self) -> None:
         while (
@@ -192,4 +184,3 @@ class GuestVirtio:
                 raise ValueError("Virtio console has an empty input buffer")
             del self._console_input[:length]
             self._console.complete(_CONSOLE_RX, buffer, length)
-            self._console_notify = True

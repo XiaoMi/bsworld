@@ -1,7 +1,7 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-"""Vhost-user split queues for UML Bluetooth and console devices."""
+"""Vhost-user socket protocol for UML devices."""
 
 from __future__ import annotations
 
@@ -10,20 +10,18 @@ import os
 import socket
 import struct
 from collections.abc import Collection
-from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
 
-# Vhost-user uses native byte order. Modern virtqueues are little endian.
+from .virtqueue import GuestMemory, VhostBuffer, Virtqueue
+
+# Vhost-user messages use native byte order.
 _HEADER = struct.Struct("=III")
 _U64 = struct.Struct("=Q")
 _STATE = struct.Struct("=II")
 _RING_ADDR = struct.Struct("=IIQQQQ")
 _REGION = struct.Struct("=QQQQ")
 _CONFIG = struct.Struct("=III")
-_INDEX = struct.Struct("<H")
-_DESCRIPTOR = struct.Struct("<QIHH")
-_USED_ENTRY = struct.Struct("<II")
 
 _VERSION = 1
 _REPLY = 1 << 2
@@ -32,8 +30,6 @@ _FEATURES = (1 << 30) | (1 << 32)  # PROTOCOL_FEATURES and VERSION_1
 _NOTIFY_FEATURES = (1 << 3) | (1 << 5) | (1 << 14)  # ACK, BACKEND_REQ, INBAND
 _CONFIG_FEATURE = 1 << 9
 _BACKEND_VRING_CALL = 4
-_DESC_NEXT = 1 << 0
-_DESC_WRITE = 1 << 1
 _MAX_PAYLOAD = 512
 
 
@@ -115,127 +111,6 @@ class _Channel:
             del self.outgoing[:sent]
 
 
-@dataclass(slots=True)
-class _Memory:
-    mapping: mmap.mmap
-    guest_base: int
-    user_base: int
-
-    def translate(self, addr: int, size: int, *, user: bool = False) -> int:
-        offset = addr - (self.user_base if user else self.guest_base)
-        if offset < 0 or offset + size > len(self.mapping):
-            raise ValueError("virtqueue address outside guest memory")
-        return offset
-
-
-@dataclass(frozen=True, slots=True)
-class VhostBuffer:
-    """One descriptor chain removed from a guest's available ring."""
-
-    _mapping: mmap.mmap
-    _head: int
-    _segments: tuple[tuple[int, int], ...]
-    _writable: bool
-
-    @property
-    def capacity(self) -> int:
-        return sum(size for _, size in self._segments) if self._writable else 0
-
-    def read(self) -> bytes:
-        if self._writable:
-            raise ValueError("cannot read a guest receive buffer")
-        return b"".join(self._mapping[ptr : ptr + size] for ptr, size in self._segments)
-
-    def write(self, data: bytes | bytearray) -> int:
-        if not self._writable or len(data) > self.capacity:
-            raise ValueError("data does not fit in the guest receive buffer")
-        offset = 0
-        for ptr, capacity in self._segments:
-            size = min(capacity, len(data) - offset)
-            self._mapping[ptr : ptr + size] = data[offset : offset + size]
-            offset += size
-            if offset == len(data):
-                break
-        return offset
-
-
-@dataclass(slots=True)
-class _Virtqueue:
-    size: int = 0
-    next_available: int = 0
-    addresses: tuple[int, int, int] | None = None
-    enabled: bool = False
-    started: bool = False
-    outstanding: dict[int, VhostBuffer] = field(default_factory=dict)
-
-    def setup(self, memory: _Memory, desc: int, used: int, avail: int) -> None:
-        if not self.size:
-            raise ValueError("virtqueue addresses arrived before its size")
-        self.addresses = (
-            memory.translate(desc, _DESCRIPTOR.size * self.size, user=True),
-            memory.translate(avail, 4 + _INDEX.size * self.size, user=True),
-            memory.translate(used, 4 + _USED_ENTRY.size * self.size, user=True),
-        )
-
-    def pop(self, memory: _Memory) -> VhostBuffer | None:
-        if not self.enabled or not self.started or self.addresses is None:
-            return None
-        desc, avail, _ = self.addresses
-        available = _INDEX.unpack_from(memory.mapping, avail + 2)[0]
-        count = (available - self.next_available) & 0xFFFF
-        if not count:
-            return None
-        if count + len(self.outstanding) > self.size:
-            raise ValueError("virtqueue available index exceeds its size")
-        slot = self.next_available % self.size
-        head = _INDEX.unpack_from(memory.mapping, avail + 4 + _INDEX.size * slot)[0]
-        if head in self.outstanding:
-            raise ValueError("guest reused a pending virtqueue buffer")
-
-        index = head
-        seen = set()
-        segments = []
-        writable = None
-        while True:
-            if index >= self.size or index in seen:
-                raise ValueError("invalid virtqueue descriptor chain")
-            seen.add(index)
-            addr, length, flags, index = _DESCRIPTOR.unpack_from(
-                memory.mapping, desc + index * _DESCRIPTOR.size
-            )
-            segment_writable = bool(flags & _DESC_WRITE)
-            if flags & ~(_DESC_NEXT | _DESC_WRITE) or (
-                writable is not None and writable != segment_writable
-            ):
-                raise ValueError("unsupported virtqueue descriptor flags")
-            writable = segment_writable
-            segments.append((memory.translate(addr, length), length))
-            if not flags & _DESC_NEXT:
-                break
-
-        buffer = VhostBuffer(memory.mapping, head, tuple(segments), writable)
-        self.outstanding[head] = buffer
-        self.next_available = (self.next_available + 1) & 0xFFFF
-        return buffer
-
-    def complete(self, buffer: VhostBuffer, length: int) -> None:
-        if self.outstanding.get(buffer._head) is not buffer:
-            raise ValueError("buffer does not belong to the pending virtqueue")
-        if not 0 <= length <= buffer.capacity:
-            raise ValueError("invalid virtqueue completion length")
-        assert self.addresses is not None
-        _, _, used = self.addresses
-        index = _INDEX.unpack_from(buffer._mapping, used + 2)[0]
-        _USED_ENTRY.pack_into(
-            buffer._mapping,
-            used + 4 + (index % self.size) * _USED_ENTRY.size,
-            buffer._head,
-            length,
-        )
-        _INDEX.pack_into(buffer._mapping, used + 2, (index + 1) & 0xFFFF)
-        del self.outstanding[buffer._head]
-
-
 class VhostUserBackend:
     """One UML virtio device with two queues and in-band notifications."""
 
@@ -248,12 +123,16 @@ class VhostUserBackend:
         self._listener: socket.socket | None = None
         self._connection: _Channel | None = None
         self._calls: _Channel | None = None
-        self._memory: _Memory | None = None
-        self._queues = (_Virtqueue(), _Virtqueue())
+        self._memory: GuestMemory | None = None
+        self._queues = (Virtqueue(), Virtqueue())
+        self._interrupts: set[int] = set()
         # Keep one call outstanding on the reply stream. New calls for the
         # same queue can share a notification until it is sent.
         self._calling = False
         self._pending_calls: dict[int, None] = {}
+        self.read_fds: tuple[int, ...] = ()
+        self.write_fds: tuple[int, ...] = ()
+        self._watched: frozenset[int] = frozenset()
 
     def listen(self) -> None:
         self.path.unlink(missing_ok=True)
@@ -266,36 +145,39 @@ class VhostUserBackend:
             listener.close()
             raise
         self._listener = listener
+        self._refresh_fds()
 
     def close(self) -> None:
         for channel in (self._listener, self._connection, self._calls):
             if channel is not None:
                 channel.close()
         self._listener = self._connection = self._calls = None
+        self._refresh_fds()
+        self._interrupts.clear()
         self._pending_calls.clear()
         self._calling = False
         if self._memory is not None:
             self._memory.mapping.close()
             self._memory = None
-        self._queues = (_Virtqueue(), _Virtqueue())
+        self._queues = (Virtqueue(), Virtqueue())
         self.path.unlink(missing_ok=True)
 
-    @property
-    def read_fds(self) -> tuple[int, ...]:
+    def _refresh_fds(self) -> None:
+        channels = (self._connection, self._calls)
         listener = self._listener if self._connection is None else None
-        return tuple(
-            channel.fileno()
-            for channel in (listener, self._connection, self._calls)
-            if channel is not None
+        self.read_fds = tuple(
+            channel.fileno() for channel in (listener, *channels) if channel is not None
         )
-
-    @property
-    def write_fds(self) -> tuple[int, ...]:
-        return tuple(
+        self.write_fds = tuple(
             channel.fileno()
-            for channel in (self._connection, self._calls)
+            for channel in channels
             if channel is not None and channel.outgoing
         )
+        self._watched = frozenset(self.read_fds)
+
+    @property
+    def has_notifications(self) -> bool:
+        return bool(self._interrupts)
 
     @property
     def notification_pending(self) -> bool:
@@ -307,32 +189,42 @@ class VhostUserBackend:
             return None
         return self._queue(index).pop(self._memory)
 
-    def complete(self, index: int, buffer: VhostBuffer, length: int) -> None:
+    def complete(
+        self, index: int, buffer: VhostBuffer, length: int, *, notify: bool = True
+    ) -> None:
         self._queue(index).complete(buffer, length)
+        if notify:
+            self._interrupts.add(index)
 
-    def notify(self, index: int) -> None:
-        """Queue an interrupt for a used ring without blocking for its ACK."""
+    def flush_notifications(self) -> None:
+        """Queue used-ring notifications when the caller can schedule them."""
+        if not self._interrupts:
+            return
         if self._calls is None:
             raise RuntimeError("UML has not established a vhost-user request channel")
-        self._queue(index)
-        self._pending_calls[index] = None
+        for index in sorted(self._interrupts):
+            self._pending_calls[index] = None
+        self._interrupts.clear()
         self._send_call()
+        self._refresh_fds()
 
     def _send_call(self) -> None:
         if self._calling or not self._pending_calls:
             return
         assert self._calls is not None
         index = next(iter(self._pending_calls))
-        del self._pending_calls[index]
         self._calls.send(
             _BACKEND_VRING_CALL, _VERSION | _NEED_REPLY, _STATE.pack(index, 0)
         )
+        del self._pending_calls[index]
         self._calling = True
 
     def service(
         self, readable: Collection[int], writable: Collection[int] = ()
     ) -> tuple[int, ...]:
         """Service ready sockets and return the queues kicked by the guest."""
+        if self._watched.isdisjoint(readable) and self._watched.isdisjoint(writable):
+            return ()
         listener = self._listener
         if (
             self._connection is None
@@ -346,9 +238,10 @@ class VhostUserBackend:
         for channel in (self._connection, self._calls):
             if channel is None:
                 continue
-            if channel.fileno() in writable:
+            fd = channel.fileno()
+            if fd in writable:
                 channel.flush()
-            if channel.fileno() not in readable:
+            if fd not in readable:
                 continue
             while (message := channel.receive()) is not None:
                 request, flags, payload, fds = message
@@ -363,6 +256,7 @@ class VhostUserBackend:
                 finally:
                     for fd in fds:
                         os.close(fd)
+        self._refresh_fds()
         return tuple(kicks)
 
     def _ack_call(
@@ -465,10 +359,11 @@ class VhostUserBackend:
         mapping = mmap.mmap(fd, length, access=mmap.ACCESS_WRITE, offset=offset)
         if self._memory is not None:
             self._memory.mapping.close()
-            self._queues = (_Virtqueue(), _Virtqueue())
-        self._memory = _Memory(mapping, guest, user)
+            self._queues = (Virtqueue(), Virtqueue())
+            self._interrupts.clear()
+        self._memory = GuestMemory(mapping, guest, user)
 
-    def _queue(self, index: int) -> _Virtqueue:
+    def _queue(self, index: int) -> Virtqueue:
         if not 0 <= index < len(self._queues):
             raise ValueError("invalid virtqueue index")
         return self._queues[index]
