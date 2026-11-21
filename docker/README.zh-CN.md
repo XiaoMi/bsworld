@@ -57,7 +57,7 @@ sudo docker run --rm \
     --out-dir /output --junitxml=/output/pytest.xml
 ```
 
-修改 Guest 可执行文件、构建输入或 Dockerfile 后，先[构建本地镜像](#构建)，再设置 `TEST_IMAGE=bsworld-linux:dev`。
+修改 Guest 可执行文件、UML Virtio 后端、构建输入或 Dockerfile 后，先[构建本地镜像](#构建)，再设置 `TEST_IMAGE=bsworld-linux:dev`。
 
 ### 选择测试套件
 

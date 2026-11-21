@@ -116,8 +116,14 @@ class UmlGuest:
             )
             calendar.listen()
             pipe = self._pipe = LogCapture.open(log_dir / f"{self.label}.log")
+            library = Path(
+                os.environ.get(
+                    "BSWORLD_UML_VHOST_LIBRARY",
+                    self.kernel.with_name("libbsworld_vhost.so"),
+                )
+            ).resolve()
             self._devices = devices = GuestVirtio(
-                state_dir, umid, self.controller.hci_sock, pipe
+                state_dir, umid, self.controller.hci_sock, pipe, library
             )
             devices.listen()
             env = os.environ.copy()

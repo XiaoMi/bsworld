@@ -59,7 +59,7 @@ def model_guest(tmp_path, unit_env, monkeypatch):
         has_notifications = False
         notifications_pending = False
 
-        def __init__(self, state_dir, name, hci_path, log):
+        def __init__(self, state_dir, name, hci_path, log, library):
             self.arguments = (
                 f"virtio_uml.device={name}.bt:40",
                 f"virtio_uml.device={name}.con:3",
@@ -231,7 +231,10 @@ async def test_guest_reports_a_calendar_socket_failure_once(
                 await result
 
 
-async def test_failed_launch_releases_guest_resources(tmp_path, unit_env) -> None:
+async def test_failed_launch_releases_guest_resources(
+    tmp_path, unit_env, uml_vhost_library, monkeypatch
+) -> None:
+    monkeypatch.setenv("BSWORLD_UML_VHOST_LIBRARY", str(uml_vhost_library))
     topo = BluetoothTopology(unit_env, "sim", tmp_path / "log")
     controller = topo.add_controller()
     socket_dir = controller.hci_sock.parent

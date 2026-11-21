@@ -45,9 +45,9 @@ export BSWORLD_UML_ROOTFS="$UML_DIR/rootfs"
 | `BSWORLD_UML_KERNEL` | 应用了测试种子补丁的 i386 UML 内核可执行文件 |
 | `BSWORLD_UML_ROOTFS` | 包含 `/init`、i386 程序和库的 Guest 根目录 |
 
-#### 编译内核
+#### 编译内核和 Virtio 后端
 
-获取 [Dockerfile](../../../docker/linux.Dockerfile) 固定的 Linux 版本，应用 [UML 测试种子补丁](../../../components/uml/random-seed.patch)，再编译 i386 UML 内核。
+获取 [Dockerfile](../../../docker/linux.Dockerfile) 固定的 Linux 版本，应用 [UML 测试种子补丁](../../../components/uml/random-seed.patch)，再编译 i386 UML 内核。Virtio 后端按宿主 Python 的架构编译，生成的共享库放在内核可执行文件旁。
 
 ```sh
 LINUX_REVISION=$(sed -n 's/^ARG LINUX_REVISION=//p' "$BSWORLD_ROOT/docker/linux.Dockerfile")
@@ -66,8 +66,10 @@ UML_SEED_PATCH="$BSWORLD_ROOT/components/uml/random-seed.patch"
   scripts/kconfig/merge_config.sh -m .config "$BSWORLD_ROOT/components/uml/linux.fragment"
   make ARCH=um SUBARCH=i386 olddefconfig
   make ARCH=um SUBARCH=i386 -j"$(nproc)"
-)
+) && make -C "$BSWORLD_ROOT/components/uml" OUT_DIR="$LINUX_DIR"
 ```
+
+如需使用其他目录下的共享库，将 `BSWORLD_UML_VHOST_LIBRARY` 设置为该库的完整路径。
 
 #### 组装 Guest 根文件系统
 
@@ -117,7 +119,7 @@ BSWorld 根据各 Guest 的标签生成测试种子，并通过环境变量 `UML
 
 用 `guest.shell.run()` 发命令，再用 `guest.wait_log()` 检查控制台输出。
 
-启动器和时钟调度代码位于 [bsworld.uml](../../../src/bsworld/uml)。运行 `pytest tests/unit/uml -q` 可检查其[单元测试](../../unit/uml)，无需构建 UML 内核和 BabbleSim。
+启动器和时钟调度代码位于 [bsworld.uml](../../../src/bsworld/uml)。运行 `pytest tests/unit/uml -q` 可执行[单元测试](../../unit/uml)。测试会使用宿主 C 编译器构建 Virtio 后端。
 
 ## 许可证
 

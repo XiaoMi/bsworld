@@ -57,7 +57,7 @@ sudo docker run --rm \
     --out-dir /output --junitxml=/output/pytest.xml
 ```
 
-If you change the Guest executables, their build inputs, or the Dockerfile, [build a local image](#build) and set `TEST_IMAGE=bsworld-linux:dev`.
+If you change the Guest executables, the UML Virtio backend, their build inputs, or the Dockerfile, [build a local image](#build) and set `TEST_IMAGE=bsworld-linux:dev`.
 
 ### Select a Suite
 

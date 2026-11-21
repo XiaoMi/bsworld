@@ -45,9 +45,9 @@ export BSWORLD_UML_ROOTFS="$UML_DIR/rootfs"
 | `BSWORLD_UML_KERNEL` | Executable i386 UML kernel built with the test seed patch |
 | `BSWORLD_UML_ROOTFS` | Guest root directory containing `/init`, the i386 programs and their libraries |
 
-#### Build the Kernel
+#### Build the Kernel and Virtio Backend
 
-Fetch the Linux revision pinned in the [Dockerfile](../../../docker/linux.Dockerfile), apply the [UML test seed patch](../../../components/uml/random-seed.patch), and build the i386 UML kernel.
+Fetch the Linux revision pinned in the [Dockerfile](../../../docker/linux.Dockerfile), apply the [UML test seed patch](../../../components/uml/random-seed.patch), and build the i386 UML kernel. Build the Virtio backend for the host Python architecture and place it beside the kernel executable.
 
 ```sh
 LINUX_REVISION=$(sed -n 's/^ARG LINUX_REVISION=//p' "$BSWORLD_ROOT/docker/linux.Dockerfile")
@@ -66,8 +66,10 @@ UML_SEED_PATCH="$BSWORLD_ROOT/components/uml/random-seed.patch"
   scripts/kconfig/merge_config.sh -m .config "$BSWORLD_ROOT/components/uml/linux.fragment"
   make ARCH=um SUBARCH=i386 olddefconfig
   make ARCH=um SUBARCH=i386 -j"$(nproc)"
-)
+) && make -C "$BSWORLD_ROOT/components/uml" OUT_DIR="$LINUX_DIR"
 ```
+
+To use a shared library from another directory, set `BSWORLD_UML_VHOST_LIBRARY` to its full path.
 
 #### Prepare the Guest Root Filesystem
 
@@ -117,7 +119,7 @@ Before `await topo.start()`, add one Controller for each Guest. Then call `open_
 
 Send commands with `guest.shell.run()` and check the console output with `guest.wait_log()`.
 
-The reusable launcher and calendar are in [bsworld.uml](../../../src/bsworld/uml). Run their [unit tests](../../unit/uml) with `pytest tests/unit/uml -q`, which requires no UML kernel or BabbleSim build.
+The reusable launcher and calendar are in [bsworld.uml](../../../src/bsworld/uml). Run the [unit tests](../../unit/uml) with `pytest tests/unit/uml -q`. The tests build the Virtio backend with the host C compiler.
 
 ## License
 

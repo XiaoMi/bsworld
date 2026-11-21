@@ -278,6 +278,10 @@ RUN cd "$LINUX_DIR" \
     && make ARCH=um SUBARCH=i386 -j"$BUILD_JOBS" \
     && strip --strip-unneeded -o /opt/uml/kernel linux
 
+FROM build-base AS uml-vhost
+COPY components/uml/Makefile components/uml/*.c components/uml/*.h /opt/bsworld-build/uml/
+RUN make -C /opt/bsworld-build/uml OUT_DIR=/tmp/uml-vhost
+
 # NimBLE Linux: the upstream 32-bit Host demo. Use the compiler directly in
 # place of the Makefile's ccache wrapper.
 FROM native-build AS nimble-linux
@@ -354,6 +358,7 @@ COPY --from=trouble-uml /opt/trouble/examples/linux/target/i686-unknown-linux-gn
 # TMPDIR avoids Docker's noexec mount on /dev/shm for UML's memory mapping.
 FROM runtime-base AS runtime-linux
 COPY --from=uml /opt/uml/kernel /opt/firmware/uml/linux
+COPY --from=uml-vhost /tmp/uml-vhost/libbsworld_vhost.so /opt/firmware/uml/
 COPY --from=uml-rootfs /opt/uml/rootfs /opt/firmware/uml/rootfs
 COPY --from=trouble-uml /opt/trouble/LICENSE-APACHE /opt/trouble/LICENSE-MIT /usr/share/doc/bsworld/trouble/
 ENV TMPDIR=/tmp \
@@ -366,6 +371,7 @@ ENV TMPDIR=/tmp \
     BSWORLD_UML_TROUBLE_CENTRAL_BIN=/opt/bsworld/trouble/ble_bas_central \
     BSWORLD_UML_TROUBLE_PERIPHERAL_BIN=/opt/bsworld/trouble/ble_bas_peripheral
 RUN bsworld-check-binaries "$BSWORLD_UML_KERNEL" \
+    && python -c 'import ctypes; ctypes.CDLL("/opt/firmware/uml/libbsworld_vhost.so")' \
     && test -x "$BSWORLD_UML_ROOTFS/init" \
     && for binary in "$BSWORLD_UML_KERNEL" \
             "$BSWORLD_UML_ROOTFS/usr/bin/bluetoothctl" \
