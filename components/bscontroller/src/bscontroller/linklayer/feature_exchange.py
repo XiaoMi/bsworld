@@ -91,18 +91,7 @@ class FeatureExchangeProcedure:
         """Fetch the requested extended pages after page 0 (Vol 6, Part B, 5.1.4.3)."""
         if not self.pending:
             return
-        if self._pages_requested is None or not (
-            self.connection.peer_features & LeFeatureMask.LL_EXTENDED_FEATURE_SET
-        ):
-            self.finish(ErrorCode.SUCCESS)
-            return
-        # Page 1 discovers the peer's MaxPage, even if the Host only needs page 0.
-        limit = (
-            1
-            if self._peer_max_page is None
-            else min(self._pages_requested, self._peer_max_page)
-        )
-        page = next((p for p in range(1, limit + 1) if p not in self._peer_pages), None)
+        page = self._next_page(self._pages_requested)
         if page is None:
             self.finish(ErrorCode.SUCCESS)
             return
@@ -121,12 +110,31 @@ class FeatureExchangeProcedure:
             + feature_page(local, page)
         )
 
+    def _next_page(self, pages: int | None) -> int | None:
+        if pages is None or not (
+            (self.connection.peer_features or 0) & LeFeatureMask.LL_EXTENDED_FEATURE_SET
+        ):
+            return None
+        # Page 1 discovers the peer's MaxPage, even if the Host only needs page 0.
+        limit = 1 if self._peer_max_page is None else min(pages, self._peer_max_page)
+        return next(
+            (page for page in range(1, limit + 1) if page not in self._peer_pages), None
+        )
+
+    def can_report_cached(self, pages: int | None) -> bool:
+        return (
+            self.connection.peer_features is not None and self._next_page(pages) is None
+        )
+
     def finish(self, status: int) -> None:
         if not self.pending:
             return
         self.context.finish()
         self._page_pending = None
-        if self._pages_requested is None:
+        self.report(status, self._pages_requested)
+
+    def report(self, status: int, pages: int | None) -> None:
+        if pages is None:
             self.owner.listener.on_remote_features(self.connection, status)
             return
         features = bytearray(FEATURE_SET_SIZE)

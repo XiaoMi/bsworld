@@ -285,6 +285,18 @@ class LeConnectionCommands(LeControllerContext):
             else 0,
         )
 
+    def on_hci_le_request_peer_sca_command(self, command):
+        """Read the peer's sleep clock accuracy (Core Vol 4, Part E, 7.8.108)."""
+        self._run_ll_request(
+            command, self.ll.request_peer_sca(command.connection_handle)
+        )
+
+    def on_hci_le_modify_sleep_clock_accuracy_command(self, command):
+        """Change the modeled sleep clock for testing (Core Vol 4, Part E, 7.8.94)."""
+        return hci.HCI_StatusReturnParameters(
+            self.ll.modify_sleep_clock_accuracy(command.action)
+        )
+
     def on_hci_le_enable_encryption_command(self, command):
         self._run_ll_request(
             command,

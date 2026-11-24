@@ -6,11 +6,12 @@
 import pytest
 
 from bscontroller.linklayer.power_control import (
+    POWER_REQUEST_INTERVAL_US,
     PathLossMonitoring,
     PathLossParameters,
     PathLossZone,
 )
-from bscontroller.radio.base import Phy
+from bscontroller.radio.base import Phy, Received
 from tests.unit.linklayer.llcp.harness import Opcode, hci, pdu
 
 
@@ -150,3 +151,74 @@ def test_maximum_path_loss_dwell_with_every_other_event_observed():
     for counter in range(2, 0x10002, 2):
         assert monitoring.observe(70, counter & 0xFFFF) is None
     assert monitoring.observe(70, 2) == PathLossZone.HIGH
+
+
+def test_path_loss_unavailable_is_reported_once_and_resets_zone_and_dwell():
+    monitoring = PathLossMonitoring()
+    monitoring.configure(PathLossParameters(60, 5, 30, 5, 4))
+    monitoring.set_enabled(True)
+    assert not monitoring.unavailable()
+
+    assert monitoring.observe(45, 0) == PathLossZone.MIDDLE
+    assert monitoring.observe(66, 1) is None
+    assert monitoring.unavailable()
+    assert not monitoring.unavailable()
+    assert monitoring.observe(45, 4) == PathLossZone.MIDDLE
+    assert monitoring.observe(66, 5) is None
+    assert monitoring.observe(66, 8) is None
+    assert monitoring.observe(66, 9) == PathLossZone.HIGH
+
+    monitoring.set_enabled(False)
+    assert not monitoring.unavailable()
+
+
+@pytest.mark.parametrize('rssi, delta', [(-50, 0), (-75, 21)])
+def test_path_loss_recovers_with_a_rate_limited_power_request(central, rssi, delta):
+    central.set_peer_features(hci.LeFeatureMask.LE_POWER_CONTROL_REQUEST)
+    assert central.host('set_path_loss_parameters', 70, 3, 20, 3, 1) == 0
+    assert central.host('set_path_loss_enabled', 1) == 0
+    request = pdu(Opcode.LL_POWER_CONTROL_REQ, 1, 0, 0)
+    loss_event = hci.HCI_LE_Path_Loss_Threshold_Event
+
+    def observe(rssi):
+        end = central.radio.now_us
+        central.controls.power.received(
+            Received(b'\x01\x00', rssi, end - 80, end, True)
+        )
+
+    def sample(power):
+        central.lt_tx(pdu(Opcode.LL_POWER_CONTROL_RSP, 0, 0, power, 0xFF))
+        observe(-50)
+
+    central.event_prepare()
+    central.lt_rx(Opcode.LL_POWER_CONTROL_REQ, request)
+    sample(0)
+    central.ut_rx(loss_event, current_path_loss=50, zone_entered=PathLossZone.MIDDLE)
+
+    central.host_start('prepare_read_remote_transmit_power', 1)
+    retry_us = central.radio.now_us + POWER_REQUEST_INTERVAL_US
+    central.event_prepare()
+    central.lt_rx(Opcode.LL_POWER_CONTROL_REQ, request)
+    sample(0x7F)
+    central.ut_rx(hci.HCI_LE_Transmit_Power_Reporting_Event, tx_power_level=0x7F)
+    central.ut_rx(loss_event, current_path_loss=0xFF)
+
+    # The neutral query is a fallback for steady RSSI. A weak signal still
+    # requests an increase when the same autonomous cooldown expires.
+    for _ in range(16):
+        observe(rssi)
+    assert not central.elapse(retry_us - central.radio.now_us - 1)
+    central.event_prepare()
+    central.lt_rx_q_is_empty()
+    assert not central.elapse(1)
+    central.event_prepare()
+    central.lt_rx(
+        Opcode.LL_POWER_CONTROL_REQ, pdu(Opcode.LL_POWER_CONTROL_REQ, 1, delta, 0)
+    )
+    sample(0)
+    central.ut_rx(loss_event, current_path_loss=50, zone_entered=PathLossZone.MIDDLE)
+
+    assert not central.elapse(POWER_REQUEST_INTERVAL_US)
+    central.event_prepare()
+    central.lt_rx_q_is_empty()
+    central.ut_rx_q_is_empty()

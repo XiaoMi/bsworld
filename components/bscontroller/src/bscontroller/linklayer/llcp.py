@@ -66,6 +66,13 @@ class PreparedProcedure:
             action()
 
 
+@dataclass(frozen=True)
+class DeferredProcedure:
+    kind: str
+    start: Callable[[], None]
+    cancel: Callable[[int], None] | None = None
+
+
 Opcode = ControlOpcode
 
 # Core Vol 6, Part B, 5.1: supported PDUs restricted to one sender role.
@@ -91,26 +98,37 @@ class LlcpCoordinator:
         self.controls = ControlProcedures(connection, self.response_timer)
         self.encryption = Encryption(connection)
         self.local_exchanges: dict[int, ProcedureContext] = {}
-        # Host-requested procedures admitted while another procedure runs.
-        # Vol 6, Part B, 5 allows one local procedure at a time; the HCI
-        # commands (Vol 4, Part E, 7.8.18, 7.8.33, 7.8.49) define no Command
-        # Disallowed for that, so they queue instead of failing.
-        self.deferred: deque[tuple[str, Callable[[], None]]] = deque()
+        # Vol 6, Part B, 5 permits only one local procedure per ACL. Host
+        # commands accepted during a different exchange wait for that slot.
+        self.deferred: deque[DeferredProcedure] = deque()
 
-    def _admit(self, kind: str, start: Callable[[], None]) -> int:
+    @property
+    def local_procedure_busy(self) -> bool:
+        return (
+            self.controls.busy or self.encryption.busy or self.encryption.ping_pending
+        )
+
+    def _admit(self, procedure: DeferredProcedure) -> int:
         """Start now, queue behind another procedure, or refuse a duplicate."""
-        if self._duplicate(kind):
+        if self._duplicate(procedure.kind):
             return DISALLOWED
-        if self.controls.busy:
-            self.deferred.append((kind, start))
+        if self.local_procedure_busy or self.deferred:
+            self.deferred.append(procedure)
         else:
-            start()
+            procedure.start()
         return SUCCESS
+
+    def _prepare(self, procedure: DeferredProcedure) -> PreparedProcedure:
+        if self._duplicate(procedure.kind):
+            return PreparedProcedure(DISALLOWED)
+        return PreparedProcedure(SUCCESS, lambda: self._admit(procedure))
 
     def _duplicate(self, kind: str) -> bool:
         """The Host already has this procedure running or queued."""
+        feature_kinds = ('features', 'all_features')
+        matching = feature_kinds if kind in feature_kinds else (kind,)
         return self._local_pending(kind) or any(
-            item == kind for item, _ in self.deferred
+            item.kind in matching for item in self.deferred
         )
 
     def _local_pending(self, kind: str) -> bool:
@@ -119,13 +137,28 @@ class LlcpCoordinator:
             return bool(controls.phy.phy_request)
         if kind == 'parameters':
             return bool(controls.connection_parameters.parameter_request)
+        if kind in ('features', 'all_features'):
+            return controls.features.pending
+        if kind == 'version':
+            return controls.version_request
+        if kind == 'encryption':
+            return self.encryption.busy
         return bool(controls.data_length.pending)
+
+    @property
+    def all_features_pending(self) -> bool:
+        return self.controls.features.all_pending or any(
+            procedure.kind == 'all_features' for procedure in self.deferred
+        )
 
     def start_deferred(self) -> None:
         """Start the next queued Host procedure once the link is idle."""
-        if self.deferred and not self.controls.busy and not self.connection.closed:
-            _, start = self.deferred.popleft()
-            start()
+        if (
+            self.deferred
+            and not self.local_procedure_busy
+            and not self.connection.closed
+        ):
+            self.deferred.popleft().start()
 
     @property
     def next_deadline_us(self) -> int:
@@ -309,14 +342,19 @@ class LlcpCoordinator:
         self.controls.release_transfers()
         self.start_deferred()
         self.controls.power.update_transmitter()
+        self.controls.clock_accuracy.start_if_needed()
         self.controls.power.request_if_needed()
         self._prune_exchanges()
 
     def close(self, reason: int) -> None:
-        self.deferred.clear()
+        while self.deferred:
+            procedure = self.deferred.popleft()
+            if procedure.cancel is not None:
+                procedure.cancel(reason)
         self.controls.features.finish(reason)
         self.controls.finish_version(None)
         self.controls.power.close(reason)
+        self.controls.clock_accuracy.close(reason)
         self.local_exchanges.clear()
         self.response_timer.stop()
 
@@ -380,20 +418,40 @@ class LlcpCoordinator:
     ) -> PreparedProcedure:
         if self.connection.role != Role.CENTRAL or self.encryption.busy:
             return PreparedProcedure(DISALLOWED)
-        return PreparedProcedure(
-            SUCCESS, lambda: self.encryption.start(rand, ediv, key)
+        return self._prepare(
+            DeferredProcedure(
+                'encryption', lambda: self.encryption.start(rand, ediv, key)
+            )
         )
 
     def prepare_features(self, pages: int | None = None) -> PreparedProcedure:
         features = self.controls.features
-        if features.pending:
+        kind = 'features' if pages is None else 'all_features'
+        if self._duplicate(kind):
             return PreparedProcedure(DISALLOWED)
-        return PreparedProcedure(SUCCESS, lambda: features.request(pages))
+
+        def start():
+            if features.can_report_cached(pages):
+                features.request(pages)
+            else:
+                self._admit(
+                    DeferredProcedure(
+                        kind,
+                        lambda: features.request(pages),
+                        lambda status: features.report(status, pages),
+                    )
+                )
+
+        return PreparedProcedure(SUCCESS, start)
 
     def prepare_version(self) -> PreparedProcedure:
-        if self.controls.version_request:
+        if self._duplicate('version'):
             return PreparedProcedure(DISALLOWED)
-        return PreparedProcedure(SUCCESS, self.controls.request_version)
+        if self.controls.peer_version is not None:
+            return PreparedProcedure(SUCCESS, self.controls.request_version)
+        return self._prepare(
+            DeferredProcedure('version', self.controls.request_version)
+        )
 
     def prepare_phy(
         self, tx: int, rx: int, coding: int, parameter_status: int
@@ -405,12 +463,7 @@ class LlcpCoordinator:
             self.connection.tx_coding = coding
             self.controls.phy.request_phy(tx, rx)
 
-        def start():
-            self._admit('phy', request)
-
-        if self._duplicate('phy'):
-            return PreparedProcedure(DISALLOWED)
-        return PreparedProcedure(SUCCESS, start)
+        return self._prepare(DeferredProcedure('phy', request))
 
     def prepare_parameters(
         self,
@@ -445,7 +498,7 @@ class LlcpCoordinator:
                     minimum, maximum, latency, timeout
                 )
 
-        return PreparedProcedure(SUCCESS, lambda: self._admit('parameters', request))
+        return self._prepare(DeferredProcedure('parameters', request))
 
     def supply_key(self, key: bytes | None) -> int:
         if (
@@ -486,7 +539,10 @@ class LlcpCoordinator:
         ):
             return ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
         return self._admit(
-            'data_length', lambda: self.controls.data_length.request(octets, time_us)
+            DeferredProcedure(
+                'data_length',
+                lambda: self.controls.data_length.request(octets, time_us),
+            )
         )
 
     def transfer(self, source: TrainSource, service_data: int) -> int:

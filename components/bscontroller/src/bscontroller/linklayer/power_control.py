@@ -41,6 +41,7 @@ APR_UNAVAILABLE = 0xFF
 MAX_COMPENSATION = 1280  # 0.1 dB, Vol 4, Part E, 7.8.76.
 DISABLE_HIGH_ZONE = 0xFF
 MAX_PATH_LOSS = 0xFE
+PATH_LOSS_UNAVAILABLE = 0xFF
 MINIMUM_POWER = 1
 MAXIMUM_POWER = 2
 MAX_POWER_REQUEST = 127
@@ -179,10 +180,21 @@ class PathLossMonitoring:
     def set_enabled(self, enabled: bool) -> None:
         if enabled != self.enabled:
             self.enabled = enabled
-            self.zone = None
-            self.last_sample = None
-            self.candidate = None
-            self.reconfigured = False
+            self._reset_measurement()
+
+    def _reset_measurement(self) -> None:
+        self.zone = None
+        self.last_sample = None
+        self.candidate = None
+        self.reconfigured = False
+
+    def unavailable(self) -> bool:
+        """Lose a reported estimate until a new reliable measurement is available."""
+        if not self.enabled or self.zone is None:
+            return False
+        # Core 4.5.16 requires a fresh zone report, even for the same zone.
+        self._reset_measurement()
+        return True
 
     def observe(self, loss: int, counter: int) -> PathLossZone | None:
         parameters = self.parameters
@@ -360,6 +372,11 @@ class PowerControl:
         rssi = self.connection.link.reported_rssi(packet.rssi)
         self.rssi[phy] = (3 * self.rssi.get(phy, rssi) + rssi) / 4
         if (power := self.remote_levels.get(phy, POWER_UNAVAILABLE)) >= NOT_MANAGED:
+            if self.path_loss.unavailable():
+                # The Host ignores Zone_Entered when the path loss is unavailable.
+                self.owner.listener.on_path_loss_threshold(
+                    self.connection, PATH_LOSS_UNAVAILABLE, PathLossZone.LOW
+                )
             return
         loss = max(0, min(MAX_PATH_LOSS, round(power - self.rssi[phy])))
         zone = self.path_loss.observe(loss, self.connection.event_counter)
@@ -368,7 +385,7 @@ class PowerControl:
 
     def request_if_needed(self) -> None:
         """Start one local exchange without occupying another procedure's slot."""
-        if self.owner.busy or self.connection.encryption.busy:
+        if self.connection.llcp.local_procedure_busy:
             return
         features = self.connection.peer_features
         support = features is None or bool(
@@ -395,26 +412,28 @@ class PowerControl:
         if not support or self.connection.radio.now_us < self.next_request_us:
             return
         phy = self.rx_phy
-        if (
-            self.report_remote
-            and not self.requested
-            or self.path_loss.enabled
-            and self.remote_levels.get(phy, POWER_UNAVAILABLE) >= NOT_MANAGED
+        peer_power = self.remote_levels.get(phy, NOT_MANAGED)
+        if (self.report_remote and not self.requested) or (
+            self.path_loss.enabled and peer_power == NOT_MANAGED
         ):
             self._request(phy, 0)
-        elif features is not None or self.peer_requested:
-            self._adjust_peer(phy)
+            return
+        if features is not None or self.peer_requested or phy in self.remote_levels:
+            delta = self._peer_adjustment(phy)
+            # A neutral query recovers loss monitoring even at steady RSSI.
+            if delta or (self.path_loss.enabled and peer_power == POWER_UNAVAILABLE):
+                self._request(phy, delta)
 
-    def _adjust_peer(self, phy: PowerPhy) -> None:
+    def _peer_adjustment(self, phy: PowerPhy) -> int:
         rssi = self.rssi.get(phy)
         if rssi is None:
-            return
+            return 0
         flags = self.remote_flags.get(phy, 0)
         if (rssi > RSSI_UPPER_DBM and not flags & MINIMUM_POWER) or (
             rssi < RSSI_LOWER_DBM and not flags & MAXIMUM_POWER
         ):
-            delta = max(-128, min(126, round(RSSI_TARGET_DBM - rssi)))
-            self._request(phy, delta)
+            return max(-128, min(126, round(RSSI_TARGET_DBM - rssi)))
+        return 0
 
     def _request(self, phy: PowerPhy, delta: int, *, host: bool = False) -> None:
         now = self.connection.radio.now_us

@@ -135,6 +135,12 @@ class LeControllerEvents:
             )
         )
 
+    def on_peer_sca(self, connection: ConnectionSnapshot, status: int, sca: int):
+        """Report the peer's sleep clock accuracy (Core Vol 4, Part E, 7.7.65.31)."""
+        self._emit_hci_packet(
+            hci.HCI_LE_Request_Peer_SCA_Complete_Event(status, connection.handle, sca)
+        )
+
     def on_remote_features_all(
         self,
         connection: ConnectionSnapshot,

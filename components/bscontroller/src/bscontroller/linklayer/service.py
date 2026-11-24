@@ -23,6 +23,8 @@ from bscontroller.linklayer import (
     LL_ADV_DIRECT_HIGH_DUTY_TIMEOUT_US,
     LL_MAFS_US,
     LL_PERIODIC_INTERVAL_UNIT_US,
+    LL_SCA_500_PPM,
+    LL_SCA_MAX,
     PDU_ADV_ADI_DID_MASK,
     PDU_ADV_DECISION_DATA_SIZE_MAX,
     PDU_ADV_DECISION_RESOLVABLE_TAG_MASK,
@@ -1049,6 +1051,38 @@ class LinkLayerService:
         connection = self._connection(handle)
         return connection_snapshot(connection) if connection is not None else None
 
+    def request_peer_sca(self, handle: int) -> PreparedProcedure:
+        connection = self._connection(handle)
+        if connection is None:
+            return PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
+        clock = connection.controls.clock_accuracy
+        if not clock.peer_supports_update:
+            return PreparedProcedure(ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
+        if clock.pending or clock.queued is not None:
+            return PreparedProcedure(DISALLOWED)
+        return PreparedProcedure(SUCCESS, clock.queue_read)
+
+    def modify_sleep_clock_accuracy(self, action: int) -> int:
+        if action not in (0, 1):
+            return INVALID
+        target = LL_SCA_MAX if action == 0 else LL_SCA_500_PPM
+        if target == self.link.sleep_clock_accuracy:
+            return ErrorCode.LIMIT_REACHED_ERROR
+        connections = self.link.connections
+        if not self.link.can_change_sleep_clock_accuracy:
+            return ErrorCode.CONTROLLER_BUSY_ERROR
+        if not connections:
+            self.link.sleep_clock_accuracy = target
+            return SUCCESS
+        connection = next(iter(connections.values()))
+        clock = connection.controls.clock_accuracy
+        if not connection.established or clock.pending or clock.queued is not None:
+            return ErrorCode.CONTROLLER_BUSY_ERROR
+        if action == 1 and not clock.peer_supports_update:
+            return DISALLOWED
+        clock.queue_change(target)
+        return SUCCESS
+
     def read_rf_path_compensation(self) -> tuple[int, int]:
         return self.link.rf_tx_path_compensation, self.link.rf_rx_path_compensation
 
@@ -1159,7 +1193,7 @@ class LinkLayerService:
             if not 0 <= pages <= FEATURE_MAX_PAGE or not 0 <= handle <= 0x0EFF:
                 return PreparedProcedure(ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR)
             if any(
-                item.controls.features.all_pending
+                item.llcp.all_features_pending
                 for item in self.link.connections.values()
             ):
                 return PreparedProcedure(DISALLOWED)

@@ -624,31 +624,19 @@ def test_version_loc_disconnect_reports_only_disconnection(iut, role):
     assert not dut.controls.version_request
 
 
-def test_version_timer_is_independent_of_feature_timer(central):
-    """Feature and version procedures keep separate response deadlines.
-
-    Purpose: Verify that the Version Exchange and Feature Exchange each run their
-    own response timer, that the earliest deadline is reported as the next one,
-    and that finishing the feature procedure leaves the version deadline intact.
-
-    Steps:
-        1. Upper Tester starts Read Remote Features and records its deadline.
-        2. Advance 1000 us, then start Read Remote Version Information.
-        3. Finish the feature procedure with SUCCESS.
-
-    Expected:
-        - The version deadline is the feature deadline plus 1000 us.
-        - The next deadline is the earlier (feature) one while both run.
-        - After finishing features, the next deadline is the version deadline.
-    """
+def test_version_timer_starts_after_feature_exchange(central):
+    """A queued Version Exchange gets a full timeout after Feature Exchange."""
     central.host_start('prepare_features')
     first = central.controls.features.deadline_us
     central.elapse(1000)
     central.host_start('prepare_version')
-    assert central.controls.version_deadline_us == first + 1000
+    assert central.controls.version_deadline_us == 0
     assert central.controls.next_deadline_us == first
     central.controls.features.finish(ErrorCode.SUCCESS)
-    assert central.controls.next_deadline_us == first + 1000
+    central.elapse(1000)
+    central.event_prepare()
+    assert central.controls.version_deadline_us == first + 2000
+    assert central.controls.next_deadline_us == first + 2000
 
 
 @pytest.mark.parametrize('role', ROLES)

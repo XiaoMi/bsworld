@@ -408,6 +408,8 @@ class Encryption:
         if not self.enabled:
             return 0
         timeout_us = self.auth_timeout_us
+        if self.ping_pending or self.connection.controls.busy:
+            return self.last_authenticated_us + timeout_us
         reserve_us = min(
             timeout_us // 2,
             # One interval to align the request to an event and another for
@@ -417,11 +419,7 @@ class Encryption:
             * LL_CONN_INTERVAL_UNIT_US
             * (self.connection.parameters.latency + 1),
         )
-        return (
-            self.last_authenticated_us
-            + timeout_us
-            - (0 if self.ping_pending else reserve_us)
-        )
+        return self.last_authenticated_us + timeout_us - reserve_us
 
     def check_timeout(self) -> bool:
         """T_PRT for encryption procedures, then the authenticated payload timeout (Core
@@ -432,7 +430,7 @@ class Encryption:
             self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
             return True
         if self.enabled and not self.busy and now >= self.next_deadline_us:
-            if self.ping_pending:
+            if self.ping_pending or self.connection.controls.busy:
                 self.listener.on_authenticated_payload_timeout(self.connection)
                 self.last_authenticated_us = now
                 self.stop_ping()

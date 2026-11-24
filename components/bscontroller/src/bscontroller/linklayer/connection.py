@@ -19,6 +19,7 @@ from bscontroller.linklayer import (
     LL_CONN_INTERVAL_UNIT_US,
     LL_DATA_CHANNEL_COUNT,
     LL_EVENT_COUNTER_MASK,
+    LL_SCA_500_PPM,
     LL_SUPERVISION_TIMEOUT_UNIT_US,
     ControlOpcode,
 )
@@ -32,7 +33,12 @@ from bscontroller.linklayer.timing import (
     LL_CONN_RX_WINDOW_UNCODED_US,
     window_widening,
 )
-from bscontroller.radio.base import PHY_CODED_S8_FACTOR, Phy, Radio
+from bscontroller.radio.base import (
+    PHY_CODED_S8_FACTOR,
+    PHY_TIME_UNITS_PER_SECOND,
+    Phy,
+    Radio,
+)
 
 if TYPE_CHECKING:
     from bscontroller.address import Address
@@ -72,6 +78,7 @@ class Connection:
             + parameters.window_offset * LL_CONN_INTERVAL_UNIT_US
         )
         self.event_counter: int = 0
+        self.clock_remainder = 0
         # The latest event with a received packet and the one before it, for
         # syncConnEventCount; None until there is one.
         self.rx_event_counters: tuple[int | None, int | None] = (None, None)
@@ -242,14 +249,51 @@ class Connection:
             else self.response_window_us
         )
 
+    @property
+    def receive_widening_us(self) -> int:
+        return window_widening(
+            self.anchor_us - self.last_rx_us,
+            self.controls.clock_accuracy.peer_accuracy,
+            local_sca=self.link.sleep_clock_accuracy,
+        )
+
+    @property
+    def event_interval_fixed_us(self) -> int:
+        """Return the event period in millionths of a microsecond."""
+        interval = self.parameters.interval * LL_CONN_INTERVAL_UNIT_US
+        rate = PHY_TIME_UNITS_PER_SECOND
+        if (
+            self.role == Role.CENTRAL
+            and self.link.sleep_clock_accuracy == LL_SCA_500_PPM
+        ):
+            # Model 250 ppm of drift in the loose mode.
+            rate += 250
+        return interval * rate
+
+    @property
+    def next_anchor_us(self) -> int:
+        return (
+            self.anchor_us
+            + (self.event_interval_fixed_us + self.clock_remainder)
+            // PHY_TIME_UNITS_PER_SECOND
+        )
+
+    def step_event(self) -> None:
+        # Carry the fraction across events so the integer PHY timestamps do
+        # not accumulate rounding error.
+        interval, self.clock_remainder = divmod(
+            self.event_interval_fixed_us + self.clock_remainder,
+            PHY_TIME_UNITS_PER_SECOND,
+        )
+        self.anchor_us += interval
+        self.event_counter = (self.event_counter + 1) & LL_EVENT_COUNTER_MASK
+
     def skip_missed_events(self) -> None:
         """A radio conflict advances counters and Instants, never transmits late."""
         while not self.closed:
             latest = self.anchor_us
             if self.role == Role.PERIPHERAL:
-                latest += self.receive_window_us + window_widening(
-                    self.anchor_us - self.last_rx_us, self.parameters.sca
-                )
+                latest += self.receive_window_us + self.receive_widening_us
             if latest > self.radio.now_us:
                 break
             update = self.controls.pending
@@ -262,8 +306,7 @@ class Connection:
             self.unmapped_channel = (
                 self.unmapped_channel + self.parameters.hop
             ) % LL_DATA_CHANNEL_COUNT
-            self.anchor_us += self.parameters.interval * LL_CONN_INTERVAL_UNIT_US
-            self.event_counter = (self.event_counter + 1) & LL_EVENT_COUNTER_MASK
+            self.step_event()
             self.link.trace(
                 f'LL MISSED handle={self.handle} next_event={self.event_counter}'
             )
@@ -320,7 +363,5 @@ class Connection:
     def event_start_us(self) -> int:
         start = self.anchor_us
         if self.role == Role.PERIPHERAL:
-            start -= window_widening(
-                self.anchor_us - self.last_rx_us, self.parameters.sca
-            )
+            start -= self.receive_widening_us
         return start

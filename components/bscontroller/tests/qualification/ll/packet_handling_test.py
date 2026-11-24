@@ -104,6 +104,8 @@ SUPPORTED_CONTROLS = frozenset(
         Opcode.LL_PHY_UPDATE_IND,
         Opcode.LL_MIN_USED_CHANNELS_IND,
         Opcode.LL_PERIODIC_SYNC_IND,
+        Opcode.LL_CLOCK_ACCURACY_REQ,
+        Opcode.LL_CLOCK_ACCURACY_RSP,
         Opcode.LL_POWER_CONTROL_REQ,
         Opcode.LL_POWER_CONTROL_RSP,
         Opcode.LL_POWER_CHANGE_IND,
@@ -115,8 +117,6 @@ SUPPORTED_CONTROLS = frozenset(
 UNSUPPORTED_CONTROL_DATA_LENGTHS = {
     Opcode.LL_CTE_REQ: 1,
     Opcode.LL_CTE_RSP: 0,
-    Opcode.LL_CLOCK_ACCURACY_REQ: 1,
-    Opcode.LL_CLOCK_ACCURACY_RSP: 1,
     Opcode.LL_CIS_REQ: 26,
     Opcode.LL_CIS_RSP: 8,
     Opcode.LL_CIS_IND: 15,
@@ -178,6 +178,8 @@ INVALID_LENGTH_CASES = {
     Opcode.LL_PHY_UPDATE_IND: (2 + PDU_CONTROL_INSTANT_SIZE, 'ad'),
     Opcode.LL_MIN_USED_CHANNELS_IND: (2, 'ad'),
     Opcode.LL_PERIODIC_SYNC_IND: (PDU_CONTROL_PERIODIC_SYNC_SIZE - 1, 'ad'),
+    Opcode.LL_CLOCK_ACCURACY_REQ: (1, 'ac'),
+    Opcode.LL_CLOCK_ACCURACY_RSP: (1, 'ad'),
     Opcode.LL_POWER_CONTROL_REQ: (struct.calcsize('<Bbb'), 'abc'),
     Opcode.LL_POWER_CONTROL_RSP: (struct.calcsize('<BbbB'), 'ad'),
     Opcode.LL_POWER_CHANGE_IND: (struct.calcsize('<BBbb'), 'ad'),
@@ -225,6 +227,7 @@ def _normal_opcodes(opcode, central):
         Opcode.LL_PERIPHERAL_FEATURE_REQ: (Opcode.LL_FEATURE_RSP,),
         Opcode.LL_PING_REQ: (Opcode.LL_PING_RSP,),
         Opcode.LL_LENGTH_REQ: (Opcode.LL_LENGTH_RSP,),
+        Opcode.LL_CLOCK_ACCURACY_REQ: (Opcode.LL_CLOCK_ACCURACY_RSP,),
         Opcode.LL_POWER_CONTROL_REQ: (Opcode.LL_POWER_CONTROL_RSP,),
     }.get(opcode, ())
 
@@ -501,6 +504,8 @@ async def _complete_normal_control(tester, link, stimulus, response, accepted):
     elif opcode == Opcode.LL_PHY_REQ:
         await _complete_phy_response(tester, link, response)
         return link
+    elif opcode == Opcode.LL_CLOCK_ACCURACY_REQ:
+        assert response[1] <= 7
     elif opcode == Opcode.LL_POWER_CONTROL_REQ:
         flags, _, power, _ = struct.unpack('<BbbB', response[1:])
         if power != 126:

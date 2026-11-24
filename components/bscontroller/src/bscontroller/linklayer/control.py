@@ -38,6 +38,7 @@ from bscontroller.linklayer import (
     PDU_CONTROL_VERSION_SIZE,
     ControlOpcode,
 )
+from bscontroller.linklayer.clock_accuracy import ClockAccuracyProcedure
 from bscontroller.linklayer.connection_parameters import (
     UPDATE,
     ConnectionParametersProcedure,
@@ -91,6 +92,7 @@ class ControlProcedures:
         self.data_length = DataLengthProcedure(connection)
         self.features = FeatureExchangeProcedure(self)
         self.power = PowerControl(self)
+        self.clock_accuracy = ClockAccuracyProcedure(self)
         # Includes a local indication queued but not yet transmitted during a collision.
         self.version_sent = False
         self.peer_version: tuple[int, int, int] | None = None
@@ -124,6 +126,7 @@ class ControlProcedures:
             self.connection_parameters.local_context,
             self.data_length.context,
             self.power.context,
+            self.clock_accuracy.context,
         )
         return tuple(context for context in contexts if context is not None)
 
@@ -149,8 +152,13 @@ class ControlProcedures:
 
     @property
     def busy(self) -> bool:
-        """Serialize local procedures; Power Control can overlap a peer Instant."""
-        return self.peer_instant_blocked or self.power.pending
+        """Serialize local procedures independently of peer Instant collisions."""
+        return (
+            self.peer_instant_blocked
+            or self.version_request
+            or self.power.pending
+            or self.clock_accuracy.pending
+        )
 
     @property
     def next_deadline_us(self) -> int:
@@ -162,6 +170,7 @@ class ControlProcedures:
                 self.features.deadline_us,
                 self.version_deadline_us,
                 self.power.deadline_us,
+                self.clock_accuracy.deadline_us,
             )
             if deadline
         ]
@@ -321,6 +330,8 @@ class ControlProcedures:
         describes it again relative to the transmitting event, and keeps this
         description only if the train can no longer be described then.
         """
+        if self.connection.llcp.local_procedure_busy:
+            return
         waiting: deque[tuple[TrainSource, int]] = deque()
         for source, service_data in self.transfers:
             if source.ended:
@@ -465,7 +476,7 @@ class ControlProcedures:
             return True
         if self.data_length.control(payload) or self.features.control(payload):
             return True
-        if self.power.control(payload):
+        if self.power.control(payload) or self.clock_accuracy.control(payload):
             return True
         opcode = payload[0]
         if (
@@ -656,8 +667,13 @@ class ControlProcedures:
         if self.features.check_timeout():
             return True
         now = self.connection.radio.now_us
-        if (self.deadline_us and now >= self.deadline_us) or (
-            self.power.deadline_us and now >= self.power.deadline_us
+        if any(
+            deadline and now >= deadline
+            for deadline in (
+                self.deadline_us,
+                self.power.deadline_us,
+                self.clock_accuracy.deadline_us,
+            )
         ):
             self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
             return True

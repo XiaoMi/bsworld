@@ -44,13 +44,17 @@ LOSS_EVENT = hci.HCI_LE_Path_Loss_Threshold_Event
 POWER_LEVELS = (-24, -16, -8, 0, 4)
 # Bounds for the Lower Tester's apparent RF power in the autonomous test.
 PEER_MIN_DBM, PEER_MAX_DBM = -32, 18
+PEER_START_DBM = max(PEER_MAX_DBM - 10, (PEER_MIN_DBM + PEER_MAX_DBM) // 2)
 PEER_RF_STEP_US = 5_000_000
+PATH_LOSS_LOW_DB, PATH_LOSS_HIGH_DB = 34, 56
 # Link preamble for the PCL procedures uses 7.5 ms, zero latency, and 1 s timeout.
 INTERVAL = 6
 MAXIMUM_EVENTS = 24
 MINIMUM_FLAG = 1
 MAXIMUM_FLAG = 2
 POWER_NOT_MANAGED = 126
+POWER_UNAVAILABLE = 127
+PATH_LOSS_UNAVAILABLE = 0xFF
 
 PHY_VALUES = (
     ('LE 1M', 0x01, Phy.LE_1M, PHY_CODED_S8_FACTOR),
@@ -172,7 +176,8 @@ async def _pursue_power_request(link, *, direction, mode):
                 if direction * delta < 0:
                     return delta
                 await link.exchange(
-                    _response(0, 0, link.tx_power_dbm), llid=LlId.CONTROL
+                    _response(0, 0, link.tx_power_dbm),
+                    llid=LlId.CONTROL,
                 )
     raise AssertionError(f'no request for PHY {phy:#x} at RF endpoint {target} dBm')
 
@@ -215,7 +220,7 @@ async def path_loss_monitoring(tester, *, central):
     """
     link = await _power_link(tester, central=central)
     link.on_receive = _answer_power_query(link, reported_power=0)
-    low, high = 34, 56
+    low, high = PATH_LOSS_LOW_DB, PATH_LOSS_HIGH_DB
 
     async def set_zones(high, hysteresis):
         await tester.command(
@@ -251,6 +256,69 @@ async def path_loss_monitoring(tester, *, central):
     await link.disconnect()
 
 
+async def path_loss_monitoring_unavailable(tester, *, central, mode):
+    """Path Loss Monitoring – Unavailable.
+
+    Initial Condition:
+        Establish the selected ACL role and PHY. The Lower Tester starts
+        10 dB below its maximum or at its power midpoint, whichever is higher.
+
+    Test Steps:
+        1–3. Enable path loss reporting with the IXIT zone boundaries, 3-dB
+             hysteresis and a one-event dwell. Answer the initial power query.
+        4–8. Increase the peer's RF power in 2-dB steps at least five seconds
+             apart until the IUT asks for a decrease. Reply with TxPower 127
+             and expect Current_Path_Loss 0xFF.
+        9–13. Decrease the peer's RF power under the same cadence until the
+              IUT asks for an increase. Reply with its current power. A
+              neutral query also receives the current power, so the fresh
+              path loss report may arrive while waiting for the increase.
+
+    Expected Outcome:
+        The active ACL reports unavailable, then a valid measurement even
+        though the estimate returns to the previously reported middle zone.
+
+    Reference:
+        LL.TS.p28 4.13.4.14, Table 4.13-15; Core Vol 6, Part B, 4.5.16.
+    """
+    link = await _power_link(tester, central=central, mode=mode)
+    link.tx_power_dbm = PEER_START_DBM
+    low, high = PATH_LOSS_LOW_DB, PATH_LOSS_HIGH_DB
+    link.on_receive = _answer_power_query(link)
+    await tester.command(
+        hci.HCI_LE_Set_Path_Loss_Reporting_Parameters_Command(
+            link.handle, high, 3, low, 3, 1
+        )
+    )
+    await tester.command(
+        hci.HCI_LE_Set_Path_Loss_Reporting_Enable_Command(link.handle, 1)
+    )
+    initial = await _event(link, LOSS_EVENT)
+    assert (initial.connection_handle, initial.zone_entered) == (link.handle, 1)
+    assert low < initial.current_path_loss < high
+    link.on_receive = None
+
+    await _pursue_power_request(link, direction=1, mode=mode)
+    await link.exchange(_response(0, 0, POWER_UNAVAILABLE), llid=LlId.CONTROL)
+    unavailable = await _event(link, LOSS_EVENT)
+    assert (unavailable.connection_handle, unavailable.current_path_loss) == (
+        link.handle,
+        PATH_LOSS_UNAVAILABLE,
+    )
+
+    link.on_receive = _answer_power_query(link)
+    await _continuous_data(link, PEER_RF_STEP_US)
+    link.on_receive = None
+    await _pursue_power_request(link, direction=-1, mode=mode)
+    restored = tester.take(lambda event: isinstance(event, LOSS_EVENT))
+    await link.exchange(_response(0, 0, link.tx_power_dbm), llid=LlId.CONTROL)
+    if restored is None:
+        restored = await _event(link, LOSS_EVENT)
+    assert (restored.connection_handle, restored.zone_entered) == (link.handle, 1)
+    assert low < restored.current_path_loss < high
+    await link.disconnect()
+
+
 async def initiate_power_control(tester, *, central, mode):
     """Power Control Request – Initiate.
 
@@ -275,8 +343,7 @@ async def initiate_power_control(tester, *, central, mode):
         LL.TS.p28 4.13.4.2, Table 4.13-2; Core Vol 6, Part B, 5.1.17.
     """
     link = await _power_link(tester, central=central, mode=mode)
-    midpoint = (PEER_MIN_DBM + PEER_MAX_DBM) // 2
-    link.tx_power_dbm = max(PEER_MAX_DBM - 10, midpoint)
+    link.tx_power_dbm = PEER_START_DBM
     decrease = await _pursue_power_request(link, direction=1, mode=mode)
     await _acknowledge_adjustment(link, decrease)
     # The response changes the peer level. Drive traffic before the next RF step.
@@ -784,6 +851,12 @@ PROCEDURES: ProcedureMap = {}
 # Confirm all three path-loss zones and a live threshold change.
 PROCEDURES |= procedure_cases(
     path_loss_monitoring, _role_cases('BV-01', 'Path Loss Monitoring')
+)
+
+# Report unavailable and restore the same zone on each active PHY.
+PROCEDURES |= procedure_cases(
+    path_loss_monitoring_unavailable,
+    _phy_cases((49, 50, 51, 52), 'Path Loss Monitoring Unavailable'),
 )
 
 # Initiate the power request in both directions on the four PHY/coding options.
