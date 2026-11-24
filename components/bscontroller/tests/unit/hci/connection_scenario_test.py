@@ -36,6 +36,12 @@ SYNC_COMMANDS = [
     hci.HCI_Read_RSSI_Command(UNKNOWN_HANDLE),
     hci.HCI_LE_Read_Channel_Map_Command(UNKNOWN_HANDLE),
     hci.HCI_LE_Read_PHY_Command(UNKNOWN_HANDLE),
+    hci.HCI_LE_Enhanced_Read_Transmit_Power_Level_Command(UNKNOWN_HANDLE, 1),
+    hci.HCI_LE_Set_Path_Loss_Reporting_Parameters_Command(
+        UNKNOWN_HANDLE, 70, 4, 40, 6, 3
+    ),
+    hci.HCI_LE_Set_Path_Loss_Reporting_Enable_Command(UNKNOWN_HANDLE, 1),
+    hci.HCI_LE_Set_Transmit_Power_Reporting_Enable_Command(UNKNOWN_HANDLE, 1, 0),
     hci.HCI_LE_Set_Data_Length_Command(UNKNOWN_HANDLE, 251, 2120),
     hci.HCI_Read_Authenticated_Payload_Timeout_Command(UNKNOWN_HANDLE),
     hci.HCI_Write_Authenticated_Payload_Timeout_Command(UNKNOWN_HANDLE, 100),
@@ -54,6 +60,7 @@ ASYNC_COMMANDS = [
     hci.HCI_Read_Remote_Version_Information_Command(UNKNOWN_HANDLE),
     hci.HCI_LE_Connection_Update_Command(UNKNOWN_HANDLE, 24, 24, 0, 100, 0, 0),
     hci.HCI_LE_Set_PHY_Command(UNKNOWN_HANDLE, 0, 2, 2, 0),
+    hci.HCI_LE_Read_Remote_Transmit_Power_Level_Command(UNKNOWN_HANDLE, 1),
     hci.HCI_LE_Enable_Encryption_Command(UNKNOWN_HANDLE, bytes(8), 0, bytes(16)),
 ]
 
@@ -166,6 +173,140 @@ def test_read_rssi_tracks_valid_receptions_only(host):
         host.radio.script.append(Air(b'\x01\x00', rssi=rssi, valid_crc=valid, at=at))
         host.loop.run_until_complete(connection.receive(7, at + 200))
     assert host.cmd(hci.HCI_Read_RSSI_Command(connection.handle)).rssi == -53
+
+
+def test_read_rssi_applies_current_receive_path_compensation(host):
+    """A stored RF input measurement is converted using the current path gain."""
+    connection = host.connection()
+    host.radio.script.append(Air(b'\x01\x00', rssi=-45, at=1300))
+    host.loop.run_until_complete(connection.receive(7, 1500))
+    host.cmd(hci.HCI_LE_Write_RF_Path_Compensation_Command(0, -32))
+    assert host.cmd(hci.HCI_Read_RSSI_Command(connection.handle)).rssi == -42
+
+
+def test_power_reads_reject_reserved_phy(host):
+    """A PHY outside the four power-reporting codes is rejected over HCI."""
+    connection = host.connection()
+    handle = connection.handle
+    unsupported = ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR
+    host.cmd(
+        hci.HCI_LE_Enhanced_Read_Transmit_Power_Level_Command(handle, 5), unsupported
+    )
+    host.cmd_status(
+        hci.HCI_LE_Read_Remote_Transmit_Power_Level_Command(handle, 5), unsupported
+    )
+    host.ut_rx_q_is_empty()
+
+
+def test_remote_power_read_preserves_unmanaged_phy_without_change_report(host):
+    """Explicit reads complete with reason 0x02 even with remote reports enabled.
+
+    Read a peer's managed LE 2M power, then enable remote reporting and read
+    again after the peer stops managing that PHY. The second read reports
+    0x7E and a zero Delta without an additional reason 0x01 event (7.7.65.33).
+    """
+    connection = host.connection()
+    handle = connection.handle
+    command = hci.HCI_LE_Read_Remote_Transmit_Power_Level_Command(handle, Phy.LE_2M)
+    request = bytes((ControlOpcode.LL_POWER_CONTROL_REQ, 0x02, 0, 0x7F))
+
+    def read_power(power, flags):
+        host.cmd_status(command)
+        host.in_loop(connection.llcp.event_prepare)
+        host.in_loop(connection.llcp.sent, request, first=True)
+        response = (
+            bytes((ControlOpcode.LL_POWER_CONTROL_RSP, flags, 0))
+            + power.to_bytes(1, 'little', signed=True)
+            + b'\xff'
+        )
+        host.in_loop(connection.control, response)
+        host.ut_rx(
+            hci.HCI_LE_Transmit_Power_Reporting_Event,
+            status=ErrorCode.SUCCESS,
+            connection_handle=handle,
+            reason=0x02,
+            phy=Phy.LE_2M,
+            tx_power_level=power,
+            tx_power_level_flag=flags,
+            delta=0,
+        )
+        host.ut_rx_q_is_empty()
+
+    read_power(-8, 1)
+    host.cmd(hci.HCI_LE_Set_Transmit_Power_Reporting_Enable_Command(handle, 0, 1))
+    read_power(0x7E, 0)
+
+
+@pytest.mark.parametrize(
+    'boundaries',
+    [(250, 6, 20, 3), (70, 5, 4, 5), (40, 0, 60, 0), (50, 10, 48, 3)],
+    ids=['high-overflow', 'low-underflow', 'reversed', 'overlap'],
+)
+def test_path_loss_rejects_invalid_boundaries(host, boundaries):
+    """Invalid HCI thresholds leave reporting unconfigured (7.8.119–120)."""
+    handle = host.connection().handle
+    host.cmd(
+        hci.HCI_LE_Set_Path_Loss_Reporting_Parameters_Command(handle, *boundaries, 3),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    host.cmd(
+        hci.HCI_LE_Set_Path_Loss_Reporting_Enable_Command(handle, 1),
+        ErrorCode.COMMAND_DISALLOWED_ERROR,
+    )
+
+
+def test_rf_path_compensation_reads_signed_values_and_resets(host):
+    """RF compensation preserves signed tenths, rejects overflow and resets."""
+    read = hci.HCI_LE_Read_RF_Path_Compensation_Command()
+
+    def check(expected):
+        reply = host.cmd(read)
+        assert (
+            reply.rf_tx_path_compensation_value,
+            reply.rf_rx_path_compensation_value,
+        ) == expected
+
+    default = host.cmd(read)
+    host.cmd(hci.HCI_LE_Write_RF_Path_Compensation_Command(-35, 1280))
+    check((-35, 1280))
+    host.cmd(
+        hci.HCI_LE_Write_RF_Path_Compensation_Command(-1281, 23),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    check((-35, 1280))
+    host.cmd(hci.HCI_Reset_Command())
+    check(
+        (default.rf_tx_path_compensation_value, default.rf_rx_path_compensation_value)
+    )
+
+
+def test_power_reporting_events_preserve_signed_fields(host):
+    """Serialize power and path loss LL notifications in the Core wire order."""
+    connection = host.connection()
+    handle = connection.handle
+    host.notify('on_transmit_power_reporting', connection, 0, 1, 4, -12, 1, -3)
+    event = host.ut_rx(
+        hci.HCI_LE_Transmit_Power_Reporting_Event,
+        connection_handle=handle,
+        reason=1,
+        phy=4,
+        tx_power_level=-12,
+        tx_power_level_flag=1,
+        delta=-3,
+    )
+    assert event.wire == (
+        b'\x04\x3e\x09\x21\x00' + handle.to_bytes(2, 'little') + b'\x01\x04\xf4\x01\xfd'
+    )
+    host.notify('on_path_loss_threshold', connection, 61, 2)
+    event = host.ut_rx(
+        hci.HCI_LE_Path_Loss_Threshold_Event,
+        connection_handle=handle,
+        current_path_loss=61,
+        zone_entered=2,
+    )
+    assert (
+        event.wire == b'\x04\x3e\x05\x20' + handle.to_bytes(2, 'little') + b'\x3d\x02'
+    )
 
 
 def test_read_channel_map(host):

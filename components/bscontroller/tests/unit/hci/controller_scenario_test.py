@@ -322,6 +322,9 @@ def test_read_le_features_and_states(host):
         hci.LeFeatureMask.LE_2M_PHY,
         hci.LeFeatureMask.LE_CODED_PHY,
         hci.LeFeatureMask.MINIMUM_NUMBER_OF_USED_CHANNELS_PROCEDURE,
+        hci.LeFeatureMask.LE_POWER_CONTROL_REQUEST,
+        hci.LeFeatureMask.LE_POWER_CONTROL_REQUEST_DUP,
+        hci.LeFeatureMask.LE_PATH_LOSS_MONITORING,
     ):
         assert features & bit, bit
     states = host.cmd(hci.HCI_LE_Read_Supported_States_Command()).le_states
@@ -502,6 +505,16 @@ def disconnection(handle=1):
     [
         (hci.HCI_LE_Scan_Timeout_Event(), 'event', hci.HCI_LE_META_EVENT - 1),
         (hci.HCI_LE_Scan_Timeout_Event(), 'le', hci.HCI_LE_SCAN_TIMEOUT_EVENT - 1),
+        (
+            hci.HCI_LE_Path_Loss_Threshold_Event(1, 60, 1),
+            'le',
+            hci.HCI_LE_PATH_LOSS_THRESHOLD_EVENT - 1,
+        ),
+        (
+            hci.HCI_LE_Transmit_Power_Reporting_Event(0, 1, 2, 1, -5, 0, 0),
+            'le',
+            hci.HCI_LE_TRANSMIT_POWER_REPORTING_EVENT - 1,
+        ),
         (disconnection(), 'event', hci.HCI_DISCONNECTION_COMPLETE_EVENT - 1),
         (
             hci.HCI_Encryption_Change_Event(0, 1, 1),

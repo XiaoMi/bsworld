@@ -40,7 +40,7 @@ from bscontroller.linklayer import (
     ControlOpcode,
     LlId,
 )
-from bscontroller.radio.base import Phy
+from bscontroller.radio.base import PHY_CODED_S8_FACTOR, Phy
 from tests.qualification.tester import (
     DUT_ADDRESS,
     PEER_ADDRESS,
@@ -204,6 +204,8 @@ class PeerLink:
         self.central = central
         self.csa2 = csa2
         self.tx_phy = self.rx_phy = phy
+        self.tx_coding = PHY_CODED_S8_FACTOR
+        self.tx_power_dbm = 0
         self.counter = self.sn = self.nesn = 0
         self.anchor = connect_end + LL_CONN_INTERVAL_UNIT_US * (
             1 + parameters.window_offset
@@ -338,7 +340,12 @@ class PeerLink:
             + data
         )
         await self.tester.transmit(
-            channel, pdu, start_us=start, **self.radio_parameters
+            channel,
+            pdu,
+            start_us=start,
+            coding=self.tx_coding,
+            power_dbm=self.tx_power_dbm,
+            **self.radio_parameters,
         )
         self.last_sent_end_us = self.tester.radio.now_us + 1
 
@@ -854,10 +861,13 @@ def phy_update_pdu(link, central, peripheral):
     )
 
 
-async def change_phy(tester, link, phy, *, local):
+async def change_phy(tester, link, phy, *, local, phy_options=0):
     mask = 1 << phy - 1
+    peer_request = b''
     if local:
-        await tester.command(hci.HCI_LE_Set_PHY_Command(link.handle, 0, mask, mask, 0))
+        await tester.command(
+            hci.HCI_LE_Set_PHY_Command(link.handle, 0, mask, mask, phy_options)
+        )
         response = await link.control(Opcode.LL_PHY_REQ)
         assert len(response) == PDU_CONTROL_PHY_REQ_SIZE and response[1] and response[2]
         if not response[1] & response[2] & mask:
@@ -868,7 +878,7 @@ async def change_phy(tester, link, phy, *, local):
             await link.exchange(
                 bytes([Opcode.LL_PHY_RSP, mask, mask]), llid=LlId.CONTROL
             )
-    else:
+    elif not link.central:
         response = await link.control(
             Opcode.LL_PHY_RSP, bytes([Opcode.LL_PHY_REQ, mask, mask])
         )
@@ -877,8 +887,11 @@ async def change_phy(tester, link, phy, *, local):
             pytest.skip(
                 'Inconclusive: PHY setup response cannot select the required PHY'
             )
+    else:
+        # The Central IUT replies to the Peripheral's request with the update.
+        peer_request = bytes([Opcode.LL_PHY_REQ, mask, mask])
     if link.central:
-        update = await link.control(Opcode.LL_PHY_UPDATE_IND)
+        update = await link.control(Opcode.LL_PHY_UPDATE_IND, peer_request)
         assert len(update) == PDU_CONTROL_PHY_UPDATE_SIZE
         allowed = {0, *(phy_bit(supported) for supported in Phy)}
         assert all(value in allowed for value in update[1:3])

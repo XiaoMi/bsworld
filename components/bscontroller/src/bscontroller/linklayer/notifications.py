@@ -52,6 +52,19 @@ class NotificationSink(IsoListener, Protocol):
         self, connection: ConnectionSnapshot, status: int
     ) -> None: ...
     def on_phy_updated(self, connection: ConnectionSnapshot, status: int) -> None: ...
+    def on_transmit_power_reporting(
+        self,
+        connection: ConnectionSnapshot,
+        status: int,
+        reason: int,
+        phy: int,
+        tx_power_level: int,
+        flags: int,
+        delta: int,
+    ) -> None: ...
+    def on_path_loss_threshold(
+        self, connection: ConnectionSnapshot, path_loss: int, zone: int
+    ) -> None: ...
     def on_data_length_changed(self, connection: ConnectionSnapshot) -> None: ...
     def on_remote_features(
         self, connection: ConnectionSnapshot, status: int
@@ -175,6 +188,33 @@ class NotificationAdapter:
 
     def on_phy_updated(self, connection: Connection, status: int) -> None:
         self.sink.on_phy_updated(connection_snapshot(connection), status)
+
+    def on_transmit_power_reporting(
+        self,
+        connection: Connection,
+        status: int,
+        reason: int,
+        phy: int,
+        tx_power_level: int,
+        flags: int,
+        delta: int,
+    ) -> None:
+        self.sink.on_transmit_power_reporting(
+            connection_snapshot(connection),
+            status,
+            reason,
+            phy,
+            tx_power_level,
+            flags,
+            delta,
+        )
+
+    def on_path_loss_threshold(
+        self, connection: Connection, path_loss: int, zone: int
+    ) -> None:
+        self.sink.on_path_loss_threshold(
+            connection_snapshot(connection), path_loss, zone
+        )
 
     def on_data_length_changed(self, connection: Connection) -> None:
         self.sink.on_data_length_changed(connection_snapshot(connection))

@@ -33,6 +33,7 @@ from tests.unit.linklayer.llcp.harness import (
     hci,
     instant_of,
     length,
+    pdu,
     phy_req,
     phy_rsp,
     phy_update_ind,
@@ -610,6 +611,59 @@ def test_central_host_channel_classification_while_busy(central):
 
 
 # ---------------------------------------------------------------------------
+# Power Control x Instant procedures
+# ---------------------------------------------------------------------------
+def _start_power_read(dut):
+    dut.host_start('prepare_read_remote_transmit_power', 1)
+    dut.event_prepare()
+    dut.lt_rx(Opcode.LL_POWER_CONTROL_REQ)
+
+
+def _complete_power_read(dut):
+    dut.lt_tx(pdu(Opcode.LL_POWER_CONTROL_RSP, 0, 0, 0xFC, 0xFF))
+    dut.ut_rx(
+        hci.HCI_LE_Transmit_Power_Reporting_Event,
+        status=ErrorCode.SUCCESS,
+        reason=2,
+        tx_power_level=-4,
+    )
+
+
+@pytest.mark.parametrize('iut_role', ['central', 'peripheral'])
+@pytest.mark.parametrize('procedure', ['phy', 'parameters'])
+def test_peer_instant_procedure_can_overlap_a_local_power_read(
+    request, iut_role, procedure
+):
+    """A peer Instant procedure can start while Power Control awaits a response.
+
+    Purpose: Verify compatible peer procedures can run concurrently (Vol 6,
+    Part B, 5.3).
+
+    Steps:
+        1. Start a local read and receive its LL_POWER_CONTROL_REQ.
+        2. Send a peer PHY or Connection Parameter Request.
+        3. Answer the outstanding Power Control Request.
+
+    Expected:
+        - A peer PHY request receives the appropriate PHY response for the role.
+        - Peer connection parameters reach the Host.
+        - The local read completes with the peer's reported power.
+    """
+    dut = request.getfixturevalue(iut_role)
+    _start_power_read(dut)
+    if procedure == 'phy':
+        dut.lt_tx(phy_req(PHY_2M, PHY_2M))
+        dut.lt_rx(
+            Opcode.LL_PHY_UPDATE_IND if iut_role == 'central' else Opcode.LL_PHY_RSP
+        )
+    else:
+        dut.lt_tx(connection_param_req(30))
+        dut.ut_rx(REMOTE_REQUEST, interval_min=30)
+    _complete_power_read(dut)
+    dut.ut_rx_q_is_empty()
+
+
+# ---------------------------------------------------------------------------
 # Host requests queued behind another local procedure
 # ---------------------------------------------------------------------------
 def _length_request(dut, octets=251, time_us=2120):
@@ -642,6 +696,22 @@ def test_phy_request_waits_for_local_data_length(central):
     central.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
     assert not central.controls.phy.phy_request
     central.lt_tx(length(Opcode.LL_LENGTH_RSP, 251, 2120, 251, 2120))
+    central.event_done()
+
+    central.event_prepare()
+    central.lt_rx(Opcode.LL_PHY_REQ, phy_req(PHY_2M, PHY_2M))
+
+
+def test_host_phy_request_waits_for_local_power_read(central):
+    """A second locally initiated procedure waits for Power Control to complete."""
+    _start_power_read(central)
+    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    central.tx_ack()
+    central.event_done()
+
+    central.event_prepare()
+    central.lt_rx_q_is_empty()
+    _complete_power_read(central)
     central.event_done()
 
     central.event_prepare()

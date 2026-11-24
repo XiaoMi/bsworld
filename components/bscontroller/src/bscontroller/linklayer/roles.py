@@ -273,12 +273,10 @@ def subevent_receive_window(sync: PeriodicSync) -> RadioReservation:
     )
 
 
-def response_transmit_window(
-    sync: PeriodicSync, response: ScheduledResponse
-) -> RadioReservation:
+def response_transmit_window(response: ScheduledResponse) -> RadioReservation:
     return RadioReservation(
         response.start_us - RADIO_SWITCH_TIME_US,
-        sync.phy.airtime_us(len(response.pdu)) + RADIO_SWITCH_TIME_US,
+        response.airtime_us + RADIO_SWITCH_TIME_US,
         ONE_SHOT_INTERVAL_US,
         RadioPriority.PERIODIC_RX,
     )
@@ -1253,7 +1251,8 @@ class SynchronizationManager:
         pdu = response_pdu(pending.data, address, tx_power)
         if not fits(pdu, sync.phy, response_limit_us(timing)):
             pdu = response_pdu(pending.data, None, tx_power)
-        pawr.scheduled.append(ScheduledResponse(start, channel, pdu.encode()))
+        airtime = sync.phy.airtime_us(len(pdu.encode()))
+        pawr.scheduled.append(ScheduledResponse(start, channel, pdu, airtime))
 
     def respond(
         self,
@@ -1498,7 +1497,7 @@ class LinkRoles:
                 reservations.append(periodic_receive_window(sync))
             if sync.pawr is not None:
                 reservations.extend(
-                    response_transmit_window(sync, response)
+                    response_transmit_window(response)
                     for response in sync.pawr.scheduled
                     if response is not exclude
                 )

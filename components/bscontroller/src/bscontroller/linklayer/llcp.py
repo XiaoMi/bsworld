@@ -37,6 +37,7 @@ from bscontroller.linklayer.procedure import (
     ProcedureResponseTimer,
 )
 from bscontroller.linklayer.state import Role
+from bscontroller.radio.base import Received
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.connection import Connection
@@ -157,6 +158,12 @@ class LlcpCoordinator:
             lengths.tx_payload_limit(),
             rx_payload,
         )
+
+    def transmit_power_dbm(self, control_payload: bytes | None) -> int:
+        return self.controls.power.transmit_power_dbm(control_payload)
+
+    def measure_received_power(self, packet: Received) -> None:
+        self.controls.power.received(packet)
 
     def can_send(self, llid: int, payload: bytes) -> bool:
         """PDUs allowed while an encryption procedure is in progress (Core Vol 6, Part
@@ -297,14 +304,19 @@ class LlcpCoordinator:
 
     def event_prepare(self) -> None:
         self.controls.apply()
+        if self.connection.closed:
+            return
         self.controls.release_transfers()
         self.start_deferred()
+        self.controls.power.update_transmitter()
+        self.controls.power.request_if_needed()
         self._prune_exchanges()
 
     def close(self, reason: int) -> None:
         self.deferred.clear()
         self.controls.features.finish(reason)
         self.controls.finish_version(None)
+        self.controls.power.close(reason)
         self.local_exchanges.clear()
         self.response_timer.stop()
 

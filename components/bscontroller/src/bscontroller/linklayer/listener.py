@@ -46,6 +46,19 @@ class ControlListener(Protocol):
 
     def on_connection_updated(self, connection: Connection, status: int) -> None: ...
     def on_phy_updated(self, connection: Connection, status: int) -> None: ...
+    def on_transmit_power_reporting(
+        self,
+        connection: Connection,
+        status: int,
+        reason: int,
+        phy: int,
+        tx_power_level: int,
+        flags: int,
+        delta: int,
+    ) -> None: ...
+    def on_path_loss_threshold(
+        self, connection: Connection, path_loss: int, zone: int
+    ) -> None: ...
     def on_data_length_changed(self, connection: Connection) -> None: ...
     def on_remote_features(self, connection: Connection, status: int) -> None: ...
     def on_remote_features_all(

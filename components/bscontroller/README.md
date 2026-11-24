@@ -210,6 +210,8 @@ The table groups Link Layer features by the Bluetooth Core version that introduc
 | 5.2 | Isochronous Broadcaster | * |
 | 5.2 | Synchronized Receiver | * |
 | 5.2 | Connected Isochronous Stream (CIS) |  |
+| 5.2 | LE Power Control Request | * |
+| 5.2 | LE Path Loss Monitoring | * |
 | 5.3 | Periodic Advertising ADI Support | * |
 | 5.3 | LE Channel Classification |  |
 | 5.3 | Connection Subrating |  |
@@ -259,6 +261,6 @@ python -m pytest tests/qualification -n auto -v -rs     # Radio cases use BSIM_O
 python -m build                                        # sdist and wheel in dist/
 ```
 
-The qualification suite uses independent lower testers to exercise 821 selected HCI and Link Layer cases from the Bluetooth test specifications. See the [test guide](tests/README.md) for coverage, setup and logs.
+The qualification suite uses independent lower testers to exercise 899 selected HCI and Link Layer cases from the Bluetooth test specifications. See the [test guide](tests/README.md) for coverage, setup and logs.
 
 Licensing and third-party notices are in [LICENSE](LICENSE) and [NOTICE](NOTICE).

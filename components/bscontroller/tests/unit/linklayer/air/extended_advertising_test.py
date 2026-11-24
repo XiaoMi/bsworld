@@ -118,6 +118,31 @@ def split(packets):
 # ---------------------------------------------------------------------------
 # Event layout (4.4.2.2.2)
 # ---------------------------------------------------------------------------
+def test_tx_path_compensation_changes_the_radiated_power_and_header(iut):
+    """A TX path gain applies to the radio and the advertising TxPower field.
+
+    Purpose: Verify that writing RF path compensation updates the radiated
+    power of an already configured set (Core Vol 4, Part E, 7.8.76).
+
+    Steps:
+        1. Configure an extended set with TxPower and a -8 dBm limit.
+        2. Add 5 dB of TX path gain, then enable the set.
+        3. Observe one advertising event.
+
+    Expected:
+        - The primary and auxiliary packets are transmitted at -3 dBm.
+        - The AUX_ADV_IND TxPower field reports -3 dBm.
+    """
+    configure(iut, Properties.INCLUDE_TX_POWER, advertising_tx_power=-8)
+    iut.ut(hci.HCI_LE_Write_RF_Path_Compensation_Command(50, 0))
+    enable(iut)
+    primary, auxiliary = split(one_event(iut))
+    assert primary
+    (advertisement,) = auxiliary
+    assert all(packet.power_dbm == -3 for packet in (*primary, advertisement))
+    assert ExtendedPdu.decode(advertisement.pdu).tx_power == -3
+
+
 @pytest.mark.parametrize('primary_phy', [Phy.LE_1M, Phy.LE_CODED])
 @pytest.mark.parametrize('secondary_phy', list(Phy))
 @pytest.mark.parametrize('channel_map', [1, 5, 7])

@@ -26,6 +26,7 @@ from tests.qualification.cases import (
     procedure_cases,
     verify_case,
 )
+from tests.qualification.hci.power_control_test import expect_remote_power_read_error
 from tests.qualification.peer import establish
 from tests.qualification.tester import (
     PEER_ADDRESS,
@@ -1242,7 +1243,211 @@ async def pawr_invalid_sync_subevents(tester):
     await tester.command(hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(handle))
 
 
+async def write_rf_path_compensation(tester):
+    """LE Write RF Path Compensation Command.
+
+    Initial Condition:
+        The IUT is in standby.
+
+    Test Steps:
+        Send LE Write RF Path Compensation with both compensation values set
+        to 0x0001 (0.1 dB). Receive Command Complete.
+
+    Expected Outcome:
+        The command completes successfully.
+
+    Reference:
+        HCI.TS.p39, Section 4.10, HCI/CCO/BV-19-C, Figure 4.94,
+        PDF pages 166-167; Core Vol 4, Part E, Section 7.8.76.
+    """
+    await tester.command(hci.HCI_LE_Write_RF_Path_Compensation_Command(1, 1))
+
+
+async def read_rf_path_compensation(tester):
+    """LE Read RF Path Compensation Command.
+
+    Initial Condition:
+        The IUT is in standby.
+
+    Test Steps:
+        Send LE Read RF Path Compensation and receive Command Complete with
+        the current transmit and receive compensation values.
+
+    Expected Outcome:
+        The command succeeds and returns both signed compensation values.
+
+    Reference:
+        HCI.TS.p39, Section 4.10, HCI/CCO/BV-20-C, Figure 4.95,
+        PDF page 167; Core Vol 4, Part E, Section 7.8.75.
+    """
+    result = await tester.command(hci.HCI_LE_Read_RF_Path_Compensation_Command())
+    assert -1280 <= result.rf_tx_path_compensation_value <= 1280
+    assert -1280 <= result.rf_rx_path_compensation_value <= 1280
+
+
+async def invalid_power_control_parameters(tester, *, operation, invalid_phy=False):
+    """Invalid LE Power Control HCI Parameters.
+
+    Initial Condition:
+        Establish a LE 1M ACL with the IUT as Peripheral.
+
+    Test Case Configuration:
+        BI-06 and BI-07 select Enhanced Read Transmit Power Level with an
+        unused handle and PHY 0xF0, respectively. BI-08 and BI-09 select the
+        same invalid parameters for Read Remote Transmit Power Level.
+        BI-10 selects Set Path Loss Reporting Parameters, BI-11 selects Set
+        Path Loss Reporting Enable, and BI-12 selects Set Transmit Power
+        Reporting Enable, each with an unused handle.
+
+    Test Steps:
+        1. Send the command and invalid parameter selected in Table 4.39.
+        2. Receive the event and error specified in the same row. For remote
+           reads, accept the error in Command Status or in LE Transmit Power
+           Reporting after a successful Command Status.
+
+    Expected Outcome:
+        An unused ACL handle results in 0x02. A PHY of 0xF0 results in 0x11.
+
+    Reference:
+        HCI.TS.p39, Section 4.10.3, HCI/CCO/BI-06-C through BI-12-C,
+        Figure 4.99 and Table 4.39, PDF pages 175-177;
+        Core Vol 4, Part E, Sections 7.8.117-7.8.121.
+    """
+    link = await establish(tester)
+    handle, phy, error = (
+        (link.handle, 0xF0, ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR)
+        if invalid_phy
+        else (link.handle + 1, 1, ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
+    )
+    if operation == 'remote_read':
+        await expect_remote_power_read_error(tester, handle, phy, error)
+    else:
+        command, parameters = {
+            'local_read': (
+                hci.HCI_LE_Enhanced_Read_Transmit_Power_Level_Command,
+                (handle, phy),
+            ),
+            'path_loss_parameters': (
+                hci.HCI_LE_Set_Path_Loss_Reporting_Parameters_Command,
+                (handle, 80, 0, 40, 0, 0),
+            ),
+            'path_loss_enable': (
+                hci.HCI_LE_Set_Path_Loss_Reporting_Enable_Command,
+                (handle, 1),
+            ),
+            'power_reporting_enable': (
+                hci.HCI_LE_Set_Transmit_Power_Reporting_Enable_Command,
+                (handle, 1, 1),
+            ),
+        }[operation]
+        await tester.command(command(*parameters), error)
+    await link.disconnect()
+
+
+async def invalid_path_loss_monitoring_parameters(tester):
+    """Invalid Path Loss Monitoring Parameters.
+
+    Initial Condition:
+        Establish a LE 1M ACL with the IUT as Peripheral. The fixture starts
+        with 45 dB path attenuation and path loss reporting is unconfigured.
+
+    Test Steps:
+        1. Exchange empty ACL data packets at a 7.5 ms connection interval.
+        2. Enable path loss reporting before setting its parameters.
+        3. Set high threshold 0xF0 and high hysteresis 0xF0.
+        4. Set low threshold 0x10 and low hysteresis 0x20.
+        5. Set high threshold 0xE0 and low threshold 0xF0.
+        6. Set high threshold 0x50, high hysteresis 0x03, low threshold 0x4F,
+           and low hysteresis 0x05.
+
+    Expected Outcome:
+        Command Complete reports 0x0C in step 2 and 0x12 in each of steps 3-6.
+
+    Source Correction:
+        The figure gives 0xE0 as the last high threshold. The numbered step 6
+        gives 0x50, which exercises the overlapping hysteresis boundaries in
+        Core Section 7.8.119.
+
+    Reference:
+        HCI.TS.p39, Section 4.10, HCI/CCO/BI-13-C, Figure 4.100,
+        PDF pages 177-179; Core Vol 4, Part E, Section 7.8.119 and 7.8.120.
+    """
+    link = await establish(tester, interval=6)
+    await link.exchange()
+    await tester.command(
+        hci.HCI_LE_Set_Path_Loss_Reporting_Enable_Command(link.handle, 1),
+        ErrorCode.COMMAND_DISALLOWED_ERROR,
+    )
+    for thresholds in (
+        (0xF0, 0xF0, 0, 0),
+        (0x50, 0, 0x10, 0x20),
+        (0xE0, 0, 0xF0, 0),
+        (0x50, 0x03, 0x4F, 0x05),
+    ):
+        await link.exchange()
+        await tester.command(
+            hci.HCI_LE_Set_Path_Loss_Reporting_Parameters_Command(
+                link.handle, *thresholds, 0
+            ),
+            ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+        )
+    await link.disconnect()
+
+
 PROCEDURES: ProcedureMap = {}
+
+# Verify that a valid RF path compensation write completes in standby.
+PROCEDURES |= procedure_cases(
+    write_rf_path_compensation,
+    {'HCI/CCO/BV-19-C': ('LE Write RF Path Compensation Command', {})},
+)
+
+# Verify that the standby read returns both signed compensation values.
+PROCEDURES |= procedure_cases(
+    read_rf_path_compensation,
+    {'HCI/CCO/BV-20-C': ('LE Read RF Path Compensation Command', {})},
+)
+
+# Table 4.39 covers invalid ACL handles and RFU PHY values for the power commands.
+PROCEDURES |= procedure_cases(
+    invalid_power_control_parameters,
+    {
+        'HCI/CCO/BI-06-C': (
+            'LE Enhanced Read Transmit Power Level – Invalid Connection Handle',
+            {'operation': 'local_read'},
+        ),
+        'HCI/CCO/BI-07-C': (
+            'LE Enhanced Read Transmit Power Level – Invalid PHY',
+            {'operation': 'local_read', 'invalid_phy': True},
+        ),
+        'HCI/CCO/BI-08-C': (
+            'LE Read Remote Transmit Power Level – Invalid Connection Handle',
+            {'operation': 'remote_read'},
+        ),
+        'HCI/CCO/BI-09-C': (
+            'LE Read Remote Transmit Power Level – Invalid PHY',
+            {'operation': 'remote_read', 'invalid_phy': True},
+        ),
+        'HCI/CCO/BI-10-C': (
+            'LE Set Path Loss Reporting Parameters – Invalid Connection Handle',
+            {'operation': 'path_loss_parameters'},
+        ),
+        'HCI/CCO/BI-11-C': (
+            'LE Set Path Loss Reporting Enable – Invalid Connection Handle',
+            {'operation': 'path_loss_enable'},
+        ),
+        'HCI/CCO/BI-12-C': (
+            'LE Set Transmit Power Reporting Enable – Invalid Connection Handle',
+            {'operation': 'power_reporting_enable'},
+        ),
+    },
+)
+
+# Figure 4.100 verifies enable-before-configuration and four invalid thresholds.
+PROCEDURES |= procedure_cases(
+    invalid_path_loss_monitoring_parameters,
+    {'HCI/CCO/BI-13-C': ('Invalid Path Loss Monitoring Parameters', {})},
+)
 
 # Verify that an LE-only IUT rejects a BR/EDR Inquiry command.
 PROCEDURES |= procedure_cases(
@@ -1486,6 +1691,14 @@ RADIO_CASES = (
     'HCI/CCO/BI-124-C',
     'HCI/CCO/BI-66-C',
     'HCI/CCO/BI-68-C',
+    'HCI/CCO/BI-06-C',
+    'HCI/CCO/BI-07-C',
+    'HCI/CCO/BI-08-C',
+    'HCI/CCO/BI-09-C',
+    'HCI/CCO/BI-10-C',
+    'HCI/CCO/BI-11-C',
+    'HCI/CCO/BI-12-C',
+    'HCI/CCO/BI-13-C',
 )
 
 

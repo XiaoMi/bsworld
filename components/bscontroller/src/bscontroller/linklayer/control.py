@@ -50,6 +50,7 @@ from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.instant import InstantUpdate
 from bscontroller.linklayer.parameters import valid_channel_map
 from bscontroller.linklayer.phy import PhyProcedure
+from bscontroller.linklayer.power_control import PowerControl
 from bscontroller.linklayer.procedure import ProcedureContext, ProcedureResponseTimer
 from bscontroller.linklayer.state import Role
 from bscontroller.linklayer.timing import LL_INSTANT_PAST_THRESHOLD
@@ -89,6 +90,7 @@ class ControlProcedures:
         self.acknowledged = False
         self.data_length = DataLengthProcedure(connection)
         self.features = FeatureExchangeProcedure(self)
+        self.power = PowerControl(self)
         # Includes a local indication queued but not yet transmitted during a collision.
         self.version_sent = False
         self.peer_version: tuple[int, int, int] | None = None
@@ -121,6 +123,7 @@ class ControlProcedures:
             self.phy.context,
             self.connection_parameters.local_context,
             self.data_length.context,
+            self.power.context,
         )
         return tuple(context for context in contexts if context is not None)
 
@@ -133,7 +136,8 @@ class ControlProcedures:
         return self.connection.link.listener
 
     @property
-    def busy(self) -> bool:
+    def peer_instant_blocked(self) -> bool:
+        """Preserve the admission gates for peer-initiated Instant procedures."""
         return bool(
             self.pending
             or self.connection_parameters.remote_parameters
@@ -144,6 +148,11 @@ class ControlProcedures:
         )
 
     @property
+    def busy(self) -> bool:
+        """Serialize local procedures; Power Control can overlap a peer Instant."""
+        return self.peer_instant_blocked or self.power.pending
+
+    @property
     def next_deadline_us(self) -> int:
         deadlines = [
             deadline
@@ -152,6 +161,7 @@ class ControlProcedures:
                 self.data_length.deadline_us,
                 self.features.deadline_us,
                 self.version_deadline_us,
+                self.power.deadline_us,
             )
             if deadline
         ]
@@ -455,6 +465,8 @@ class ControlProcedures:
             return True
         if self.data_length.control(payload) or self.features.control(payload):
             return True
+        if self.power.control(payload):
+            return True
         opcode = payload[0]
         if (
             opcode == Opcode.LL_MIN_USED_CHANNELS_IND
@@ -625,6 +637,7 @@ class ControlProcedures:
             )
             connection.tx_phy = Phy(tx or connection.tx_phy)
             connection.rx_phy = Phy(rx or connection.rx_phy)
+            self.power.update_transmitter()
             self.phy.finish(ErrorCode.SUCCESS)
         self.data_length.refresh()
         self._refresh_channel_map()
@@ -642,7 +655,10 @@ class ControlProcedures:
             return True
         if self.features.check_timeout():
             return True
-        if self.deadline_us and self.connection.radio.now_us >= self.deadline_us:
+        now = self.connection.radio.now_us
+        if (self.deadline_us and now >= self.deadline_us) or (
+            self.power.deadline_us and now >= self.power.deadline_us
+        ):
             self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
             return True
         return False

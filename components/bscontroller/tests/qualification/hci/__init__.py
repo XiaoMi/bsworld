@@ -15,6 +15,7 @@ from . import (
     event_versioning_test,
     generic_events_test,
     host_flow_control_test,
+    power_control_test,
 )
 
 CHAPTERS = {
@@ -26,6 +27,7 @@ CHAPTERS = {
     '4.8': host_flow_control_test,
     '4.10': controller_configuration_test,
     '4.13': connection_management_test,
+    '4.14': power_control_test,
     '4.17': event_versioning_test,
 }
 

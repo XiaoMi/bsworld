@@ -175,7 +175,7 @@ class PhyProcedure:
                     )
                 ):
                     self.remote_phy_request = payload
-                elif self.owner.busy:
+                elif self.owner.peer_instant_blocked:
                     self.owner.reject(
                         opcode,
                         (

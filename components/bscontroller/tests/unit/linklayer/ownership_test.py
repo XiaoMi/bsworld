@@ -409,7 +409,7 @@ def test_connection_queries_are_frozen_detached_values(connection):
         before.rssi = -20
     with pytest.raises(FrozenInstanceError):
         before.peer.address_type = hci.AddressType.RANDOM_DEVICE
-    connection.rssi = -42
+    connection.last_rssi_dbm = -42
     assert before.rssi is None
     assert service.connection_snapshot(connection.handle).rssi == -42
 

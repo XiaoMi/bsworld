@@ -406,7 +406,7 @@ class ConnectionParametersProcedure:
                     self.receive_request(payload[PDU_CONTROL_OPCODE_SIZE:])
                     if self.owner.phy.phy_request_local:
                         self.notify_remote_parameters()
-                elif self.owner.busy:
+                elif self.owner.peer_instant_blocked:
                     self.owner.reject(
                         opcode,
                         (

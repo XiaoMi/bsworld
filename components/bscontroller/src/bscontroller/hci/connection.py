@@ -60,11 +60,6 @@ logger = logging.getLogger(__name__)
 
 
 class LeConnectionCommands(LeControllerContext):
-    def _run_ll_request(self, command, request):
-        # Cached results can complete synchronously, after Command Status is visible.
-        self.controller._send_hci_command_status(request.status, command.op_code)
-        request.start()
-
     def _start_initiating(self, command, parameters, windows, pawr=None):
         """Commit one validated attempt; a rejected command leaves all state intact.
 
