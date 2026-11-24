@@ -99,7 +99,7 @@ class Connection:
         self.tx_phy: Phy = phy
         self.rx_phy: Phy = phy
         self.peer_features: int | None = None
-        self.rssi: int | None = None
+        self.last_rssi_dbm: float | None = None
         self.tx_coding: int = PHY_CODED_S8_FACTOR
         self.update_window: bool = False
         self.packet_security = PacketSecurity()
@@ -118,6 +118,12 @@ class Connection:
     @property
     def encryption(self):
         return self.llcp.encryption
+
+    @property
+    def rssi(self) -> int | None:
+        if self.last_rssi_dbm is None:
+            return None
+        return self.link.reported_rssi(self.last_rssi_dbm)
 
     @property
     def listener(self) -> ConnectionListener:

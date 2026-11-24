@@ -90,6 +90,39 @@ def test_response_remains_due_after_skip_advances_anchor(iut, skip, counter):
     iut.lt_rx_q_is_empty()
 
 
+def test_response_reflects_rf_compensation_written_after_scheduling(iut):
+    """Update the scheduled response's TxPower (Core Vol 4, Part E, 7.8.76).
+
+    Steps:
+        1. Enable IncludeTxPower, receive an indication and schedule its response.
+        2. Write +5 dB of TX path compensation before the response slot.
+
+    Expected:
+        - The response's TxPower field and actual RF power are both +5 dBm.
+    """
+    sync = sync_setup(iut)
+    properties = hci.HCI_LE_Set_Periodic_Advertising_Parameters_Command.Properties
+    iut.ut(
+        hci.HCI_LE_Set_Periodic_Sync_Subevent_Command(
+            1, properties.INCLUDE_TX_POWER, [0]
+        )
+    )
+    start, _ = indication(iut, sync)
+    iut.run_until(start + 1_000)
+    iut.ut_rx(REPORT)
+    iut.ut(
+        hci.HCI_LE_Set_Periodic_Advertising_Response_Data_Command(
+            1, 0, 0, 0, 0, b'echo'
+        )
+    )
+    assert sync.pawr is not None and sync.pawr.scheduled
+    iut.ut(hci.HCI_LE_Write_RF_Path_Compensation_Command(50, 0))
+    iut.run_until(start + 12_000)
+    packet = iut.lt_rx()
+    assert packet.start_us == start + TIMING.slot_offset_us(0)
+    assert packet.ext.tx_power == packet.power_dbm == 5
+
+
 def test_missing_indication_does_not_transmit_queued_response(iut):
     """Queue data before its IND, miss that IND and verify only the failure report.
 

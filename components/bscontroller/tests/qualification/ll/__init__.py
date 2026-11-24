@@ -12,6 +12,7 @@ from . import (
     encoding_test,
     frequency_hopping_test,
     packet_handling_test,
+    power_control_test,
     security_test,
     timing_test,
 )
@@ -25,6 +26,7 @@ CHAPTERS = {
     '4.7': packet_handling_test,
     '4.8': security_test,
     '4.9': data_flow_test,
+    '4.13': power_control_test,
 }
 
 PROCEDURES: ProcedureMap = {}

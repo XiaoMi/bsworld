@@ -137,13 +137,11 @@ class LeAdvertisingCommands(LeControllerContext):
         See Bluetooth spec Vol 4, Part E - 7.8.6 LE Read Advertising Physical Channel Tx
         Power Command
         '''
-        # Core Vol 4, Part E, 7.8.6: report the power used by legacy advertising.
+        state = self.ll.advertising.snapshot(-1)
         return hci.HCI_LE_Read_Advertising_Physical_Channel_Tx_Power_ReturnParameters(
             status=SUCCESS,
-            tx_power_level=(
-                state.tx_power_dbm
-                if (state := self.ll.advertising.snapshot(-1)) is not None
-                else 0
+            tx_power_level=self.ll.radiative_transmit_power(
+                state.tx_power_dbm if state is not None else 0
             ),
         )
 
@@ -350,7 +348,9 @@ class LeAdvertisingCommands(LeControllerContext):
             status = INVALID
         return status
 
-    def _extended_advertising_configuration(self, command) -> AdvertisingConfig:
+    def _extended_advertising_configuration(
+        self, command, tx_power_dbm: int
+    ) -> AdvertisingConfig:
         """Translate decoded HCI fields; LL retains payloads and runtime state."""
         properties = command.advertising_event_properties
         high_duty = bool(
@@ -394,11 +394,7 @@ class LeAdvertisingCommands(LeControllerContext):
             notify_scan_request=bool(command.scan_request_notification_enable),
             filter_policy=command.advertising_filter_policy,
             anonymous=bool(properties & Properties.ANONYMOUS_ADVERTISING),
-            tx_power_dbm=(
-                0
-                if command.advertising_tx_power == TX_POWER_NO_PREFERENCE
-                else command.advertising_tx_power
-            ),
+            tx_power_dbm=tx_power_dbm,
             include_tx_power=bool(properties & Properties.INCLUDE_TX_POWER),
             sid=command.advertising_sid,
             own_address_type=command.own_address_type,
@@ -420,7 +416,21 @@ class LeAdvertisingCommands(LeControllerContext):
             return hci.HCI_LE_Set_Extended_Advertising_Parameters_ReturnParameters(
                 status, 0
             )
-        config = self._extended_advertising_configuration(command)
+        requested_power = command.advertising_tx_power
+        tx_power_dbm = (
+            0
+            if requested_power == TX_POWER_NO_PREFERENCE
+            else self.ll.advertising_transmit_power(requested_power)
+        )
+        selected_power = self.ll.radiative_transmit_power(tx_power_dbm)
+        if (
+            requested_power != TX_POWER_NO_PREFERENCE
+            and selected_power > requested_power
+        ):
+            return hci.HCI_LE_Set_Extended_Advertising_Parameters_ReturnParameters(
+                UNSUPPORTED, 0
+            )
+        config = self._extended_advertising_configuration(command, tx_power_dbm)
         # Parameter validity alone is insufficient: changing mode or PHY can make
         # previously accepted data illegal or too long for the interval.
         status = self.ll.advertising.configure(command.advertising_handle, config)
@@ -431,7 +441,7 @@ class LeAdvertisingCommands(LeControllerContext):
             )
             record.parameters = command
         return hci.HCI_LE_Set_Extended_Advertising_Parameters_ReturnParameters(
-            status, config.tx_power_dbm if status == SUCCESS else 0
+            status, selected_power if status == SUCCESS else 0
         )
 
     def on_hci_le_set_advertising_set_random_address_command(self, command):

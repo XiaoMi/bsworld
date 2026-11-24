@@ -3699,6 +3699,33 @@ class HCI_LE_Read_Transmit_Power_Command(
 
 
 # -----------------------------------------------------------------------------
+@dataclasses.dataclass
+class HCI_LE_Read_RF_Path_Compensation_ReturnParameters(HCI_StatusReturnParameters):
+    rf_tx_path_compensation_value: int = field(metadata=metadata(-2))
+    rf_rx_path_compensation_value: int = field(metadata=metadata(-2))
+
+
+@HCI_SyncCommand.sync_command(HCI_LE_Read_RF_Path_Compensation_ReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_Read_RF_Path_Compensation_Command(
+    HCI_SyncCommand[HCI_LE_Read_RF_Path_Compensation_ReturnParameters]
+):
+    '''See Bluetooth spec @ 7.8.75 LE Read RF Path Compensation command.'''
+
+
+# -----------------------------------------------------------------------------
+@HCI_SyncCommand.sync_command(HCI_StatusReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_Write_RF_Path_Compensation_Command(
+    HCI_SyncCommand[HCI_StatusReturnParameters]
+):
+    '''See Bluetooth spec @ 7.8.76 LE Write RF Path Compensation command.'''
+
+    rf_tx_path_compensation_value: int = field(metadata=metadata(-2))
+    rf_rx_path_compensation_value: int = field(metadata=metadata(-2))
+
+
+# -----------------------------------------------------------------------------
 @HCI_SyncCommand.sync_command(HCI_StatusReturnParameters)
 @dataclasses.dataclass
 class HCI_LE_Set_Privacy_Mode_Command(HCI_SyncCommand[HCI_StatusReturnParameters]):
@@ -4261,6 +4288,80 @@ class HCI_LE_Set_Host_Feature_Command(HCI_SyncCommand[HCI_StatusReturnParameters
 
     bit_number: int = field(metadata=metadata(1))
     bit_value: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@dataclasses.dataclass
+class HCI_LE_Enhanced_Read_Transmit_Power_Level_ReturnParameters(
+    HCI_StatusAndConnectionHandleReturnParameters
+):
+    phy: int = field(metadata=metadata(1))
+    current_tx_power_level: int = field(metadata=metadata(-1))
+    max_tx_power_level: int = field(metadata=metadata(-1))
+
+
+@HCI_SyncCommand.sync_command(
+    HCI_LE_Enhanced_Read_Transmit_Power_Level_ReturnParameters
+)
+@dataclasses.dataclass
+class HCI_LE_Enhanced_Read_Transmit_Power_Level_Command(
+    HCI_SyncCommand[HCI_LE_Enhanced_Read_Transmit_Power_Level_ReturnParameters]
+):
+    '''See Bluetooth spec @ 7.8.117 LE Enhanced Read Transmit Power Level command.'''
+
+    connection_handle: int = field(metadata=metadata(2))
+    phy: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@HCI_Command.command
+@dataclasses.dataclass
+class HCI_LE_Read_Remote_Transmit_Power_Level_Command(HCI_AsyncCommand):
+    '''See Bluetooth spec @ 7.8.118 LE Read Remote Transmit Power Level command.'''
+
+    connection_handle: int = field(metadata=metadata(2))
+    phy: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@HCI_SyncCommand.sync_command(HCI_StatusAndConnectionHandleReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_Set_Path_Loss_Reporting_Parameters_Command(
+    HCI_SyncCommand[HCI_StatusAndConnectionHandleReturnParameters]
+):
+    '''See Bluetooth spec @ 7.8.119 LE Set Path Loss Reporting Parameters command.'''
+
+    connection_handle: int = field(metadata=metadata(2))
+    high_threshold: int = field(metadata=metadata(1))
+    high_hysteresis: int = field(metadata=metadata(1))
+    low_threshold: int = field(metadata=metadata(1))
+    low_hysteresis: int = field(metadata=metadata(1))
+    min_time_spent: int = field(metadata=metadata(2))
+
+
+# -----------------------------------------------------------------------------
+@HCI_SyncCommand.sync_command(HCI_StatusAndConnectionHandleReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_Set_Path_Loss_Reporting_Enable_Command(
+    HCI_SyncCommand[HCI_StatusAndConnectionHandleReturnParameters]
+):
+    '''See Bluetooth spec @ 7.8.120 LE Set Path Loss Reporting Enable command.'''
+
+    connection_handle: int = field(metadata=metadata(2))
+    enable: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@HCI_SyncCommand.sync_command(HCI_StatusAndConnectionHandleReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_Set_Transmit_Power_Reporting_Enable_Command(
+    HCI_SyncCommand[HCI_StatusAndConnectionHandleReturnParameters]
+):
+    '''See Bluetooth spec @ 7.8.121 LE Set Transmit Power Reporting Enable command.'''
+
+    connection_handle: int = field(metadata=metadata(2))
+    local_enable: int = field(metadata=metadata(1))
+    remote_enable: int = field(metadata=metadata(1))
 
 
 # -----------------------------------------------------------------------------
@@ -5717,6 +5818,32 @@ class HCI_LE_BIG_Sync_Lost_Event(HCI_LE_Meta_Event):
 
     big_handle: int = field(metadata=metadata(1))
     reason: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@HCI_LE_Meta_Event.event
+@dataclasses.dataclass
+class HCI_LE_Path_Loss_Threshold_Event(HCI_LE_Meta_Event):
+    '''See Bluetooth spec @ 7.7.65.32 LE Path Loss Threshold event.'''
+
+    connection_handle: int = field(metadata=metadata(2))
+    current_path_loss: int = field(metadata=metadata(1))
+    zone_entered: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@HCI_LE_Meta_Event.event
+@dataclasses.dataclass
+class HCI_LE_Transmit_Power_Reporting_Event(HCI_LE_Meta_Event):
+    '''See Bluetooth spec @ 7.7.65.33 LE Transmit Power Reporting event.'''
+
+    status: int = field(metadata=metadata(STATUS_SPEC))
+    connection_handle: int = field(metadata=metadata(2))
+    reason: int = field(metadata=metadata(1))
+    phy: int = field(metadata=metadata(1))
+    tx_power_level: int = field(metadata=metadata(-1))
+    tx_power_level_flag: int = field(metadata=metadata(1))
+    delta: int = field(metadata=metadata(-1))
 
 
 # -----------------------------------------------------------------------------

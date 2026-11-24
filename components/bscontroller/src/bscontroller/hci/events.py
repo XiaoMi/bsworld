@@ -35,7 +35,7 @@ from bscontroller.linklayer.api import (
     PeriodicSyncSnapshot,
 )
 from bscontroller.linklayer.state import AdvertisingProperties, DataStatus
-from bscontroller.radio.base import RADIO_TX_POWER_MAX_DBM, RADIO_TX_POWER_MIN_DBM, Phy
+from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
     from bscontroller.hci.controller import Controller
@@ -220,6 +220,22 @@ class LeControllerEvents:
             )
         )
 
+    def on_transmit_power_reporting(
+        self, connection: ConnectionSnapshot, status, reason, phy, power, flags, delta
+    ):
+        """Report local or remote transmit power (Core Vol 4, Part E, 7.7.65.33)."""
+        self._emit_hci_packet(
+            hci.HCI_LE_Transmit_Power_Reporting_Event(
+                status, connection.handle, reason, phy, power, flags, delta
+            )
+        )
+
+    def on_path_loss_threshold(self, connection: ConnectionSnapshot, path_loss, zone):
+        """Report a path loss zone change (Core Vol 4, Part E, 7.7.65.32)."""
+        self._emit_hci_packet(
+            hci.HCI_LE_Path_Loss_Threshold_Event(connection.handle, path_loss, zone)
+        )
+
     def on_connected(self, connection: ConnectionSnapshot):
         """LE (Enhanced) Connection Complete and Channel Selection Algorithm events (Vol
         4, Part E, 7.7.65.1, 7.7.65.10, 7.7.65.20).
@@ -376,6 +392,13 @@ class LeControllerEvents:
             )
         )
 
+    def _advertising_rssi(self, rssi: float | None) -> int:
+        return (
+            self.ll.reported_rssi(rssi)
+            if rssi is not None
+            else AdvertisingReport.RSSI_NOT_AVAILABLE
+        )
+
     def on_advertisement(
         self,
         address,
@@ -438,7 +461,7 @@ class LeControllerEvents:
             if key in self.seen:
                 return
             self.seen.add(key)
-        rssi = max(RADIO_TX_POWER_MIN_DBM, min(RADIO_TX_POWER_MAX_DBM, round(rssi)))
+        rssi = self._advertising_rssi(rssi)
         if (
             not self.extended_scan
             and target is not None
@@ -669,11 +692,7 @@ class LeControllerEvents:
             if tx_power is not None
             else AdvertisingReport.TX_POWER_INFORMATION_NOT_AVAILABLE
         )
-        rssi = (
-            max(RADIO_TX_POWER_MIN_DBM, min(RADIO_TX_POWER_MAX_DBM, round(rssi)))
-            if rssi is not None
-            else AdvertisingReport.RSSI_NOT_AVAILABLE
-        )
+        rssi = self._advertising_rssi(rssi)
         size = (
             HCI_LE_PERIODIC_REPORT_V2_DATA_SIZE_MAX
             if v2
@@ -761,13 +780,8 @@ class LeControllerEvents:
                         if response.tx_power is not None
                         else AdvertisingReport.TX_POWER_INFORMATION_NOT_AVAILABLE
                     ),
-                    rssi=(
-                        max(
-                            RADIO_TX_POWER_MIN_DBM,
-                            min(RADIO_TX_POWER_MAX_DBM, round(response.rssi)),
-                        )
-                        if response.data is not None
-                        else AdvertisingReport.RSSI_NOT_AVAILABLE
+                    rssi=self._advertising_rssi(
+                        response.rssi if response.data is not None else None
                     ),
                     cte_type=HCI_LE_PERIODIC_REPORT_CTE_NONE,
                     response_slot=response.slot,

@@ -45,7 +45,7 @@ from bscontroller.linklayer.timing import (
     LL_CONN_EVENT_GUARD_US,
     window_widening,
 )
-from bscontroller.radio.base import RADIO_TX_POWER_MAX_DBM, RADIO_TX_POWER_MIN_DBM, Phy
+from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.connection import Connection
@@ -93,7 +93,7 @@ class ConnectionEvent:
         else:
             self.queue.append(item)
 
-    def accept(self, pdu: bytes, valid_crc: bool) -> None:
+    def accept(self, pdu: bytes, valid_crc: bool) -> bool:
         """Validate RX, then process its ACK independently of new peer data.
 
         See Bluetooth Core 6.3, Vol 6, Part B, 4.5.9.
@@ -103,7 +103,7 @@ class ConnectionEvent:
             or len(pdu) < PDU_HEADER_SIZE
             or pdu[1] != len(pdu) - PDU_HEADER_SIZE
         ):
-            return
+            return False
         header, _ = pdu[:PDU_HEADER_SIZE]
         acknowledged_control = (
             self.pending.payload
@@ -126,7 +126,7 @@ class ConnectionEvent:
             if header & PDU_DATA_LLID_MASK == LlId.CONTROL
             else self.control.packet_limits().rx_octets
         ):
-            return
+            return False
         # Validate the payload before using its ACK or returning Host credit;
         # a failed receive must leave the pending TX snapshot intact.
         self.connection.last_rx_us = self.connection.radio.now_us
@@ -150,11 +150,11 @@ class ConnectionEvent:
                 self.connection.listener.on_acl_completed(self.connection)
             if terminate_reason is not None:
                 self.connection.complete(terminate_reason)
-                return
+                return True
         if bool(header & PDU_DATA_SN_MASK) != self.rx_nesn:
             # Retransmissions can carry a new ACK, but must not redeliver their payload.
             self.connection.link.trace("LL RX DUPLICATE")
-            return
+            return True
         self.rx_nesn ^= 1
         llid = header & PDU_DATA_LLID_MASK
         # Reserved LLID participates in ARQ, but has no payload interpretation.
@@ -164,6 +164,7 @@ class ConnectionEvent:
             self.connection.listener.on_acl_received(
                 self.connection, llid == LlId.CONTINUATION, payload
             )
+        return True
 
     def _next_outbound(self) -> Outbound:
         return next(
@@ -241,6 +242,9 @@ class ConnectionEvent:
             crc_init=self.connection.parameters.crc_init,
             phy=self.connection.tx_phy,
             coding=self.connection.tx_coding,
+            power_dbm=self.control.transmit_power_dbm(
+                item.payload if item.llid == LlId.CONTROL else None
+            ),
         )
         if item.llid == LlId.CONTROL:
             self.control.sent(item.payload, first=not self.sent_pending)
@@ -273,10 +277,7 @@ class ConnectionEvent:
             self.connection.establish()
             self.connection.received_in_event()
             if packet.valid_crc:
-                self.connection.rssi = max(
-                    RADIO_TX_POWER_MIN_DBM,
-                    min(RADIO_TX_POWER_MAX_DBM, round(packet.rssi)),
-                )
+                self.connection.last_rssi_dbm = packet.rssi
             within_time = len(packet.pdu) >= PDU_HEADER_SIZE and (
                 packet.pdu[0] & PDU_DATA_LLID_MASK == LlId.CONTROL
                 or packet.end_us - packet.start_us
@@ -289,7 +290,11 @@ class ConnectionEvent:
                     ),
                 )
             )
-            self.accept(packet.pdu, packet.valid_crc and within_time)
+            if (
+                self.accept(packet.pdu, packet.valid_crc and within_time)
+                and not self.connection.closed
+            ):
+                self.control.measure_received_power(packet)
         return packet
 
     def next_exchange_us(self, *, max_rx: bool = True) -> int:

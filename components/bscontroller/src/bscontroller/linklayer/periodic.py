@@ -25,6 +25,7 @@ from bscontroller.linklayer.channel_selection import channel_selection_2
 from bscontroller.linklayer.discovery import Advertising, PeriodicSync
 from bscontroller.linklayer.extended import periodic_pdu, periodic_time_us
 from bscontroller.linklayer.pawr import (
+    RESPONSE_TX_POWER_DBM,
     ScheduledResponse,
     SlotResponse,
     SubeventResponses,
@@ -321,7 +322,7 @@ async def response_transmit(
     if not link.resource.admit(
         response,
         response.start_us - RADIO_SWITCH_TIME_US,
-        response.start_us + sync.phy.airtime_us(len(response.pdu)),
+        response.start_us + response.airtime_us,
         RadioPriority.PERIODIC_RX,
         earliest_us=link.radio.earliest_start_us(
             response.channel, sync.phy, transmit=True
@@ -331,9 +332,10 @@ async def response_transmit(
         return
     await link._transmit(
         response.channel,
-        response.pdu,
+        link.with_radiative_power(response.pdu).encode(),
         start_us=response.start_us,
         access_address=pawr.rsp_aa,
         crc_init=info.crc_init,
         phy=sync.phy,
+        power_dbm=RESPONSE_TX_POWER_DBM,
     )

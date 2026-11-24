@@ -56,6 +56,11 @@ class LeControllerContext(LeControllerEvents):
         self.period_duplicate_reset = False
         self.extended_commands: bool | None = None
 
+    def _run_ll_request(self, command, request):
+        # Cached results can complete synchronously, after Command Status is visible.
+        self.controller._send_hci_command_status(request.status, command.op_code)
+        request.start()
+
     @property
     def now_us(self) -> int:
         return self.ll.now_us

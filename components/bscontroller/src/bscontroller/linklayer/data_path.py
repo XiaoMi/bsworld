@@ -25,7 +25,7 @@ from bscontroller.linklayer import (
     PDU_DATA_AUTHENTICATED_HEADER_MASK,
     PDU_DATA_MIC_SIZE,
 )
-from bscontroller.radio.base import Phy
+from bscontroller.radio.base import Phy, Received
 
 
 class PacketCipher:
@@ -135,6 +135,8 @@ class PacketControl(Protocol):
 
     def packet_limits(self) -> PacketLimits: ...
 
+    def transmit_power_dbm(self, control_payload: bytes | None) -> int: ...
+
     def can_send(self, llid: int, payload: bytes) -> bool: ...
 
     def prepare(self, payload: bytes) -> bytes: ...
@@ -144,6 +146,8 @@ class PacketControl(Protocol):
     def acknowledged(self, payload: bytes) -> int | None: ...
 
     def receive(self, context: ReceiveContext) -> bytes | None: ...
+
+    def measure_received_power(self, packet: Received) -> None: ...
 
     def control(self, payload: bytes) -> None: ...
 

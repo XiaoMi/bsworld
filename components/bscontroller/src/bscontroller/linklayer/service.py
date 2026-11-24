@@ -72,6 +72,13 @@ from bscontroller.linklayer.pawr import (
     fits,
     indication_limit_us,
 )
+from bscontroller.linklayer.power_control import (
+    MAX_COMPENSATION,
+    POWER_UNAVAILABLE,
+    PathLossParameters,
+    PowerPhy,
+    compensated_power,
+)
 from bscontroller.linklayer.state import Role
 from bscontroller.linklayer.transfer import (
     AdvertisingSource,
@@ -1041,6 +1048,99 @@ class LinkLayerService:
     def connection_snapshot(self, handle: int) -> ConnectionSnapshot | None:
         connection = self._connection(handle)
         return connection_snapshot(connection) if connection is not None else None
+
+    def read_rf_path_compensation(self) -> tuple[int, int]:
+        return self.link.rf_tx_path_compensation, self.link.rf_rx_path_compensation
+
+    def set_rf_path_compensation(self, tx: int, rx: int) -> int:
+        if max(abs(tx), abs(rx)) > MAX_COMPENSATION:
+            return INVALID
+        self.link.rf_tx_path_compensation = tx
+        self.link.rf_rx_path_compensation = rx
+        return SUCCESS
+
+    def radiative_transmit_power(self, dbm: int) -> int:
+        return self.link.radiative_transmit_power(dbm)
+
+    def advertising_transmit_power(self, requested_dbm: int) -> int:
+        # Round the output down so the selected radiated level stays within the limit.
+        output = (10 * requested_dbm - self.link.rf_tx_path_compensation) // 10
+        return compensated_power(output, 0)
+
+    def reported_rssi(self, dbm: float) -> int:
+        return self.link.reported_rssi(dbm)
+
+    def read_local_transmit_power(self, handle: int, phy: int) -> tuple[int, int, int]:
+        connection = self._connection(handle)
+        if connection is None:
+            return (
+                ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR,
+                POWER_UNAVAILABLE,
+                POWER_UNAVAILABLE,
+            )
+        if not PowerPhy.LE_1M <= phy <= PowerPhy.LE_CODED_S2:
+            return (
+                ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR,
+                POWER_UNAVAILABLE,
+                POWER_UNAVAILABLE,
+            )
+        return SUCCESS, *connection.controls.power.read_local(PowerPhy(phy))
+
+    def prepare_read_remote_transmit_power(
+        self, handle: int, phy: int
+    ) -> PreparedProcedure:
+        connection = self._connection(handle)
+        if connection is None:
+            return PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
+        if not PowerPhy.LE_1M <= phy <= PowerPhy.LE_CODED_S2:
+            return PreparedProcedure(
+                ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR
+            )
+        return PreparedProcedure(
+            SUCCESS, lambda: connection.controls.power.queue_read(PowerPhy(phy))
+        )
+
+    def set_path_loss_parameters(
+        self,
+        handle: int,
+        high: int,
+        high_hysteresis: int,
+        low: int,
+        low_hysteresis: int,
+        minimum_events: int,
+    ) -> int:
+        connection = self._connection(handle)
+        if connection is None:
+            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+        parameters = PathLossParameters(
+            high, high_hysteresis, low, low_hysteresis, minimum_events
+        )
+        if not parameters.valid:
+            return INVALID
+        connection.controls.power.path_loss.configure(parameters)
+        return SUCCESS
+
+    def set_path_loss_enabled(self, handle: int, enabled: int) -> int:
+        connection = self._connection(handle)
+        if connection is None:
+            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+        if enabled not in (0, 1):
+            return INVALID
+        monitoring = connection.controls.power.path_loss
+        if monitoring.parameters is None:
+            return DISALLOWED
+        monitoring.set_enabled(bool(enabled))
+        return SUCCESS
+
+    def set_transmit_power_reporting(self, handle: int, local: int, remote: int) -> int:
+        connection = self._connection(handle)
+        if connection is None:
+            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+        if local not in (0, 1) or remote not in (0, 1):
+            return INVALID
+        power = connection.controls.power
+        power.report_local, power.report_remote = bool(local), bool(remote)
+        return SUCCESS
 
     def prepare_encryption(
         self, handle: int, rand: bytes, ediv: int, key: bytes

@@ -74,8 +74,7 @@ PEER_FEATURES = (
 # Source Correction: use a legal two-channel map instead of the common single bit.
 COMMON_CHANNEL_MAP = 0x03
 
-# Independent DUT declaration: the LE procedures implemented through Core 5.0,
-# plus Periodic Advertising Sync Transfer.
+# Independent DUT declaration of supported control PDUs.
 SUPPORTED_CONTROLS = frozenset(
     {
         Opcode.LL_CONNECTION_UPDATE_IND,
@@ -105,6 +104,9 @@ SUPPORTED_CONTROLS = frozenset(
         Opcode.LL_PHY_UPDATE_IND,
         Opcode.LL_MIN_USED_CHANNELS_IND,
         Opcode.LL_PERIODIC_SYNC_IND,
+        Opcode.LL_POWER_CONTROL_REQ,
+        Opcode.LL_POWER_CONTROL_RSP,
+        Opcode.LL_POWER_CHANGE_IND,
         Opcode.LL_PERIODIC_SYNC_WR_IND,
     }
 )
@@ -119,9 +121,6 @@ UNSUPPORTED_CONTROL_DATA_LENGTHS = {
     Opcode.LL_CIS_RSP: 8,
     Opcode.LL_CIS_IND: 15,
     Opcode.LL_CIS_TERMINATE_IND: 3,
-    Opcode.LL_POWER_CONTROL_REQ: 3,
-    Opcode.LL_POWER_CONTROL_RSP: 4,
-    Opcode.LL_POWER_CHANGE_IND: 4,
     Opcode.LL_SUBRATE_REQ: 10,
     Opcode.LL_SUBRATE_IND: 10,
     Opcode.LL_CHANNEL_REPORTING_IND: 3,
@@ -179,6 +178,9 @@ INVALID_LENGTH_CASES = {
     Opcode.LL_PHY_UPDATE_IND: (2 + PDU_CONTROL_INSTANT_SIZE, 'ad'),
     Opcode.LL_MIN_USED_CHANNELS_IND: (2, 'ad'),
     Opcode.LL_PERIODIC_SYNC_IND: (PDU_CONTROL_PERIODIC_SYNC_SIZE - 1, 'ad'),
+    Opcode.LL_POWER_CONTROL_REQ: (struct.calcsize('<Bbb'), 'abc'),
+    Opcode.LL_POWER_CONTROL_RSP: (struct.calcsize('<BbbB'), 'ad'),
+    Opcode.LL_POWER_CHANGE_IND: (struct.calcsize('<BBbb'), 'ad'),
     Opcode.LL_PERIODIC_SYNC_WR_IND: (PDU_CONTROL_PERIODIC_SYNC_WR_SIZE - 1, 'ad'),
 }
 # Section 4.7.3.3 requires six distinct invalid lengths per supported opcode.
@@ -223,6 +225,7 @@ def _normal_opcodes(opcode, central):
         Opcode.LL_PERIPHERAL_FEATURE_REQ: (Opcode.LL_FEATURE_RSP,),
         Opcode.LL_PING_REQ: (Opcode.LL_PING_RSP,),
         Opcode.LL_LENGTH_REQ: (Opcode.LL_LENGTH_RSP,),
+        Opcode.LL_POWER_CONTROL_REQ: (Opcode.LL_POWER_CONTROL_RSP,),
     }.get(opcode, ())
 
 
@@ -498,6 +501,10 @@ async def _complete_normal_control(tester, link, stimulus, response, accepted):
     elif opcode == Opcode.LL_PHY_REQ:
         await _complete_phy_response(tester, link, response)
         return link
+    elif opcode == Opcode.LL_POWER_CONTROL_REQ:
+        flags, _, power, _ = struct.unpack('<BbbB', response[1:])
+        if power != 126:
+            assert flags & ~0x03 == 0
     elif opcode == Opcode.LL_CONNECTION_PARAM_REQ:
         await _complete_parameter_response(tester, link, response, accepted)
         return link
@@ -569,7 +576,7 @@ async def control_pdus_with_invalid_length(tester, *, central):
         report this source ambiguity explicitly rather than assuming padding.
         Observe silence through actual connection events, not a fixed RF poll.
         A Central packet received before the Lower Tester transmits Ping is not
-        evidence of a response to that Ping. All 27 supported opcodes receive
+        evidence of a response to that Ping. Every supported opcode receives
         six distinct stimuli per role; unit vectors are not additional cases.
 
     Observation Limits:

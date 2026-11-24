@@ -360,28 +360,35 @@ def test_read_advertising_power_is_listed_and_defaults_to_zero(host):
     assert host.ll.advertising.snapshot(-1) is None  # A read creates no LL state.
 
 
-@pytest.mark.parametrize('power', [-127, -20, 0, 20])
-def test_read_advertising_power_uses_signed_legacy_power(host, power):
-    """The advertising Tx-power read returns the signed legacy power.
+@pytest.mark.parametrize(
+    'power,compensation,reported',
+    [(-127, 0, -127), (-20, -25, -22), (0, 50, 5), (20, 100, 20)],
+)
+def test_read_advertising_power_uses_signed_legacy_power(
+    host, power, compensation, reported
+):
+    """The advertising Tx-power read reports signed radiative power.
 
-    Purpose: Verify Read Advertising Physical Channel Tx Power reports the
-    configured legacy Tx power as a signed octet (Vol 4, Part E, 7.8.6).
+    Purpose: Verify the legacy advertising Tx-power read applies RF path
+    compensation and returns a signed octet (Vol 4, Part E, 7.8.6 and 7.8.76).
 
     Steps:
-        1. Configure the legacy advertiser with the parametrized Tx power.
+        1. Set the transmit RF path compensation and configure the legacy
+           advertiser with the parametrized transceiver power.
         2. Read the advertising physical-channel Tx power.
 
     Expected:
-        - The reported level equals the configured power and the last wire octet
-          is its signed encoding.
+        - The reported level includes the compensation and fits the supported
+          range. The last wire octet is its signed encoding.
     """
+    host.cmd(hci.HCI_LE_Write_RF_Path_Compensation_Command(compensation, 0))
     commands = host.controller.le_procedures
     host.ll.advertising.configure_legacy(
         replace(commands._legacy_configuration(), tx_power_dbm=power)
     )
     result = host.cmd(hci.HCI_LE_Read_Advertising_Physical_Channel_Tx_Power_Command())
-    assert result.tx_power_level == power
-    assert result.wire[-1:] == power.to_bytes(1, 'little', signed=True)
+    assert result.tx_power_level == reported
+    assert result.wire[-1:] == reported.to_bytes(1, 'little', signed=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1240,20 +1247,35 @@ def test_extended_parameter_validation(host, changes, status):
     assert not host.controller.advertising_sets
 
 
-def test_tx_power_selection_is_returned(host):
-    """The selected Tx power is returned from Set Extended Parameters.
+@pytest.mark.parametrize('compensation,transceiver', [(0, -8), (50, -13)])
+def test_tx_power_selection_is_returned(host, compensation, transceiver):
+    """Set Extended Parameters reports the selected radiative Tx power.
 
-    Purpose: Verify Set Extended Advertising Parameters echoes the selected Tx
-    power the Controller chose for the requested value (Vol 4, Part E, 7.8.53).
+    Purpose: Verify the selected radiative Tx power respects the Host maximum
+    with RF path compensation applied (Vol 4, Part E, 7.8.53 and 7.8.76).
 
     Steps:
-        1. Send extended parameters requesting -8 dBm.
+        1. Set the transmit RF path compensation.
+        2. Send extended parameters requesting -8 dBm.
 
     Expected:
-        - The returned selected Tx power is -8.
+        - The returned selected Tx power is -8 dBm. The transceiver power
+          accounts for the RF path compensation.
     """
+    host.cmd(hci.HCI_LE_Write_RF_Path_Compensation_Command(compensation, 0))
     result = host.cmd(extended_parameters(advertising_tx_power=-8))
     assert result.selected_tx_power == -8
+    assert host.ll.advertising.snapshot(0).tx_power_dbm == transceiver
+
+
+def test_tx_power_selection_rejects_unattainable_maximum(host):
+    """An unattainable power limit prevents creation of an advertising set."""
+    host.cmd(hci.HCI_LE_Write_RF_Path_Compensation_Command(50, 0))
+    host.cmd(
+        extended_parameters(advertising_tx_power=-127),
+        ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR,
+    )
+    assert host.ll.advertising.snapshot(0) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1298,6 +1320,15 @@ def test_reports_are_dropped_while_not_scanning(host):
     """
     report(host)
     host.ut_rx_q_is_empty()
+
+
+def test_extended_report_applies_rx_path_compensation(host):
+    """RF receive path compensation affects the reported RSSI."""
+    host.cmd(hci.HCI_LE_Write_RF_Path_Compensation_Command(0, -50))
+    enable_scan(host, extended=True)
+    report(host, rssi=-45, tx_power=-3)
+    (entry,) = host.ut_rx(hci.HCI_LE_Extended_Advertising_Report_Event).reports
+    assert (entry.rssi, entry.tx_power) == (-40, -3)
 
 
 @pytest.mark.parametrize(

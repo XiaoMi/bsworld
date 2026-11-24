@@ -56,7 +56,7 @@ LL_PAWR_SPACING_PER_DELAY_UNIT = (
 # Request (Vol 4, Part E, 7.7.65.36). Fewer than numSubevents, so a Host can
 # tell an overriding request from the one before.
 LL_PAWR_REQUEST_SUBEVENTS_MAX = 8
-# AUX_SYNC_SUBEVENT_RSP and AUX_CONNECT_RSP go out at the radio's default power.
+# Nominal transceiver output for AUX_SYNC_SUBEVENT_RSP.
 RESPONSE_TX_POWER_DBM = 0
 
 
@@ -185,7 +185,9 @@ def response_limit_us(timing: PawrTiming) -> int:
     return timing.response_slot_spacing_us - LL_IFS_US
 
 
-def response_pdu(data: bytes, address: Address | None, tx_power: int | None):
+def response_pdu(
+    data: bytes, address: Address | None, tx_power: int | None
+) -> ExtendedPdu:
     """AUX_SYNC_SUBEVENT_RSP: AdvMode 0, optional AdvA and TxPower, no ADI
     (2.3.1.10).
     """
@@ -306,7 +308,8 @@ class ScheduledResponse:
 
     start_us: int
     channel: int
-    pdu: bytes
+    pdu: ExtendedPdu
+    airtime_us: int
 
 
 @dataclass

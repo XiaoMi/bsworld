@@ -23,6 +23,7 @@ from bscontroller.linklayer import (
     PDU_DATA_PAYLOAD_TIME_MIN_US,
     PDU_HEADER_SIZE,
 )
+from bscontroller.linklayer.advertising import ExtendedPdu
 from bscontroller.linklayer.api import SyncTransferConfig
 from bscontroller.linklayer.bitstream import generate_access_address
 from bscontroller.linklayer.connection import Connection
@@ -37,6 +38,7 @@ from bscontroller.linklayer.extended import ExtendedProcedures
 from bscontroller.linklayer.listener import Listener
 from bscontroller.linklayer.monitoring import AdvertiserMonitoring
 from bscontroller.linklayer.parameters import Parameters
+from bscontroller.linklayer.power_control import compensated_power
 from bscontroller.linklayer.privacy import Privacy
 from bscontroller.linklayer.resource import RadioResourceManager
 from bscontroller.linklayer.roles import LinkRoles
@@ -85,6 +87,8 @@ class RadioLink:
         self.sync_transfer = SyncTransferConfig()
         self.default_tx_octets = PDU_DATA_PAYLOAD_SIZE_MIN
         self.default_tx_time = PDU_DATA_PAYLOAD_TIME_MIN_US
+        self.rf_tx_path_compensation = 0
+        self.rf_rx_path_compensation = 0
         # The device addresses an AUX_CONNECT_REQ on a synchronized PAwR train
         # may name (Core Vol 6, Part B, 4.4.2.12.2); set by the service.
         self.public_address: Address | None = None
@@ -130,6 +134,8 @@ class RadioLink:
         self.sync_transfer = SyncTransferConfig()
         self.default_tx_octets = PDU_DATA_PAYLOAD_SIZE_MIN
         self.default_tx_time = PDU_DATA_PAYLOAD_TIME_MIN_US
+        self.rf_tx_path_compensation = 0
+        self.rf_rx_path_compensation = 0
 
     @property
     def now_us(self) -> int:
@@ -193,7 +199,23 @@ class RadioLink:
 
     async def _transmit(self, channel: int, pdu: bytes, **kwargs) -> int:
         self.trace(f'RADIO TX ch={channel} pdu={pdu.hex()}')
+        if self.rf_tx_path_compensation:
+            kwargs['power_dbm'] = self.radiative_transmit_power(
+                kwargs.get('power_dbm', 0)
+            )
         return await self.radio.transmit(channel, pdu, **kwargs)
+
+    def radiative_transmit_power(self, power: int) -> int:
+        return compensated_power(power, self.rf_tx_path_compensation)
+
+    def with_radiative_power(self, pdu: ExtendedPdu) -> ExtendedPdu:
+        if pdu.tx_power is None or not self.rf_tx_path_compensation:
+            return pdu
+        return replace(pdu, tx_power=self.radiative_transmit_power(pdu.tx_power))
+
+    def reported_rssi(self, rssi: float) -> int:
+        # Vol 4, Part E, 7.8.76: antenna level = transceiver input - RF path gain.
+        return compensated_power(rssi, -self.rf_rx_path_compensation)
 
     async def receive_response(
         self,

@@ -368,7 +368,7 @@ class ExtendedProcedures:
         self.link = link
 
     async def transmit_chain(self, channel, first, data, start, phy, **parameters):
-        for pdu in fragments(first, data, channel, phy):
+        for pdu in fragments(self.link.with_radiative_power(first), data, channel, phy):
             await self.link._transmit(
                 channel, pdu.encode(), start_us=start, phy=phy, **parameters
             )
@@ -519,7 +519,7 @@ class ExtendedProcedures:
             primary = primary_pdu(item, AuxPtr(aux_channel, offset, item.secondary_phy))
             await link._transmit(
                 channel,
-                primary.encode(),
+                link.with_radiative_power(primary).encode(),
                 start_us=start,
                 phy=item.primary_phy,
                 power_dbm=item.tx_power_dbm,
