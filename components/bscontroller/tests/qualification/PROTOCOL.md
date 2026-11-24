@@ -8,7 +8,7 @@ This suite checks BSController HCI commands, events, and Link Layer behavior for
 
 The suite covers discovery, advertising, connections, timing, packet encoding, frequency hopping, security, and data transfer. The selected cases include privacy, Decision-Based Advertising Filtering (DBAF), BIS broadcasting, and synchronized reception.
 
-The table lists 946 selected protocol cases across 25 files, with 185 HCI cases and 761 LL cases. Find and select cases by their test specification identifiers.
+The table lists 1042 selected protocol cases across 26 files, with 187 HCI cases and 855 LL cases. Find and select cases by their test specification identifiers.
 
 | Directory | Source Chapter | Test File | Selected Cases |
 |---|---|---|---:|
@@ -18,7 +18,7 @@ The table lists 946 selected protocol cases across 25 files, with 185 HCI cases 
 | `hci/` | 4.6 Controller Information | [controller_information_test.py](hci/controller_information_test.py) | 6 |
 | `hci/` | 4.7 Device Discovery | [device_discovery_test.py](hci/device_discovery_test.py) | 75 |
 | `hci/` | 4.8 Host Flow Control | [host_flow_control_test.py](hci/host_flow_control_test.py) | 1 |
-| `hci/` | 4.10 Controller Configuration | [controller_configuration_test.py](hci/controller_configuration_test.py) | 57 |
+| `hci/` | 4.10 Controller Configuration | [controller_configuration_test.py](hci/controller_configuration_test.py) | 59 |
 | `hci/` | 4.11 Controller Setup | [controller_setup_test.py](hci/controller_setup_test.py) | 2 |
 | `hci/` | 4.13 LE Connection Management | [connection_management_test.py](hci/connection_management_test.py) | 7 |
 | `hci/` | 4.14 LE Power Control | [power_control_test.py](hci/power_control_test.py) | 3 |
@@ -29,6 +29,7 @@ The table lists 946 selected protocol cases across 25 files, with 185 HCI cases 
 | `ll/` | 4.3 Connection Subrating | [subrating_test.py](ll/subrating_test.py) | 21 |
 | `ll/` | 4.3.7 Periodic Advertising Sync Transfer | [sync_transfer_test.py](ll/sync_transfer_test.py) | 84 |
 | `ll/` | 4.4 Timing | [timing_test.py](ll/timing_test.py) | 29 |
+| `ll/` | 4.4 Frame Space Update | [frame_space_test.py](ll/frame_space_test.py) | 94 |
 | `ll/` | 4.5 Encoding | [encoding_test.py](ll/encoding_test.py) | 7 |
 | `ll/` | 4.6 Frequency Hopping | [frequency_hopping_test.py](ll/frequency_hopping_test.py) | 6 |
 | `ll/` | 4.7 Packet Handling | [packet_handling_test.py](ll/packet_handling_test.py) | 6 |
@@ -42,7 +43,7 @@ The table lists 946 selected protocol cases across 25 files, with 185 HCI cases 
 
 Run these commands from `components/bscontroller`. To configure the BabbleSim PHY required by RF cases, follow the [test setup instructions](../README.md#run).
 
-Running `tests/qualification` also includes four [lower-tester regression checks](peer_test.py).
+Running `tests/qualification` also includes four [lower-tester regression checks](peer_test.py) and one [MCES over-the-air regression](ll/frame_space_test.py).
 
 ```sh
 # Run all protocol cases.

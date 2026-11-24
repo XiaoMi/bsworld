@@ -11,6 +11,7 @@ Core Vol 6, Part B, 4.5.9 and Vol 6, Part E, 2 define the packet data path.
 
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import deque
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
@@ -18,7 +19,6 @@ from typing import TYPE_CHECKING
 from bscontroller.linklayer import (
     LL_CONN_CRC_ERROR_LIMIT,
     LL_DATA_CHANNEL_COUNT,
-    LL_IFS_US,
     PDU_CONTROL_PAYLOAD_SIZE_MAX,
     PDU_DATA_LLID_MASK,
     PDU_DATA_MD_MASK,
@@ -39,8 +39,8 @@ from bscontroller.linklayer.data_path import (
     ReceiveContext,
 )
 from bscontroller.linklayer.state import Role
-from bscontroller.linklayer.timing import LL_CONN_EVENT_GUARD_US
-from bscontroller.radio.base import Phy
+from bscontroller.linklayer.timing import LL_RESPONSE_START_TOLERANCE_US
+from bscontroller.radio.base import Phy, Received
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.connection import Connection
@@ -51,6 +51,20 @@ class Outbound:
     llid: int
     payload: bytes
     host_packet: bool = False
+
+    @property
+    def opcode(self) -> int | None:
+        return self.payload[0] if self.llid == LlId.CONTROL and self.payload else None
+
+
+EMPTY_PDU = Outbound(LlId.CONTINUATION, b'')
+
+
+@dataclass(frozen=True)
+class Transmission:
+    outbound: Outbound
+    length: int
+    start_us: int
 
 
 class ConnectionEvent:
@@ -170,10 +184,38 @@ class ConnectionEvent:
                 for item in self.queue
                 if self.control.can_send(item.llid, item.payload)
             ),
-            Outbound(LlId.CONTINUATION, b''),
+            EMPTY_PDU,
         )
 
-    async def send(self, channel: int, start_us: int) -> bool:
+    def _payload_length(self, item: Outbound) -> int:
+        if self.pending is not None or item.llid == LlId.CONTROL or not item.payload:
+            return len(item.payload)
+        return min(len(item.payload), self.control.packet_limits().tx_payload)
+
+    def _tx_airtime_us(self, length: int) -> int:
+        if self.pending_wire is not None:
+            length = len(self.pending_wire)
+        elif length and self.security.tx_enabled:
+            length += PDU_DATA_MIC_SIZE
+        return self.connection.tx_phy.airtime_us(
+            PDU_HEADER_SIZE + length, self.connection.tx_coding
+        )
+
+    def _rx_airtime_us(self, max_rx: bool) -> int:
+        length = self.control.packet_limits().rx_payload if max_rx else 0
+        if length and self.security.rx_enabled:
+            length += PDU_DATA_MIC_SIZE
+        return self.connection.rx_phy.airtime_us(PDU_HEADER_SIZE + length)
+
+    async def send(self, channel: int, start_us: int) -> tuple[bool, int]:
+        item = self.pending or self._next_outbound()
+        return await self._transmit(
+            channel, Transmission(item, self._payload_length(item), start_us)
+        )
+
+    async def _transmit(
+        self, channel: int, transmission: Transmission
+    ) -> tuple[bool, int]:
         """Send a queued fragment or retransmit the pending wire snapshot.
 
         Select and encrypt once per SN; retain the pending bytes until ACK.
@@ -182,27 +224,22 @@ class ConnectionEvent:
         if self.pending is None:
             # Select once per SN. Subsequent sends reuse this PDU until its ACK,
             # even if procedure state or effective data length changes meanwhile.
-            self.pending = self._next_outbound()
+            self.pending = transmission.outbound
             if self.pending in self.queue:
                 self.queue.remove(self.pending)
-            if self.pending.llid != LlId.CONTROL:
-                limit = self.control.packet_limits().tx_payload
-                if len(self.pending.payload) > limit:
-                    # Keep the original HCI packet's single completion credit on the
-                    # final
-                    # LL fragment; splitting must not create credits (Vol 4, Part E,
-                    # 7.7.19).
-                    packet = self.pending
-                    self.queue.appendleft(
-                        Outbound(
-                            LlId.CONTINUATION,
-                            packet.payload[limit:],
-                            packet.host_packet,
-                        )
+            limit = transmission.length
+            if len(self.pending.payload) > limit:
+                # Return the HCI completion credit on the final LL fragment
+                # (Core Vol 4, Part E, 7.7.19).
+                packet = self.pending
+                self.queue.appendleft(
+                    Outbound(
+                        LlId.CONTINUATION, packet.payload[limit:], packet.host_packet
                     )
-                    self.pending = replace(
-                        packet, payload=packet.payload[:limit], host_packet=False
-                    )
+                )
+                self.pending = replace(
+                    packet, payload=packet.payload[:limit], host_packet=False
+                )
         elif self.sent_pending:
             self.retries += 1
             self.connection.link.trace(f"LL RETRANSMIT sn={self.tx_sn}")
@@ -231,10 +268,10 @@ class ConnectionEvent:
         self.connection.link.trace(
             f"LL TX event={self.connection.event_counter} ch={channel} pdu={pdu.hex()}"
         )
-        await self.connection.radio.transmit(
+        end_us = await self.connection.radio.transmit(
             channel,
             pdu,
-            start_us=start_us,
+            start_us=transmission.start_us,
             access_address=self.connection.parameters.access_address,
             crc_init=self.connection.parameters.crc_init,
             phy=self.connection.tx_phy,
@@ -249,15 +286,15 @@ class ConnectionEvent:
             length=len(self.pending_wire),
         )
         self.sent_pending = True
-        return bool(header & PDU_DATA_MD_MASK)
+        return bool(header & PDU_DATA_MD_MASK), end_us
 
     async def receive(
         self, channel: int, until_us: int, *, start_us: int | None = None
-    ):
-        # End address search at the next timer; an already found frame is nonpreemptive.
+    ) -> Received | None:
         """Receive within the connection event; Coded PHY never rejects below 2704 us
         (Core Vol 6, Part B, 4.5.10).
         """
+        # End address search at the next timer; an already found frame is nonpreemptive.
         packet = await self.connection.radio.receive(
             channel,
             min(until_us, self.connection.next_deadline_us),
@@ -297,27 +334,176 @@ class ConnectionEvent:
                 self.control.measure_received_power(packet)
         return packet
 
-    def next_exchange_us(self, *, max_rx: bool = True) -> int:
-        """Air time of the next TX plus a maximum effective RX, separated by T_IFS (Core
-        Vol 6, Part B, 4.1.1, 4.5.10).
-        """
+    def first_exchange_us(self, *, max_rx: bool = True) -> int:
+        """Duration of Central TX and Peripheral TX at the anchor (Core 4.5.1)."""
         item = self.pending or self._next_outbound()
-        limits = self.control.packet_limits()
-        tx_length = (
-            len(item.payload)
-            if self.pending or item.llid == LlId.CONTROL
-            else min(len(item.payload), limits.tx_payload)
+        space_us = (
+            self._rx_spacing_us(item, max_rx)
+            if self.connection.role == Role.CENTRAL
+            else self.control.tx_spacing_us(item.opcode)
         )
-        tx_length += PDU_DATA_MIC_SIZE if self.security.tx_enabled and tx_length else 0
-        rx_length = limits.rx_payload if max_rx else 0
-        rx_length += PDU_DATA_MIC_SIZE if self.security.rx_enabled and rx_length else 0
         return (
-            self.connection.tx_phy.airtime_us(
-                PDU_HEADER_SIZE + tx_length, self.connection.tx_coding
-            )
-            + self.connection.rx_phy.airtime_us(PDU_HEADER_SIZE + rx_length)
-            + 2 * LL_IFS_US
+            self._tx_airtime_us(self._payload_length(item))
+            + space_us
+            + self._rx_airtime_us(max_rx)
         )
+
+    def _rx_spacing_us(self, item: Outbound, max_rx: bool) -> int:
+        start_us, end_us = self.control.rx_spacing_window_us(item.opcode)
+        return end_us if max_rx else start_us
+
+    def _deadline_us(
+        self, radio_until_us: int | None, opcode: int | None = None
+    ) -> int:
+        end_us = self.connection.next_anchor_us - self.connection.event_guard_for_us(
+            opcode
+        )
+        return end_us if radio_until_us is None else min(end_us, radio_until_us)
+
+    def _fit_transmission(
+        self, item: Outbound, start_us: int, budget_us: int
+    ) -> Transmission | None:
+        length = self._payload_length(item)
+        if self._tx_airtime_us(length) <= budget_us:
+            return Transmission(item, length, start_us)
+        if self.pending is not None or item.llid == LlId.CONTROL:
+            return None
+        # Only new ACL data can be fragmented. Retries keep the original
+        # sequence number and wire snapshot, and control PDUs are indivisible.
+        length = bisect_right(range(length + 1), budget_us, key=self._tx_airtime_us) - 1
+        return Transmission(item, length, start_us) if length > 0 else None
+
+    def _plan_transmission(
+        self,
+        channel: int,
+        item: Outbound,
+        radio_until_us: int | None,
+        *,
+        previous_end_us: int | None = None,
+    ) -> Transmission | None:
+        start_us = (
+            self.connection.anchor_us
+            if previous_end_us is None
+            else previous_end_us + self.control.tx_spacing_us(item.opcode)
+        )
+        if start_us < self.connection.radio.earliest_start_us(
+            channel, self.connection.tx_phy, transmit=True
+        ):
+            return None
+        budget_us = self._deadline_us(radio_until_us, item.opcode) - start_us
+        if self.connection.role == Role.CENTRAL:
+            max_rx = previous_end_us is not None
+            budget_us -= self._rx_spacing_us(item, max_rx) + self._rx_airtime_us(max_rx)
+        return self._fit_transmission(item, start_us, budget_us)
+
+    async def _receive_response(
+        self, channel: int, end_us: int, deadline_us: int
+    ) -> Received | None:
+        low, high = self.control.rx_spacing_window_us()
+        start_us = max(
+            self.connection.radio.now_us + 1,
+            end_us + low - LL_RESPONSE_START_TOLERANCE_US,
+        )
+        # A pending Frame Space request can span a wider range than this event.
+        # Stop address acquisition at the radio deadline, even if no peer replies.
+        until_us = min(deadline_us, end_us + high + self.connection.response_window_us)
+        if start_us >= until_us:
+            return None
+        packet = await self.receive(
+            channel,
+            until_us,
+            start_us=start_us,
+        )
+        if packet is not None and packet.valid_crc and not self.connection.closed:
+            self.control.response_received(packet.start_us - end_us)
+        return packet
+
+    async def _central_exchange(self, channel: int, radio_until_us: int | None) -> None:
+        previous_end_us = None
+        while not self.connection.closed:
+            item = self.pending or self._next_outbound()
+            transmission = self._plan_transmission(
+                channel, item, radio_until_us, previous_end_us=previous_end_us
+            )
+            if transmission is None:
+                break
+            if previous_end_us is None:
+                self.connection.last_event_us = self.connection.radio.now_us
+            more, end_us = await self._transmit(channel, transmission)
+            if self.connection.remote_termination is not None:
+                self.connection.complete(self.connection.remote_termination)
+                break
+            packet = await self._receive_response(
+                channel, end_us, self._deadline_us(radio_until_us)
+            )
+            if (
+                packet is None
+                or not packet.valid_crc
+                or not (more or packet.pdu[0] & PDU_DATA_MD_MASK)
+            ):
+                break
+            previous_end_us = packet.end_us
+
+    async def _peripheral_exchange(
+        self, channel: int, radio_until_us: int | None
+    ) -> None:
+        connection = self.connection
+        deadline_us = self._deadline_us(radio_until_us)
+        start_us = max(connection.radio.now_us + 1, connection.event_start_us)
+        # The initial budget admits a Central Empty PDU and our shortest reply.
+        min_reply_us = self.control.tx_spacing_us(None) + self._tx_airtime_us(0)
+        if start_us + self._rx_airtime_us(False) + min_reply_us > deadline_us:
+            return
+        connection.last_event_us = connection.radio.now_us
+        packet = await self.receive(
+            channel,
+            min(
+                deadline_us,
+                connection.anchor_us
+                + connection.receive_window_us
+                + connection.receive_widening_us
+                + connection.rx_phy.address_us
+                - 1,
+            ),
+            start_us=start_us,
+        )
+        if packet is not None:
+            connection.update_window = False
+            connection.anchor_us = packet.start_us
+        crc_errors = 0
+        while packet is not None and not connection.closed:
+            crc_errors = 0 if packet.valid_crc else crc_errors + 1
+            if crc_errors == LL_CONN_CRC_ERROR_LIMIT:
+                break
+            item = self.pending or self._next_outbound()
+            transmission = self._plan_transmission(
+                channel, item, radio_until_us, previous_end_us=packet.end_us
+            )
+            if transmission is None and self.pending is None and item != EMPTY_PDU:
+                # A control response can require a new gap. ACK the received
+                # packet at the current spacing and keep the response queued.
+                transmission = self._plan_transmission(
+                    channel, EMPTY_PDU, radio_until_us, previous_end_us=packet.end_us
+                )
+            if transmission is None:
+                break
+            more, end_us = await self._transmit(channel, transmission)
+            if connection.remote_termination is not None:
+                connection.complete(connection.remote_termination)
+                break
+            if packet.valid_crc and not (more or packet.pdu[0] & PDU_DATA_MD_MASK):
+                break
+            deadline_us = self._deadline_us(radio_until_us)
+            # Leave room for the next received packet and its ACK. The exact TX
+            # packet and spacing will be known after processing that reception.
+            _, max_spacing_us = self.control.rx_spacing_window_us()
+            min_reply_us = self.control.tx_spacing_us(None) + self._tx_airtime_us(0)
+            if (
+                end_us + max_spacing_us + self._rx_airtime_us(True) + min_reply_us
+                > deadline_us
+            ):
+                break
+            packet = await self._receive_response(channel, end_us, deadline_us)
 
     async def advance_to_us(
         self, target_us: int, *, radio_until_us: int | None = None
@@ -359,89 +545,11 @@ class ConnectionEvent:
                 self.connection.unmapped_channel, self.connection.parameters.channel_map
             )
         )
-        # Leave room for the next connection event. MD may extend this event,
-        # but never beyond its connection interval.
-        event_end_us = self.connection.next_anchor_us - LL_CONN_EVENT_GUARD_US
-        if radio_until_us is not None:
-            event_end_us = min(event_end_us, radio_until_us)
-        if max(
-            self.connection.radio.now_us + 1, self.connection.event_start_us
-        ) + self.next_exchange_us(max_rx=False) >= event_end_us or (
-            self.connection.role == Role.CENTRAL
-            and self.connection.radio.earliest_start_us(
-                channel, self.connection.tx_phy, transmit=True
-            )
-            > self.connection.anchor_us
-        ):
-            # Admit known TX plus an empty ACK. An actual received frame is
-            # nonpreemptive; its size must not be guessed from the maximum DLE.
-            self.connection.step_event()
-            return self.connection.radio.now_us
-        self.connection.last_event_us = self.connection.radio.now_us
+
         if self.connection.role == Role.CENTRAL:
-            start_us = self.connection.anchor_us
-            while not self.connection.closed:
-                more = await self.send(channel, start_us)
-                if self.connection.remote_termination is not None:
-                    self.connection.complete(self.connection.remote_termination)
-                    break
-                packet = await self.receive(
-                    channel,
-                    self.connection.radio.now_us
-                    + LL_IFS_US
-                    + self.connection.response_window_us,
-                )
-                if packet is None or not packet.valid_crc or self.connection.closed:
-                    break
-                start_us = packet.end_us + LL_IFS_US
-                if (
-                    not (more or packet.pdu[0] & PDU_DATA_MD_MASK)
-                    or start_us + self.next_exchange_us() >= event_end_us
-                ):
-                    break
+            await self._central_exchange(channel, radio_until_us)
         else:
-            # Core Vol 6, Part B, 4.2.4/4.5.5: listen from widening before the anchor.
-            widening = self.connection.receive_widening_us
-            packet = await self.receive(
-                channel,
-                self.connection.anchor_us
-                + self.connection.receive_window_us
-                + widening
-                + self.connection.rx_phy.address_us
-                - 1,
-                start_us=max(
-                    self.connection.radio.now_us + 1,
-                    self.connection.anchor_us - widening,
-                ),
-            )
-            if packet is not None:
-                self.connection.update_window = False
-                self.connection.anchor_us = packet.start_us
-            # Core Vol 6, Part B, 4.5.6: two consecutive CRC errors close the event.
-            crc_errors = 0
-            while packet is not None and not self.connection.closed:
-                crc_errors = 0 if packet.valid_crc else crc_errors + 1
-                if crc_errors == LL_CONN_CRC_ERROR_LIMIT:
-                    break
-                more = await self.send(channel, packet.end_us + LL_IFS_US)
-                if self.connection.remote_termination is not None:
-                    self.connection.complete(self.connection.remote_termination)
-                    break
-                if (
-                    (
-                        packet.valid_crc
-                        and not (more or packet.pdu[0] & PDU_DATA_MD_MASK)
-                    )
-                    or self.connection.radio.now_us + self.next_exchange_us()
-                    >= event_end_us
-                ):
-                    break
-                packet = await self.receive(
-                    channel,
-                    self.connection.radio.now_us
-                    + LL_IFS_US
-                    + self.connection.response_window_us,
-                )
+            await self._peripheral_exchange(channel, radio_until_us)
         self.connection.step_event()
         self.connection.check_timeout()
         return self.connection.radio.now_us

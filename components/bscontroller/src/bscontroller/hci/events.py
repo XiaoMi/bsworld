@@ -203,6 +203,22 @@ class LeControllerEvents:
             )
         )
 
+    def on_frame_space_updated(
+        self,
+        connection: ConnectionSnapshot,
+        status: int,
+        initiator: int,
+        space: int,
+        phys: int,
+        spacing: int,
+    ) -> None:
+        """Report negotiated frame space (Core Vol 4, Part E, 7.7.65.48)."""
+        self._emit_hci_packet(
+            hci.HCI_LE_Frame_Space_Update_Complete_Event(
+                status, connection.handle, initiator, space, phys, spacing
+            )
+        )
+
     def on_remote_parameters(
         self, connection: ConnectionSnapshot, minimum, maximum, latency, timeout
     ):

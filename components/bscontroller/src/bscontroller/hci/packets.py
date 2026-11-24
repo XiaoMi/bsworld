@@ -6136,6 +6136,22 @@ class HCI_LE_CS_Test_End_Complete_Event(HCI_LE_Meta_Event):
 # -----------------------------------------------------------------------------
 @HCI_LE_Meta_Event.event
 @dataclasses.dataclass
+class HCI_LE_Frame_Space_Update_Complete_Event(HCI_LE_Meta_Event):
+    """See Bluetooth spec 7.7.65.48, LE Frame Space Update Complete event."""
+
+    status: int = field(metadata=metadata(STATUS_SPEC))
+    connection_handle: int = field(metadata=metadata(2))
+    initiator: int = field(metadata=metadata(1))
+    frame_space: int = field(metadata=metadata(2))
+    phys: int = field(metadata=PhyBit.type_metadata(1))
+    spacing_types: int = field(
+        metadata=HCI_LE_Frame_Space_Update_Command.SpacingType.type_metadata(2)
+    )
+
+
+# -----------------------------------------------------------------------------
+@HCI_LE_Meta_Event.event
+@dataclasses.dataclass
 class HCI_LE_Connection_Rate_Change_Event(HCI_LE_Meta_Event):
     '''
     See Bluetooth spec @ 7.7.65.50 LE Connection Rate Change event

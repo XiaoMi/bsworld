@@ -52,6 +52,15 @@ class NotificationSink(IsoListener, Protocol):
         self, connection: ConnectionSnapshot, status: int
     ) -> None: ...
     def on_phy_updated(self, connection: ConnectionSnapshot, status: int) -> None: ...
+    def on_frame_space_updated(
+        self,
+        connection: ConnectionSnapshot,
+        status: int,
+        initiator: int,
+        space: int,
+        phys: int,
+        spacing: int,
+    ) -> None: ...
     def on_peer_sca(
         self, connection: ConnectionSnapshot, status: int, sca: int
     ) -> None: ...
@@ -200,6 +209,19 @@ class NotificationAdapter:
 
     def on_phy_updated(self, connection: Connection, status: int) -> None:
         self.sink.on_phy_updated(connection_snapshot(connection), status)
+
+    def on_frame_space_updated(
+        self,
+        connection: Connection,
+        status: int,
+        initiator: int,
+        space: int,
+        phys: int,
+        spacing: int,
+    ) -> None:
+        self.sink.on_frame_space_updated(
+            connection_snapshot(connection), status, initiator, space, phys, spacing
+        )
 
     def on_peer_sca(self, connection: Connection, status: int, sca: int) -> None:
         self.sink.on_peer_sca(connection_snapshot(connection), status, sca)

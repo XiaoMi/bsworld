@@ -107,14 +107,12 @@ from tests.qualification.cases import (
 )
 from tests.qualification.decision import flag_vectors
 from tests.qualification.link import (
-    IV,
-    LTK,
-    SKD,
     _check_parameter_update,
     _data_pdu,
     _EncryptedPeer,
     _pending_connection,
     _wire_event,
+    start_encryption,
 )
 from tests.qualification.peer import (
     LONG_CONTROL_FEATURES,
@@ -162,84 +160,11 @@ from tests.qualification.transfer import (
     transferred_anchor,
 )
 
-EDIV = 4660
 ErrorCode = hci.HCI_ErrorCode
 PROCEDURE_COLLISION = (
     ErrorCode.LMP_ERROR_TRANSACTION_COLLISION_OR_LL_PROCEDURE_COLLISION_ERROR
 )
 Opcode = ControlOpcode
-RAND = bytes(range(8))
-
-
-async def _start_encryption(tester, link, *, refresh=False, parameter_request=None):
-    """Perform the role-specific wire handshake, with HCI event validation."""
-    if link.central:
-        await tester.command(
-            hci.HCI_LE_Enable_Encryption_Command(link.handle, RAND, EDIV, LTK)
-        )
-        if refresh:
-            assert await link.control(Opcode.LL_PAUSE_ENC_REQ) == bytes(
-                [Opcode.LL_PAUSE_ENC_REQ]
-            )
-            await link.exchange(bytes([Opcode.LL_PAUSE_ENC_RSP]), llid=LlId.CONTROL)
-            link.rx_enabled = False
-            assert await link.control(Opcode.LL_PAUSE_ENC_RSP) == bytes(
-                [Opcode.LL_PAUSE_ENC_RSP]
-            )
-            link.tx_enabled = False
-        request = await link.control(Opcode.LL_ENC_REQ, response=parameter_request)
-        assert request[1:9] == RAND and int.from_bytes(request[9:11], 'little') == EDIV
-        link.install(request[11:19] + SKD, request[19:23] + IV)
-        await link.exchange(bytes([Opcode.LL_ENC_RSP]) + SKD + IV, llid=LlId.CONTROL)
-        link.rx_enabled = True
-        await link.exchange(bytes([Opcode.LL_START_ENC_REQ]), llid=LlId.CONTROL)
-        assert await link.control(Opcode.LL_START_ENC_RSP) == bytes(
-            [Opcode.LL_START_ENC_RSP]
-        )
-        link.tx_enabled = True
-        await link.exchange(bytes([Opcode.LL_START_ENC_RSP]), llid=LlId.CONTROL)
-    else:
-        if refresh:
-            assert await link.control(
-                Opcode.LL_PAUSE_ENC_RSP, bytes([Opcode.LL_PAUSE_ENC_REQ])
-            ) == bytes([Opcode.LL_PAUSE_ENC_RSP])
-            link.tx_enabled = link.rx_enabled = False
-            await link.exchange(bytes([Opcode.LL_PAUSE_ENC_RSP]), llid=LlId.CONTROL)
-        response = await link.control(
-            Opcode.LL_ENC_RSP,
-            bytes([Opcode.LL_ENC_REQ]) + RAND + EDIV.to_bytes(2, 'little') + SKD + IV,
-        )
-        request = await tester.event(hci.HCI_LE_Long_Term_Key_Request_Event)
-        assert (
-            request.connection_handle == link.handle
-            and request.random_number == RAND
-            and (request.encryption_diversifier == EDIV)
-        )
-        link.install(SKD + response[1:9], IV + response[9:13])
-        await tester.command(
-            hci.HCI_LE_Long_Term_Key_Request_Reply_Command(link.handle, LTK)
-        )
-        assert await link.control(Opcode.LL_START_ENC_REQ) == bytes(
-            [Opcode.LL_START_ENC_REQ]
-        )
-        link.tx_enabled = link.rx_enabled = True
-        assert await link.control(
-            Opcode.LL_START_ENC_RSP, bytes([Opcode.LL_START_ENC_RSP])
-        ) == bytes([Opcode.LL_START_ENC_RSP])
-    await link.exchange()
-    event = await tester.event(
-        hci.HCI_Encryption_Key_Refresh_Complete_Event
-        if refresh
-        else hci.HCI_Encryption_Change_Event
-    )
-    assert event.status == ErrorCode.SUCCESS and event.connection_handle == link.handle
-    if not refresh:
-        assert (
-            event.encryption_enabled
-            == hci.HCI_Encryption_Change_Event.Enabled.E0_OR_AES_CCM
-        )
-
-
 # The raw peer uses SID3, DID0 and auxiliary channel0 throughout each round.
 ADVERTISING_SID = 3
 AUXILIARY_CHANNEL = 0
@@ -3965,7 +3890,7 @@ async def _parameter_encryption_collision(tester, *, central):
     )
     interval, timeout = (LL_CONN_INTERVAL_MIN, 300)
     if central:
-        await _start_encryption(
+        await start_encryption(
             tester, link, parameter_request=_parameter_request(link, interval, timeout)
         )
         await _accept_remote_parameters(tester, link, interval, timeout)
@@ -3978,7 +3903,7 @@ async def _parameter_encryption_collision(tester, *, central):
         request = await link.control(Opcode.LL_CONNECTION_PARAM_REQ)
         interval, _, latency, timeout, *_ = _check_parameter_pdu(request)
         requested_at = tester.radio.now_us
-        await _start_encryption(tester, link)
+        await start_encryption(tester, link)
         assert tester.radio.now_us - requested_at < LL_RESPONSE_TIMEOUT_US
         update = bytes([Opcode.LL_CONNECTION_UPDATE_IND]) + struct.pack(
             '<BHHHHH',
@@ -19602,10 +19527,11 @@ PROCEDURES |= procedure_cases(
 
 
 def _extended_feature_pdu(pdu, opcode, page):
-    """Independent ICS oracle: Monitoring is not sent to a peer; OTA MaxPage is 0."""
+    """Only Frame Space Update is peer-visible on page 1 of the DUT declaration."""
     assert len(pdu) == 27
-    assert pdu[:3] == bytes([opcode, 0, page])
-    assert pdu[3:] == bytes(24)
+    assert pdu[:3] == bytes([opcode, 1, page])
+    expected = b'\x02' + bytes(23) if page == 1 else bytes(24)
+    assert pdu[3:] == expected
 
 
 async def extended_feature_response(tester, *, central):
@@ -19628,8 +19554,8 @@ async def extended_feature_response(tester, *, central):
 
     Expected Outcome:
         Pass verdict: every page has the correct response opcode, length and
-        page number. MaxPage is 0 and all extended pages are zero because the
-        sole local page-1 feature, Monitoring Advertisers, has Send to Peer = N.
+        page number. MaxPage is 1. Page 1 reports Frame Space Update, and
+        excludes Monitoring Advertisers, which has Send to Peer = N.
 
     Reference:
         LL.TS.p28, Section 4.3.7.50, Table 4.3-133, Figure 4.3-262,

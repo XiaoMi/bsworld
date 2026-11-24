@@ -540,6 +540,27 @@ def disconnection(handle=1):
     return hci.HCI_Disconnection_Complete_Event(0, handle, 0x13)
 
 
+def test_frame_space_update_event_fields_on_the_wire(host):
+    """Encode the negotiated frame space and affected PHYs in LE Meta 0x35."""
+    connection = host.connection()
+    host.notify('on_frame_space_updated', connection, 0, 2, 165, 2, 4)
+    event = host.ut_rx(
+        hci.HCI_LE_Frame_Space_Update_Complete_Event,
+        status=0,
+        connection_handle=connection.handle,
+        initiator=2,
+        frame_space=165,
+        phys=2,
+        spacing_types=4,
+    )
+    assert (
+        event.wire
+        == b'\x04\x3e\x0a\x35\x00'
+        + connection.handle.to_bytes(2, 'little')
+        + b'\x02\xa5\x00\x02\x04\x00'
+    )
+
+
 @pytest.mark.parametrize(
     'event,command,bit',
     [
@@ -554,6 +575,11 @@ def disconnection(handle=1):
             hci.HCI_LE_Transmit_Power_Reporting_Event(0, 1, 2, 1, -5, 0, 0),
             'le',
             hci.HCI_LE_TRANSMIT_POWER_REPORTING_EVENT - 1,
+        ),
+        (
+            hci.HCI_LE_Frame_Space_Update_Complete_Event(0, 1, 2, 165, 2, 4),
+            'le',
+            hci.HCI_LE_FRAME_SPACE_UPDATE_COMPLETE_EVENT - 1,
         ),
         (disconnection(), 'event', hci.HCI_DISCONNECTION_COMPLETE_EVENT - 1),
         (

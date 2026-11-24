@@ -30,6 +30,7 @@ from bscontroller.linklayer.data_length import valid_data_length
 from bscontroller.linklayer.data_path import PacketLimits, ReceiveContext
 from bscontroller.linklayer.encryption import KEY_MISSING_REJECTIONS, Encryption, State
 from bscontroller.linklayer.features import LeFeatureMask
+from bscontroller.linklayer.frame_space import FrameSpaceRequest
 from bscontroller.linklayer.parameters import valid_timing
 from bscontroller.linklayer.procedure import (
     ProcedureContext,
@@ -148,6 +149,8 @@ class LlcpCoordinator:
             return self.encryption.busy
         if kind == 'subrate':
             return controls.subrating.pending
+        if kind == 'frame_space':
+            return controls.frame_space.pending
         return bool(controls.data_length.pending)
 
     @property
@@ -228,6 +231,15 @@ class LlcpCoordinator:
 
     def prepare(self, payload: bytes) -> bytes:
         return self.controls.prepare(payload)
+
+    def tx_spacing_us(self, opcode: int | None) -> int:
+        return self.controls.frame_space.tx_space_us(opcode)
+
+    def rx_spacing_window_us(self, opcode: int | None = None) -> tuple[int, int]:
+        return self.controls.frame_space.rx_window_us(opcode)
+
+    def response_received(self, spacing_us: int) -> None:
+        self.controls.frame_space.received_after_us(spacing_us)
 
     def _control_sent(self, payload: bytes, *, first: bool) -> None:
         if first:
@@ -372,6 +384,7 @@ class LlcpCoordinator:
             if procedure.cancel is not None:
                 procedure.cancel(reason)
         self.controls.subrating.close(reason)
+        self.controls.frame_space.close(reason)
         self.controls.features.finish(reason)
         self.controls.finish_version(None)
         self.controls.power.close(reason)
@@ -444,6 +457,18 @@ class LlcpCoordinator:
             )
         )
 
+    def prepare_frame_space(self, request: FrameSpaceRequest) -> PreparedProcedure:
+        frame_space = self.controls.frame_space
+        if status := frame_space.validate(request):
+            return PreparedProcedure(status)
+        return self._prepare(
+            DeferredProcedure(
+                'frame_space',
+                lambda: frame_space.request(request),
+                frame_space.cancel,
+            )
+        )
+
     def prepare_encryption(
         self, rand: bytes, ediv: int, key: bytes
     ) -> PreparedProcedure:
@@ -509,7 +534,7 @@ class LlcpCoordinator:
             return PreparedProcedure(DISALLOWED)
 
         def valid_request() -> bool:
-            return valid_timing(
+            return self.controls.frame_space.fits_interval(maximum) and valid_timing(
                 minimum,
                 maximum,
                 latency,
@@ -532,17 +557,18 @@ class LlcpCoordinator:
             if not valid_request():
                 complete(INVALID)
                 return
+            allowed_minimum = max(minimum, self.controls.frame_space.minimum_interval())
             # Only the Central can fall back to UPDATE_IND (Vol 6, Part B, 5.1.1).
             if (
                 self.connection.role == Role.CENTRAL
                 and not self.controls.connection_parameters.supports_parameter_request
             ):
                 self.controls.connection_parameters.request_update(
-                    minimum, latency, timeout
+                    allowed_minimum, latency, timeout
                 )
             else:
                 self.controls.connection_parameters.request_parameters(
-                    minimum, maximum, latency, timeout
+                    allowed_minimum, maximum, latency, timeout
                 )
 
         return self._prepare(DeferredProcedure('parameters', request, complete))
@@ -561,7 +587,8 @@ class LlcpCoordinator:
     ) -> int:
         if self.controls.connection_parameters.remote_parameters is None:
             return DISALLOWED
-        if not valid_timing(
+        frame_space = self.controls.frame_space
+        if not frame_space.fits_interval(maximum) or not valid_timing(
             minimum,
             maximum,
             latency,
@@ -570,7 +597,7 @@ class LlcpCoordinator:
         ):
             return INVALID
         self.controls.connection_parameters.reply_parameters(
-            minimum, maximum, latency, timeout
+            max(minimum, frame_space.minimum_interval()), maximum, latency, timeout
         )
         return SUCCESS
 

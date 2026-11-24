@@ -96,6 +96,7 @@ EXPECTED_COMMANDS = frozenset(
         hci.HCI_LE_SET_HOST_FEATURE_COMMAND,
         hci.HCI_LE_SET_DEFAULT_SUBRATE_COMMAND,
         hci.HCI_LE_SUBRATE_REQUEST_COMMAND,
+        hci.HCI_LE_FRAME_SPACE_UPDATE_COMMAND,
         hci.HCI_LE_READ_SUGGESTED_DEFAULT_DATA_LENGTH_COMMAND,
         hci.HCI_LE_READ_SUPPORTED_STATES_COMMAND,
         hci.HCI_LE_REMOTE_CONNECTION_PARAMETER_REQUEST_NEGATIVE_REPLY_COMMAND,
@@ -187,6 +188,10 @@ EXPECTED_LE_FEATURES = int(
     | hci.LeFeatureMask.SLEEP_CLOCK_ACCURACY_UPDATES
     | hci.LeFeatureMask.CONNECTION_SUBRATING
 ).to_bytes(8, 'little')
+EXPECTED_LE_FEATURES_PAGE_1 = (
+    (hci.LeFeatureMask.MONITORING_ADVERTISERS | hci.LeFeatureMask.FRAME_SPACE_UPDATE)
+    >> 64
+).to_bytes(24, 'little')
 
 
 async def read_local_supported_commands(tester):
@@ -436,7 +441,8 @@ async def read_all_local_supported_features(tester):
 
     Initial Condition:
         The IUT has no LL connection. The declared page 0 features are those of
-        EXPECTED_LE_FEATURES; Monitoring Advertisers is bit 64 on page 1.
+        EXPECTED_LE_FEATURES; page 1 declares Monitoring Advertisers (bit 64)
+        and Frame Space Update (bit 65).
 
     Test Steps:
         1. Send HCI LE Read All Local Supported Features.
@@ -444,8 +450,8 @@ async def read_all_local_supported_features(tester):
            248-octet LE_Features field matching the independent ICS declaration.
 
     Expected Outcome:
-        Pass verdict: page 0 matches the existing declaration, page 1 contains
-        only Monitoring Advertisers, and pages 2 through 10 are zero.
+        Pass verdict: pages 0 and 1 match the declared features, and pages 2
+        through 10 are zero.
 
     Source Correction:
         The source cites 7.8.129; this command is Core Vol 4, Part E, 7.8.128.
@@ -457,7 +463,10 @@ async def read_all_local_supported_features(tester):
         hci.HCI_LE_Read_All_Local_Supported_Features_Command()
     )
     assert result.max_page == 1
-    assert result.le_features == EXPECTED_LE_FEATURES + b'\x01' + bytes(239)
+    assert (
+        result.le_features
+        == EXPECTED_LE_FEATURES + EXPECTED_LE_FEATURES_PAGE_1 + bytes(216)
+    )
 
 
 # Verify all local feature pages against the independent ICS declaration.

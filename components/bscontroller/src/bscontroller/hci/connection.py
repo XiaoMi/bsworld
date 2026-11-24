@@ -436,6 +436,19 @@ class LeConnectionCommands(LeControllerContext):
             ),
         )
 
+    def on_hci_le_frame_space_update_command(self, command):
+        """Request new frame spacing (Core Vol 4, Part E, 7.8.151)."""
+        self._run_ll_request(
+            command,
+            self.ll.prepare_frame_space(
+                command.connection_handle,
+                command.frame_space_min,
+                command.frame_space_max,
+                command.phys,
+                command.spacing_types,
+            ),
+        )
+
     def on_hci_le_remote_connection_parameter_request_reply_command(self, command):
         status = self.ll.reply_parameters(
             command.connection_handle,

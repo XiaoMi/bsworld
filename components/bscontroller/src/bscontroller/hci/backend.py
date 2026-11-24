@@ -50,6 +50,7 @@ class RadioBackend:
         | hci.LeFeatureMask.MINIMUM_NUMBER_OF_USED_CHANNELS_PROCEDURE
         | hci.LeFeatureMask.LL_EXTENDED_FEATURE_SET
         | hci.LeFeatureMask.MONITORING_ADVERTISERS
+        | hci.LeFeatureMask.FRAME_SPACE_UPDATE
         | hci.LeFeatureMask.ISOCHRONOUS_BROADCASTER
         | hci.LeFeatureMask.SYNCHRONIZED_RECEIVER
         | hci.LeFeatureMask.SLEEP_CLOCK_ACCURACY_UPDATES
@@ -143,6 +144,7 @@ class RadioBackend:
             hci.HCI_LE_READ_PHY_COMMAND,
             hci.HCI_LE_SET_DEFAULT_PHY_COMMAND,
             hci.HCI_LE_SET_PHY_COMMAND,
+            hci.HCI_LE_FRAME_SPACE_UPDATE_COMMAND,
             hci.HCI_LE_SET_DATA_LENGTH_COMMAND,
             hci.HCI_LE_READ_SUGGESTED_DEFAULT_DATA_LENGTH_COMMAND,
             hci.HCI_LE_WRITE_SUGGESTED_DEFAULT_DATA_LENGTH_COMMAND,

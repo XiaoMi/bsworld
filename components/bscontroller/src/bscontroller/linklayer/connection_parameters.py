@@ -321,12 +321,15 @@ class ConnectionParametersProcedure:
             and reason == ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
             and requested is not None
         ):
-            minimum, _, latency, timeout = requested
-            self.request_update(minimum, latency, timeout)
-        else:
-            self.owner.listener.on_connection_updated(self.connection, reason)
-            if self.remote_parameters is not None:
-                self.notify_remote_parameters()
+            minimum, maximum, latency, timeout = requested
+            interval = max(minimum, self.owner.frame_space.minimum_interval())
+            if interval <= maximum:
+                self.request_update(interval, latency, timeout)
+                return
+            reason = ErrorCode.UNACCEPTABLE_CONNECTION_PARAMETERS_ERROR
+        self.owner.listener.on_connection_updated(self.connection, reason)
+        if self.remote_parameters is not None:
+            self.notify_remote_parameters()
 
     def reject_remote_parameters(self, reason: int) -> None:
         self.owner.reject(Opcode.LL_CONNECTION_PARAM_REQ, reason)
@@ -370,6 +373,7 @@ class ConnectionParametersProcedure:
             )
             if (
                 not valid_timing(interval, interval, latency, timeout)
+                or not self.owner.frame_space.fits_interval(interval)
                 or (
                     interval == connection.parameters.interval
                     and latency
@@ -410,6 +414,12 @@ class ConnectionParametersProcedure:
             )
             if not valid_timing(minimum, maximum, latency, timeout):
                 self.owner.reject(opcode, ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR)
+            elif not self.owner.frame_space.fits_interval(maximum):
+                reason = ErrorCode.UNACCEPTABLE_CONNECTION_PARAMETERS_ERROR
+                if opcode == Opcode.LL_CONNECTION_PARAM_REQ:
+                    self.owner.reject(opcode, reason)
+                elif self.parameter_request:
+                    self.reject_parameters(reason)
             elif opcode == Opcode.LL_CONNECTION_PARAM_REQ:
                 if (
                     connection.role == Role.PERIPHERAL
@@ -441,21 +451,19 @@ class ConnectionParametersProcedure:
                     self.notify_remote_parameters()
             elif self.parameter_request and connection.role == Role.CENTRAL:
                 requested = self.requested_parameters
-                # Intersect the peer range with the Host range before choosing an
-                # interval;
-                # valid ranges can still have no acceptable value in common.
-                if requested is not None and max(minimum, requested[0]) > min(
-                    maximum, requested[1]
-                ):
+                # Frame spacing can change while the request is on the air.
+                minimum = max(minimum, self.owner.frame_space.minimum_interval())
+                if requested is not None:
+                    minimum, maximum = (
+                        max(minimum, requested[0]),
+                        min(maximum, requested[1]),
+                    )
+                if minimum > maximum:
                     self.reject_parameters(
                         ErrorCode.UNACCEPTABLE_CONNECTION_PARAMETERS_ERROR
                     )
                 else:
-                    self.request_update(
-                        max(minimum, requested[0]) if requested else minimum,
-                        latency,
-                        timeout,
-                    )
+                    self.request_update(minimum, latency, timeout)
             return True
 
         return False

@@ -127,6 +127,10 @@ class PhyProcedure:
             tx_mask = rx_mask = tx_mask & rx_mask
         central = self.choose_phy(tx_mask, connection.tx_phy)
         peripheral = self.choose_phy(rx_mask, connection.rx_phy)
+        if not self.owner.frame_space.fits_phy_pair(central, peripheral):
+            # Keep the ACL usable if spacings previously set on an inactive
+            # PHY would exceed the current interval (Core 6, Part B, 5.1.10).
+            central, peripheral = connection.tx_phy, connection.rx_phy
         central_change = central if central != connection.tx_phy else 0
         peripheral_change = peripheral if peripheral != connection.rx_phy else 0
         instant = self.owner.instant() if central_change or peripheral_change else 0

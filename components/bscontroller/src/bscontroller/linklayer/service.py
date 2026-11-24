@@ -66,6 +66,7 @@ from bscontroller.linklayer.extended import (
     subevent_pdu,
 )
 from bscontroller.linklayer.features import FEATURE_MAX_PAGE, LeFeature, LeFeatureMask
+from bscontroller.linklayer.frame_space import FrameSpaceRequest
 from bscontroller.linklayer.llcp import PreparedProcedure
 from bscontroller.linklayer.pawr import (
     LL_PAWR_SUBEVENT_INTERVAL_MAX,
@@ -1233,6 +1234,16 @@ class LinkLayerService:
         ):
             return PreparedProcedure(INVALID)
         return connection.llcp.prepare_subrate(request)
+
+    def prepare_frame_space(
+        self, handle: int, minimum: int, maximum: int, phys: int, spacing: int
+    ) -> PreparedProcedure:
+        connection = self._connection(handle)
+        if connection is None:
+            return PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
+        return connection.llcp.prepare_frame_space(
+            FrameSpaceRequest(minimum, maximum, int(phys), int(spacing))
+        )
 
     def prepare_encryption(
         self, handle: int, rand: bytes, ediv: int, key: bytes

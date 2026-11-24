@@ -1688,6 +1688,8 @@ RADIO_CASES = (
     'HCI/CCO/BI-36-C',
     'HCI/CCO/BI-37-C',
     'HCI/CCO/BI-39-C',
+    'HCI/CCO/BI-75-C',
+    'HCI/CCO/BI-78-C',
     'HCI/CCO/BI-40-C',
     'HCI/CCO/BI-43-C',
     'HCI/CCO/BI-63-C',
@@ -2074,6 +2076,112 @@ PROCEDURES |= procedure_cases(
         )
         for number, bit in ((44, 32), (121, 41), (122, 47), (133, 72))
     },
+)
+
+
+async def _expect_frame_space_update_error(tester, command, status):
+    response = await tester.command(command, (ErrorCode.SUCCESS, status))
+    if response.status == ErrorCode.SUCCESS:
+        complete = await tester.event(hci.HCI_LE_Frame_Space_Update_Complete_Event)
+        assert complete.connection_handle == command.connection_handle
+        assert complete.status == status
+
+
+async def invalid_frame_space_parameters(tester):
+    """LE Frame Space Update, Invalid Frame Space Parameters.
+
+    Initial Condition:
+        The IUT is Peripheral on an established LE 1M ACL with 150 µs
+        inter-frame space in both directions.
+
+    Test Steps:
+        1. Send LE Frame Space Update for each round of Table 4.34: Min above
+           0x2710, Max above 0x2710, unknown ACL handle, zero PHYs, zero
+           Spacing_Types, and Min = 1 with Max = 0.
+        2. In each round observe Command Status or, if successful, the
+           subsequent LE Frame Space Update Complete.
+
+    Expected Outcome:
+        The observed failure status is Unknown Connection Identifier (0x02)
+        for round 3 and Invalid HCI Command Parameters (0x12) otherwise.
+
+    Reference:
+        HCI.TS.p39, 4.10, HCI/CCO/BI-75-C, Table 4.34, PDF page 171;
+        Core Vol 4, Part E, 7.8.151 and 7.7.65.48.
+    """
+    link = await establish(tester)
+    command = hci.HCI_LE_Frame_Space_Update_Command
+    defaults = {
+        'connection_handle': link.handle,
+        'frame_space_min': 150,
+        'frame_space_max': 200,
+        'phys': hci.PhyBit.LE_1M,
+        'spacing_types': command.SpacingType.T_IFS_ACL_CP,
+    }
+    invalid = ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
+    for changes, status in (
+        ({'frame_space_min': 0x2711}, invalid),
+        ({'frame_space_max': 0x2711}, invalid),
+        (
+            {'connection_handle': 0x0EFF},
+            ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR,
+        ),
+        ({'phys': 0}, invalid),
+        ({'spacing_types': 0}, invalid),
+        ({'frame_space_min': 1, 'frame_space_max': 0}, invalid),
+    ):
+        await _expect_frame_space_update_error(
+            tester, command(**(defaults | changes)), status
+        )
+
+
+async def frame_space_update_requires_cis_support(tester):
+    """LE Frame Space Update, CIS not supported.
+
+    Initial Condition:
+        The IUT is Peripheral on an established LE 1M ACL with 150 µs
+        inter-frame space and declares Core 6.1 without CIS support.
+
+    Test Steps:
+        1. Send LE Frame Space Update with Spacing_Types = 0x08 (T_IFS_CIS)
+           and otherwise valid parameters.
+        2. Observe Command Status or, if successful, the subsequent
+           LE Frame Space Update Complete.
+
+    Expected Outcome:
+        The observed failure status is Unsupported Feature or Parameter
+        Value (0x11), as required by Core 6.1 for an unsupported local
+        Spacing_Types bit.
+
+    Source Correction:
+        HCI.TS.p39 requires Invalid HCI Command Parameters (0x12), which
+        agrees with Core 6.0. Use 0x11 as specified by Core 6.1, the version
+        declared by the IUT.
+
+    Reference:
+        HCI.TS.p39, 4.10, HCI/CCO/BI-78-C, PDF page 217;
+        Core Vol 4, Part E, 7.8.151 and 7.7.65.48.
+    """
+    link = await establish(tester)
+    await _expect_frame_space_update_error(
+        tester,
+        hci.HCI_LE_Frame_Space_Update_Command(
+            link.handle, 150, 200, hci.PhyBit.LE_1M, 0x08
+        ),
+        ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR,
+    )
+
+
+# Validate Table 4.34, including the unknown connection handle.
+PROCEDURES |= procedure_cases(
+    invalid_frame_space_parameters,
+    {'HCI/CCO/BI-75-C': ('LE Frame Space Update, Invalid Frame Space Parameters', {})},
+)
+
+# Reject CIS spacing with the status required by the IUT's Core version.
+PROCEDURES |= procedure_cases(
+    frame_space_update_requires_cis_support,
+    {'HCI/CCO/BI-78-C': ('LE Frame Space Update, CIS not supported', {})},
 )
 
 
