@@ -66,7 +66,12 @@ from tests.qualification.link import (
     _ScanRound,
     _wire_event,
 )
-from tests.qualification.peer import establish
+from tests.qualification.peer import (
+    PEER_FEATURES,
+    PeerLink,
+    establish,
+    exchange_iut_features,
+)
 from tests.qualification.tester import (
     DUT_ADDRESS,
     LOWER_CENTRAL_PUBLIC_ADDRESS,
@@ -1009,6 +1014,344 @@ async def earliest_latest_transmissions_to_central(tester, *, offset):
     await link.disconnect()
 
 
+SCA_INTERVAL = 80  # 100 ms, below the 500-ms maximum for the timing cases.
+SCA_20_PPM = LL_SCA_PPM.index(20)
+SCA_CHANGE_TO_BETTER = 0x00
+SCA_CHANGE_TO_WORSE = 0x01
+SCA_RESPONSE_INTERVALS = 20
+
+
+def _sca_window(elapsed_us, sca, other_ppm=0):
+    """Sleep-clock drift and jitter budget at the PHY's integer-us resolution."""
+    ppm = LL_SCA_PPM[sca] + other_ppm
+    return (
+        LL_CLOCK_JITTER_US
+        + (elapsed_us * ppm + PHY_TIME_UNITS_PER_SECOND - 1)
+        // PHY_TIME_UNITS_PER_SECOND
+    )
+
+
+class SleepClockPeer(PeerLink):
+    async def exchange(self, *args, window_us=0, **kwargs):
+        widening = 0
+        if self.central:
+            # Acquire a Central packet anywhere in the sleep-clock acquisition
+            # range. Individual procedures check measured timing independently.
+            interval_us = self.parameters.interval * LL_CONN_INTERVAL_UNIT_US
+            widening = _sca_window(interval_us, LL_SCA_500_PPM)
+            self.anchor -= widening
+            window_us += 2 * widening
+        packet = await super().exchange(*args, window_us=window_us, **kwargs)
+        if packet is None:
+            self.anchor += widening
+        return packet
+
+
+async def _sca_link(tester, *, central):
+    link = await establish(
+        tester,
+        central=central,
+        interval=SCA_INTERVAL,
+        connection_parameters=LinkParameters(
+            interval=SCA_INTERVAL,
+            hop_sca=7 | SCA_20_PPM << PDU_ADV_CONNECT_SCA_SHIFT,
+        ),
+        peer_factory=SleepClockPeer,
+    )
+    await exchange_iut_features(
+        tester, link, PEER_FEATURES | hci.LeFeatureMask.SLEEP_CLOCK_ACCURACY_UPDATES
+    )
+    return link
+
+
+async def _sca_command(tester, action, *, allow_limit=False):
+    statuses = (hci.HCI_ErrorCode.SUCCESS, hci.HCI_ErrorCode.LIMIT_REACHED_ERROR)
+    result = await tester.command(
+        hci.HCI_LE_Modify_Sleep_Clock_Accuracy_Command(action),
+        statuses if allow_limit else statuses[0],
+    )
+    return result.status
+
+
+def _sca_pdu(opcode, accuracy=SCA_20_PPM):
+    return bytes([opcode, accuracy])
+
+
+def _sca_value(pdu):
+    assert len(pdu) == 2 and pdu[1] < len(LL_SCA_PPM), pdu.hex()
+    return pdu[1]
+
+
+async def _improve_clock(tester, link, *, repeat):
+    """Exercise the optional request and the limit reached alternative."""
+    advertised = []
+    for _ in range(8 if repeat else 1):
+        status = await _sca_command(tester, SCA_CHANGE_TO_BETTER, allow_limit=True)
+        if status == hci.HCI_ErrorCode.LIMIT_REACHED_ERROR:
+            break
+        request = await link.control(Opcode.LL_CLOCK_ACCURACY_REQ, required=False)
+        if request is not None:
+            advertised.append(_sca_value(request))
+            peer_accuracy = SCA_20_PPM if not link.central else LL_SCA_50_PPM
+            await link.exchange(
+                _sca_pdu(Opcode.LL_CLOCK_ACCURACY_RSP, peer_accuracy),
+                llid=LlId.CONTROL,
+            )
+    if not advertised:
+        response = await link.control(
+            Opcode.LL_CLOCK_ACCURACY_RSP, _sca_pdu(Opcode.LL_CLOCK_ACCURACY_REQ)
+        )
+        return _sca_value(response)
+    assert sorted(advertised) == advertised
+    return advertised[-1]
+
+
+async def _sca_data(link, count, *, sca, minimum_acks=None):
+    """Sample and acknowledge consecutive packets within the selected SCA bound."""
+    interval_us = link.parameters.interval * LL_CONN_INTERVAL_UNIT_US
+    reference = link.anchor - interval_us
+    acknowledged = 0
+    for event in range(1, count + 1):
+        sent_sn = link.sn
+        packet = await link.exchange()
+        assert packet.valid_crc and packet.pdu[1] == len(packet.pdu) - PDU_HEADER_SIZE
+        elapsed = event * interval_us
+        assert abs(packet.start_us - reference - elapsed) <= _sca_window(elapsed, sca)
+        acknowledged += int(bool(packet.pdu[0] & PDU_DATA_NESN_MASK)) != sent_sn
+    assert acknowledged >= (count if minimum_acks is None else minimum_acks)
+
+
+async def initiate_sleep_clock_accuracy_update(tester, *, central):
+    """Initiate Sleep Clock Accuracy Update.
+
+    Initial Condition:
+        Establish the selected role with public addresses and a 100-ms interval.
+        Use a nonoptimal initial Central SCA, or a non-worst Lower Tester
+        Central SCA with the IUT as Peripheral.
+
+    Test Case Configuration:
+        LL/TIM/CEN/BV-03-C requests a more accurate Central clock.
+        LL/TIM/PER/BV-08-C prepares a Peripheral clock and requests a reduction.
+
+    Test Steps:
+        1. Central: use Modify Sleep Clock Accuracy to raise accuracy and
+           require a request with a more accurate SCA. Reply to the request.
+        2. Peripheral: improve the initial SCA or observe Limit Reached,
+           then lower it and require a request with a worse SCA. Reply with
+           the Lower Tester's less accurate SCA.
+        3. Exchange ten connection events using the link's ARQ bits.
+
+    Expected Outcome:
+        The link remains active. For the Central case the received timestamps
+        fit the clock accuracy reported by the IUT.
+
+    Reference:
+        LL.TS.p28 Section 4.4, Figures 4.4-10 and 4.4-27. Core Vol 6 Part B
+        4.2.2, 4.6.25 and 5.1.14.
+    """
+    link = await _sca_link(tester, central=central)
+    if central:
+        initial = link.parameters.hop_sca >> PDU_ADV_CONNECT_SCA_SHIFT
+        await _sca_command(tester, SCA_CHANGE_TO_BETTER)
+        changed = _sca_value(await link.control(Opcode.LL_CLOCK_ACCURACY_REQ))
+        assert changed > initial
+        await link.exchange(_sca_pdu(Opcode.LL_CLOCK_ACCURACY_RSP), llid=LlId.CONTROL)
+        await _sca_data(link, 10, sca=changed)
+    else:
+        initial = await _improve_clock(tester, link, repeat=False)
+        await _sca_command(tester, SCA_CHANGE_TO_WORSE)
+        changed = _sca_value(await link.control(Opcode.LL_CLOCK_ACCURACY_REQ))
+        assert changed < initial
+        await link.exchange(
+            _sca_pdu(Opcode.LL_CLOCK_ACCURACY_RSP, LL_SCA_500_PPM), llid=LlId.CONTROL
+        )
+        acknowledged = 0
+        for _ in range(10):
+            sent_sn = link.sn
+            packet = await link.exchange(required=False)
+            acknowledged += (
+                packet is not None
+                and int(bool(packet.pdu[0] & PDU_DATA_NESN_MASK)) != sent_sn
+            )
+        assert acknowledged >= 9
+    await link.disconnect()
+
+
+async def respond_to_sleep_clock_accuracy_update(tester, *, central):
+    """Response to Sleep Clock Accuracy Update.
+
+    Initial Condition:
+        Establish the selected role. The Lower Tester Central declares 20 ppm.
+
+    Test Case Configuration:
+        LL/TIM/CEN/BV-04-C checks the Central response and ten event timestamps.
+        LL/TIM/PER/BV-09-C checks Peripheral responses after a 500-ppm update.
+
+    Test Steps:
+        1. Initiate a peer sleep-clock update and read the IUT accuracy in
+           LL_CLOCK_ACCURACY_RSP. Select 500 ppm for the Lower Tester Central.
+        2. Check ten consecutive Central event timestamps or transmit 100
+           packets near pseudo-randomly selected Peripheral receive-window
+           edges and count their acknowledgements.
+
+    Expected Outcome:
+        The Central reports a clock at least as accurate as at establishment
+        and stays within its declared timing bound. The Peripheral receives at
+        least 95 edge-timed data packets.
+
+    Reference:
+        LL.TS.p28 Section 4.4, Figures 4.4-11 and 4.4-28. Core Vol 6 Part B
+        4.2.4, 4.5.7 and 5.1.14.
+    """
+    link = await _sca_link(tester, central=central)
+    reply = await link.control(
+        Opcode.LL_CLOCK_ACCURACY_RSP,
+        _sca_pdu(Opcode.LL_CLOCK_ACCURACY_REQ, LL_SCA_500_PPM),
+    )
+    sca = _sca_value(reply)
+    if central:
+        assert sca >= link.parameters.hop_sca >> PDU_ADV_CONNECT_SCA_SHIFT
+        await _sca_data(link, 10, sca=sca)
+    else:
+        rng = random.Random(0)
+        acknowledged = 0
+        last_anchor = link.anchor - SCA_INTERVAL * LL_CONN_INTERVAL_UNIT_US
+        for _ in range(100):
+            anchor = link.anchor
+            widening = _sca_window(
+                anchor - last_anchor, LL_SCA_500_PPM, LL_SCA_PPM[sca]
+            )
+            # At 1-us resolution each chosen sample is within 2 us of an edge.
+            offset = rng.choice((-1, 1)) * (widening - 1)
+            link.anchor += offset
+            sent_sn = link.sn
+            packet = await link.exchange(required=False)
+            if packet is None:
+                link.anchor -= offset
+                continue
+            last_anchor = anchor + offset
+            acknowledged += int(bool(packet.pdu[0] & PDU_DATA_NESN_MASK)) != sent_sn
+        assert acknowledged >= 95
+    await link.disconnect()
+
+
+async def respond_without_reducing_sleep_clock_accuracy(tester, *, central):
+    """Response without Reducing the Sleep Clock Accuracy.
+
+    Initial Condition:
+        Establish the selected role and raise its accuracy, answering any
+        requests. Select LE Data Length Update as the other local LL procedure.
+
+    Test Case Configuration:
+        LL/TIM/CEN/BV-05-C raises accuracy until the limit and completes both
+        SCA exchanges. LL/TIM/PER/BV-10-C raises accuracy once and accepts an
+        SCA response during or after the other procedure.
+
+    Test Steps:
+        1. Hold the response to the IUT's Length Request.
+        2. Ask the IUT to reduce its accuracy, then send a peer SCA request.
+        3. Observe its response within 20 events or complete the length
+           procedure first. The Central also sends its own SCA request.
+
+    Expected Outcome:
+        The response to the peer request retains the established accuracy or
+        reports a better one even while a local reduction is pending.
+
+    Reference:
+        LL.TS.p28 Section 4.4, Figures 4.4-12 and 4.4-29. Core Vol 6 Part B 5.1.14.
+    """
+    link = await _sca_link(tester, central=central)
+    baseline = await _improve_clock(tester, link, repeat=central)
+    await tester.command(hci.HCI_LE_Set_Data_Length_Command(link.handle, 80, 800))
+    await link.control(Opcode.LL_LENGTH_REQ)
+    await _sca_command(tester, SCA_CHANGE_TO_WORSE)
+    packet = await link.exchange(
+        _sca_pdu(Opcode.LL_CLOCK_ACCURACY_REQ, LL_SCA_500_PPM), llid=LlId.CONTROL
+    )
+    response = None
+    for elapsed in range(SCA_RESPONSE_INTERVALS + 1):
+        if (
+            packet.pdu[0] & PDU_DATA_LLID_MASK == LlId.CONTROL
+            and packet.pdu[PDU_HEADER_SIZE] == Opcode.LL_CLOCK_ACCURACY_RSP
+        ):
+            response = packet.pdu[PDU_HEADER_SIZE:]
+            break
+        if elapsed < SCA_RESPONSE_INTERVALS:
+            packet = await link.exchange()
+    length_response = bytes([Opcode.LL_LENGTH_RSP]) + struct.pack(
+        '<HHHH', 80, 800, 80, 800
+    )
+    packet = await link.exchange(length_response, llid=LlId.CONTROL)
+    pending = {Opcode.LL_CLOCK_ACCURACY_RSP} if response is None else set()
+    if central:
+        pending.add(Opcode.LL_CLOCK_ACCURACY_REQ)
+    for _ in range(SCA_RESPONSE_INTERVALS):
+        reply = b''
+        if packet.pdu[0] & PDU_DATA_LLID_MASK == LlId.CONTROL:
+            payload = packet.pdu[PDU_HEADER_SIZE:]
+            if payload[0] in pending:
+                pending.remove(payload[0])
+                if payload[0] == Opcode.LL_CLOCK_ACCURACY_RSP:
+                    response = payload
+                else:
+                    reply = _sca_pdu(Opcode.LL_CLOCK_ACCURACY_RSP, LL_SCA_500_PPM)
+        if not pending and not reply:
+            break
+        packet = await link.exchange(
+            reply, llid=LlId.CONTROL if reply else LlId.CONTINUATION
+        )
+    assert not pending
+    assert response is not None and _sca_value(response) >= baseline
+    await link.disconnect()
+
+
+async def change_sleep_clock_accuracy_timing(tester, *, improve):
+    """Change Accuracy after/before Update.
+
+    Initial Condition:
+        Establish a Central link with a 100-ms interval. Prepare its best clock
+        for degradation or its worst clock for improvement.
+
+    Test Case Configuration:
+        LL/TIM/CEN/BV-06-C selects a worse clock and checks the old accuracy
+        before the response. LL/TIM/CEN/BV-07-C selects a better clock and
+        checks the new accuracy before the response.
+
+    Test Steps:
+        1. Request the selected clock change and receive LL_CLOCK_ACCURACY_REQ.
+        2. Hold the peer response for 50 connection events while measuring
+           the timing and acknowledging data packets.
+        3. Answer the request and observe ten more connection events.
+
+    Expected Outcome:
+        Event timing stays within the applicable old or new SCA bound while
+        the response is held, and within the new bound afterward. At least
+        nine of the final ten events acknowledge the Lower Tester's packet.
+
+    Reference:
+        LL.TS.p28 Section 4.4, Figures 4.4-30 and 4.4-31. Core Vol 6 Part B
+        4.2.2 and 5.1.14.
+    """
+    link = await _sca_link(tester, central=True)
+    if improve:
+        # The IUT starts at its nominal accuracy. Set up the least accurate
+        # virtual clock and complete that procedure before the measured change.
+        await _sca_command(tester, SCA_CHANGE_TO_WORSE)
+        initial = _sca_value(await link.control(Opcode.LL_CLOCK_ACCURACY_REQ))
+        assert initial == LL_SCA_500_PPM
+        await link.exchange(_sca_pdu(Opcode.LL_CLOCK_ACCURACY_RSP), llid=LlId.CONTROL)
+    else:
+        initial = await _improve_clock(tester, link, repeat=True)
+        assert initial == SCA_20_PPM
+    await _sca_command(tester, SCA_CHANGE_TO_BETTER if improve else SCA_CHANGE_TO_WORSE)
+    requested = _sca_value(await link.control(Opcode.LL_CLOCK_ACCURACY_REQ))
+    assert (requested > initial) if improve else (requested < initial)
+    await _sca_data(link, 50, sca=requested if improve else initial)
+    await link.exchange(_sca_pdu(Opcode.LL_CLOCK_ACCURACY_RSP), llid=LlId.CONTROL)
+    await _sca_data(link, 10, sca=requested, minimum_acks=9)
+    await link.disconnect()
+
+
 async def extended_scanning_secondary_channel_earliest_transmission_to_scanner(
     tester, *, phy
 ):
@@ -1439,6 +1782,54 @@ PROCEDURES |= procedure_cases(
                 pytest.mark.limited,
             ],
         ),
+    },
+)
+
+# Check initiation, response, and clock changes before or after the SCA exchange.
+PROCEDURES |= procedure_cases(
+    initiate_sleep_clock_accuracy_update,
+    {
+        'LL/TIM/CEN/BV-03-C': (
+            'Initiate Sleep Clock Accuracy Update',
+            {'central': True},
+        ),
+        'LL/TIM/PER/BV-08-C': (
+            'Initiate Sleep Clock Accuracy Update',
+            {'central': False},
+        ),
+    },
+)
+PROCEDURES |= procedure_cases(
+    respond_to_sleep_clock_accuracy_update,
+    {
+        'LL/TIM/CEN/BV-04-C': (
+            'Response to Sleep Clock Accuracy Update',
+            {'central': True},
+        ),
+        'LL/TIM/PER/BV-09-C': (
+            'Response to Sleep Clock Accuracy Update',
+            {'central': False},
+        ),
+    },
+)
+PROCEDURES |= procedure_cases(
+    respond_without_reducing_sleep_clock_accuracy,
+    {
+        'LL/TIM/CEN/BV-05-C': (
+            'Response without Reducing the Sleep Clock Accuracy',
+            {'central': True},
+        ),
+        'LL/TIM/PER/BV-10-C': (
+            'Response without Reducing the Sleep Clock Accuracy',
+            {'central': False},
+        ),
+    },
+)
+PROCEDURES |= procedure_cases(
+    change_sleep_clock_accuracy_timing,
+    {
+        'LL/TIM/CEN/BV-06-C': ('Change Accuracy after Update', {'improve': False}),
+        'LL/TIM/CEN/BV-07-C': ('Change Accuracy before Update', {'improve': True}),
     },
 )
 

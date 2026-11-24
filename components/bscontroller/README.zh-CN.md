@@ -212,6 +212,7 @@ other = RadioController("x", "F0:F1:F2:F3:F4:03", config=ControllerConfig(max_co
 | 5.2 | Connected Isochronous Stream (CIS) |  |
 | 5.2 | LE Power Control Request | * |
 | 5.2 | LE Path Loss Monitoring | * |
+| 5.2 | Sleep Clock Accuracy Updates | * |
 | 5.3 | Periodic Advertising ADI Support | * |
 | 5.3 | LE Channel Classification |  |
 | 5.3 | Connection Subrating |  |
@@ -261,6 +262,6 @@ python -m pytest tests/qualification -n auto -v -rs     # 射频用例使用 BSI
 python -m build                                        # 在 dist/ 生成 sdist 和 wheel
 ```
 
-认证测试使用独立实现的 Lower Tester 执行蓝牙测试规范中选定的 899 个 HCI 和 Link Layer 用例。覆盖范围、运行条件和日志位置见[测试指南](tests/README.zh-CN.md)。
+认证测试使用独立实现的 Lower Tester 执行蓝牙测试规范中选定的 915 个 HCI 和 Link Layer 用例。覆盖范围、运行条件和日志位置见[测试指南](tests/README.zh-CN.md)。
 
 许可证和第三方声明见 [LICENSE](LICENSE) 和 [NOTICE](NOTICE)。

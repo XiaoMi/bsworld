@@ -102,7 +102,12 @@ from bscontroller.linklayer.transfer import (
     signed_counter,
     transfer_timing,
 )
-from bscontroller.radio.base import PHY_OCTET_BITS, RADIO_SWITCH_TIME_US, Phy
+from bscontroller.radio.base import (
+    PHY_OCTET_BITS,
+    PHY_TIME_UNITS_PER_SECOND,
+    RADIO_SWITCH_TIME_US,
+    Phy,
+)
 
 if TYPE_CHECKING:
     from bscontroller.address import Address
@@ -124,6 +129,9 @@ def connection_window(connection: Connection) -> RadioReservation:
     """Next connection event, from its (widened) start to the guard before the next
     anchor.
     """
+    interval, fraction = divmod(
+        connection.event_interval_fixed_us, PHY_TIME_UNITS_PER_SECOND
+    )
     return RadioReservation(
         connection.event_start_us - RADIO_SWITCH_TIME_US,
         max(
@@ -136,7 +144,9 @@ def connection_window(connection: Connection) -> RadioReservation:
         )
         + LL_CONN_EVENT_GUARD_US
         + RADIO_SWITCH_TIME_US,
-        connection.parameters.interval * LL_CONN_INTERVAL_UNIT_US,
+        interval,
+        interval_fraction=fraction,
+        start_fraction=connection.clock_remainder,
     )
 
 
@@ -734,7 +744,7 @@ class AdvertisingManager:
             latest = (
                 item.deadline_us - duration
                 if item.deadline_us
-                else start + max(entry.interval_us for entry in reservations)
+                else start + max(entry.max_interval_us for entry in reservations)
             )
             gap = first_radio_gap(reservations, start, duration, latest)
             if gap != start:

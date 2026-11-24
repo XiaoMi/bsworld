@@ -17,9 +17,7 @@ from typing import TYPE_CHECKING
 
 from bscontroller.linklayer import (
     LL_CONN_CRC_ERROR_LIMIT,
-    LL_CONN_INTERVAL_UNIT_US,
     LL_DATA_CHANNEL_COUNT,
-    LL_EVENT_COUNTER_MASK,
     LL_IFS_US,
     PDU_CONTROL_PAYLOAD_SIZE_MAX,
     PDU_DATA_LLID_MASK,
@@ -41,10 +39,7 @@ from bscontroller.linklayer.data_path import (
     ReceiveContext,
 )
 from bscontroller.linklayer.state import Role
-from bscontroller.linklayer.timing import (
-    LL_CONN_EVENT_GUARD_US,
-    window_widening,
-)
+from bscontroller.linklayer.timing import LL_CONN_EVENT_GUARD_US
 from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
@@ -355,11 +350,7 @@ class ConnectionEvent:
         )
         # Leave room for the next connection event. MD may extend this event,
         # but never beyond its connection interval.
-        event_end_us = (
-            self.connection.anchor_us
-            + self.connection.parameters.interval * LL_CONN_INTERVAL_UNIT_US
-            - LL_CONN_EVENT_GUARD_US
-        )
+        event_end_us = self.connection.next_anchor_us - LL_CONN_EVENT_GUARD_US
         if radio_until_us is not None:
             event_end_us = min(event_end_us, radio_until_us)
         if max(
@@ -373,12 +364,7 @@ class ConnectionEvent:
         ):
             # Admit known TX plus an empty ACK. An actual received frame is
             # nonpreemptive; its size must not be guessed from the maximum DLE.
-            self.connection.anchor_us += (
-                self.connection.parameters.interval * LL_CONN_INTERVAL_UNIT_US
-            )
-            self.connection.event_counter = (
-                self.connection.event_counter + 1
-            ) & LL_EVENT_COUNTER_MASK
+            self.connection.step_event()
             return self.connection.radio.now_us
         self.connection.last_event_us = self.connection.radio.now_us
         if self.connection.role == Role.CENTRAL:
@@ -404,10 +390,7 @@ class ConnectionEvent:
                     break
         else:
             # Core Vol 6, Part B, 4.2.4/4.5.5: listen from widening before the anchor.
-            widening = window_widening(
-                self.connection.anchor_us - self.connection.last_rx_us,
-                self.connection.parameters.sca,
-            )
+            widening = self.connection.receive_widening_us
             packet = await self.receive(
                 channel,
                 self.connection.anchor_us
@@ -448,11 +431,6 @@ class ConnectionEvent:
                     + LL_IFS_US
                     + self.connection.response_window_us,
                 )
-        self.connection.anchor_us += (
-            self.connection.parameters.interval * LL_CONN_INTERVAL_UNIT_US
-        )
-        self.connection.event_counter = (
-            self.connection.event_counter + 1
-        ) & LL_EVENT_COUNTER_MASK
+        self.connection.step_event()
         self.connection.check_timeout()
         return self.connection.radio.now_us

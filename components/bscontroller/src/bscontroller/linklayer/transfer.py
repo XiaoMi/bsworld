@@ -337,7 +337,7 @@ def transfer_indication(
         train.last_counter,
         train.sid,
         train.address.is_random,
-        LL_LOCAL_SCA,
+        connection.link.sleep_clock_accuracy,
         1 << (train.phy - 1),
         bytes(train.address),
         connection.sync_event_counter,
@@ -406,5 +406,10 @@ def transfer_timing(
         anchor,
         counter,
         anchor - train_span,
-        window_widening(connection_span, indication.sca) - LL_CLOCK_JITTER_US,
+        window_widening(
+            connection_span,
+            indication.sca,
+            local_sca=connection.link.sleep_clock_accuracy,
+        )
+        - LL_CLOCK_JITTER_US,
     )

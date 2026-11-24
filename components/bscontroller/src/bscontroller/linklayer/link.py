@@ -18,6 +18,7 @@ from bscontroller.linklayer import (
     LL_HOP_INCREMENT_MAX,
     LL_HOP_INCREMENT_MIN,
     LL_IFS_US,
+    LL_SCA_50_PPM,
     PDU_CRC_SIZE,
     PDU_DATA_PAYLOAD_SIZE_MIN,
     PDU_DATA_PAYLOAD_TIME_MIN_US,
@@ -89,6 +90,7 @@ class RadioLink:
         self.default_tx_time = PDU_DATA_PAYLOAD_TIME_MIN_US
         self.rf_tx_path_compensation = 0
         self.rf_rx_path_compensation = 0
+        self.sleep_clock_accuracy = LL_SCA_50_PPM
         # The device addresses an AUX_CONNECT_REQ on a synchronized PAwR train
         # may name (Core Vol 6, Part B, 4.4.2.12.2); set by the service.
         self.public_address: Address | None = None
@@ -136,10 +138,16 @@ class RadioLink:
         self.default_tx_time = PDU_DATA_PAYLOAD_TIME_MIN_US
         self.rf_tx_path_compensation = 0
         self.rf_rx_path_compensation = 0
+        self.sleep_clock_accuracy = LL_SCA_50_PPM
 
     @property
     def now_us(self) -> int:
         return self.radio.now_us
+
+    @property
+    def can_change_sleep_clock_accuracy(self) -> bool:
+        # Other ACLs may still rely on the advertised clock bound.
+        return len(self.connections) <= 1 and self.initiating is None
 
     def new_access_address(self, *, exclude: Iterable[int] = ()) -> int:
         used = self.used_access_addresses()
@@ -195,6 +203,7 @@ class RadioLink:
             access_address=self.new_access_address(),
             crc_init=self.random.getrandbits(PDU_CRC_SIZE * PHY_OCTET_BITS),
             hop=self.random.randint(LL_HOP_INCREMENT_MIN, LL_HOP_INCREMENT_MAX),
+            sca=self.sleep_clock_accuracy,
         )
 
     async def _transmit(self, channel: int, pdu: bytes, **kwargs) -> int:

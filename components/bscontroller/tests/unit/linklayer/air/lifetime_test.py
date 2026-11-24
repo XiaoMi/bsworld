@@ -39,6 +39,7 @@ from bscontroller.linklayer import (
     LL_HOP_INCREMENT_MAX,
     LL_HOP_INCREMENT_MIN,
     LL_PERIODIC_INTERVAL_UNIT_US,
+    LL_SCA_500_PPM,
     PDU_ADV_TXADD_MASK,
     PDU_CRC_SIZE,
     AdvertisingMode,
@@ -64,7 +65,12 @@ from bscontroller.linklayer.results import (
     ScanEvent,
     SyncInfoReceived,
 )
-from bscontroller.linklayer.scheduler import RadioPriority, RadioReservation
+from bscontroller.linklayer.scheduler import (
+    RadioPriority,
+    RadioReservation,
+    first_radio_gap,
+    higher_priority_overlap,
+)
 from bscontroller.linklayer.state import DataStatus, Role
 from bscontroller.radio.base import PHY_OCTET_BITS, Received
 from tests.unit.helpers import PARAMETERS, check_access_address
@@ -1080,6 +1086,48 @@ def test_radio_admission_needs_only_clock_and_windows():
         assert resource.deadline_us == 30
         raise RuntimeError('event aborted')
     assert resource.deadline_us is None
+
+
+def test_acl_reservation_detects_overlap_at_a_drifted_anchor(link):
+    """Keep the slot reserved when the test clock shifts the next ACL anchor."""
+    link.sleep_clock_accuracy = LL_SCA_500_PPM
+    connection = Connection(
+        link, replace(PARAMETERS, interval=3200), PEER, Role.CENTRAL, 0
+    )
+    connection.established = True
+    link.connections[connection.handle] = connection
+    (reservation,) = link.resource.reservations()
+
+    connection.step_event()
+    (actual,) = link.resource.reservations()
+    assert actual.start_us - reservation.start_us == 4_001_000
+    end = actual.start_us + actual.duration_us
+    start = end - 300
+    assert reservation.window_after(start) == (actual.start_us, end)
+    assert higher_priority_overlap([reservation], start, end, RadioPriority.PERIODIC_TX)
+    assert first_radio_gap([reservation], start, 300, end) == end
+
+
+def test_acl_reservation_projects_full_intervals_with_fractional_drift(link):
+    """Project from the current fractional phase and carry it across future events."""
+    link.sleep_clock_accuracy = LL_SCA_500_PPM
+    connection = Connection(
+        link, replace(PARAMETERS, interval=6), PEER, Role.CENTRAL, 0
+    )
+    connection.established = True
+    link.connections[connection.handle] = connection
+    connection.step_event()
+    (reservation,) = link.resource.reservations()
+
+    # Each 7.5-ms interval gains 1.875 us. The first step left 0.875 us.
+    for event, drift in enumerate((2, 4, 6, 8, 10, 12, 14, 15), start=1):
+        connection.step_event()
+        (actual,) = link.resource.reservations()
+        expected = reservation.start_us + event * 7_500 + drift
+        assert actual.start_us == expected
+        window = (expected, expected + reservation.duration_us)
+        assert reservation.window_after(expected - 1) == window
+        assert reservation.window_after(expected) == window
 
 
 def test_colliding_acl_anchors_share_the_radio(link):

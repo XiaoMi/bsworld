@@ -2402,6 +2402,26 @@ class HCI_LE_Read_Remote_Features_Command(HCI_AsyncCommand):
 # -----------------------------------------------------------------------------
 @HCI_SyncCommand.sync_command(HCI_StatusReturnParameters)
 @dataclasses.dataclass
+class HCI_LE_Modify_Sleep_Clock_Accuracy_Command(
+    HCI_SyncCommand[HCI_StatusReturnParameters]
+):
+    '''See Bluetooth spec @ 7.8.94 LE Modify Sleep Clock Accuracy Command.'''
+
+    action: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@HCI_Command.command
+@dataclasses.dataclass
+class HCI_LE_Request_Peer_SCA_Command(HCI_AsyncCommand):
+    '''See Bluetooth spec @ 7.8.108 LE Request Peer SCA Command.'''
+
+    connection_handle: int = field(metadata=metadata(2))
+
+
+# -----------------------------------------------------------------------------
+@HCI_SyncCommand.sync_command(HCI_StatusReturnParameters)
+@dataclasses.dataclass
 class HCI_LE_Set_Host_Channel_Classification_Command(
     HCI_SyncCommand[HCI_StatusReturnParameters]
 ):
@@ -5818,6 +5838,17 @@ class HCI_LE_BIG_Sync_Lost_Event(HCI_LE_Meta_Event):
 
     big_handle: int = field(metadata=metadata(1))
     reason: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@HCI_LE_Meta_Event.event
+@dataclasses.dataclass
+class HCI_LE_Request_Peer_SCA_Complete_Event(HCI_LE_Meta_Event):
+    '''See Bluetooth spec @ 7.7.65.31 LE Request Peer SCA Complete event.'''
+
+    status: int = field(metadata=metadata(STATUS_SPEC))
+    connection_handle: int = field(metadata=metadata(2))
+    peer_clock_accuracy: int = field(metadata=metadata(1))
 
 
 # -----------------------------------------------------------------------------

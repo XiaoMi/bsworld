@@ -52,6 +52,9 @@ class NotificationSink(IsoListener, Protocol):
         self, connection: ConnectionSnapshot, status: int
     ) -> None: ...
     def on_phy_updated(self, connection: ConnectionSnapshot, status: int) -> None: ...
+    def on_peer_sca(
+        self, connection: ConnectionSnapshot, status: int, sca: int
+    ) -> None: ...
     def on_transmit_power_reporting(
         self,
         connection: ConnectionSnapshot,
@@ -188,6 +191,9 @@ class NotificationAdapter:
 
     def on_phy_updated(self, connection: Connection, status: int) -> None:
         self.sink.on_phy_updated(connection_snapshot(connection), status)
+
+    def on_peer_sca(self, connection: Connection, status: int, sca: int) -> None:
+        self.sink.on_peer_sca(connection_snapshot(connection), status, sca)
 
     def on_transmit_power_reporting(
         self,

@@ -247,7 +247,8 @@ def transfers(dut):
 # Sender: local advertising set
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize('role', ROLES)
-def test_set_info_transfer_waits_for_the_first_aux_sync_ind(iut, role):
+@pytest.mark.parametrize('local_sca', [0, 5])
+def test_set_info_transfer_waits_for_the_first_aux_sync_ind(iut, role, local_sca):
     """Set Info Transfer is sent once the train has transmitted an event.
 
     Purpose: Verify that the Advertising IUT holds LL_PERIODIC_SYNC_IND until
@@ -269,10 +270,11 @@ def test_set_info_transfer_waits_for_the_first_aux_sync_ind(iut, role):
         - connEventCount names the transmitting event; the SyncInfo anchor is
           at or before the scheduled event 1, within one unit;
           lastPaEventCounter is 0 and paEventCounter 1.
-        - ID, SID 3, public AType, SCA 50 ppm, PHY 0x01, AdvA and train
-          identity match the set; no response timer runs; nothing reaches the Host.
+        - ID, SID 3, public AType, local SCA, PHY 0x01, AdvA and train
+          identity match the transfer; no response timer runs; nothing reaches the Host.
     """
     dut = iut(role)
+    dut.link.sleep_clock_accuracy = local_sca
     item = periodic_set(dut)
     dut.set_peer_features(RECIPIENT)
     assert set_info_transfer(dut) == ErrorCode.SUCCESS
@@ -290,7 +292,7 @@ def test_set_info_transfer_waits_for_the_first_aux_sync_ind(iut, role):
     assert target <= item.periodic_next_us < target + fields['unit']
     assert (fields['last'], fields['counter']) == (0, 1) == (0, item.periodic_counter)
     assert (fields['id'], fields['sid'], fields['atype']) == (SERVICE_DATA, 3, 0)
-    assert (fields['sca'], fields['phy']) == (5, 0x01)
+    assert (fields['sca'], fields['phy']) == (local_sca, 0x01)
     assert fields['address'] == bytes(dut.controller.public_address)
     assert (fields['aa'], fields['crc']) == (item.periodic_aa, item.periodic_crc)
     assert fields['interval'] == PERIODIC_INTERVAL

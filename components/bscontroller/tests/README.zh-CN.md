@@ -5,7 +5,7 @@
 | 目录 | 覆盖范围 | 测试环境 |
 |---|---|---|
 | `unit/` | 按实现模块组织，覆盖 Controller 算法、状态归属、调度以及 FIFO、线程和时钟行为。 | Python 测试环境。 |
-| `qualification/hci/`、`qualification/ll/` | 选取 899 个 HCI 和 Link Layer 用例，按规范章节组织，由独立测试器执行。 | 纯 HCI 用例使用 Python 测试环境，射频用例还需要 BabbleSim。 |
+| `qualification/hci/`、`qualification/ll/` | 选取 915 个 HCI 和 Link Layer 用例，按规范章节组织，由独立测试器执行。 | 纯 HCI 用例使用 Python 测试环境，射频用例还需要 BabbleSim。 |
 
 各章节的覆盖范围、日志位置和结果解读见[协议测试指南](qualification/PROTOCOL.zh-CN.md)。
 
