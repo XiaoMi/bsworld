@@ -15,6 +15,7 @@ connection event loop and radio directly rather than the step vocabulary.
 """
 
 from dataclasses import replace
+from struct import pack
 
 import pytest
 
@@ -42,6 +43,9 @@ from tests.unit.linklayer.llcp.harness import (
     PERIPHERAL,
     ROLES,
     ErrorCode,
+    Opcode,
+    channel_map_ind,
+    connection_update_ind,
     hci,
     terminate_ind,
 )
@@ -66,6 +70,56 @@ def unestablished(dut, role=PERIPHERAL):
     dut.connection = connection
     dut.controller.events.clear()
     return connection
+
+
+@pytest.mark.parametrize(
+    'interval_change', [False, True], ids=['channel-map', 'connection-update']
+)
+def test_subrated_peripheral_listens_for_instant_ack(peripheral, interval_change):
+    """Listen at underlying events until the Central confirms an Instant PDU.
+
+    Purpose: Verify the Peripheral listens outside its subrated schedule when
+    returning an Instant acknowledgment (Vol 6, Part B, 5.5.1). A Connection
+    Update also requires listening at the preceding event and Instant (5.1.1).
+
+    Steps:
+        1. Set factor 5 and continuation zero.
+        2. Receive an Instant PDU on event zero, acknowledging it with no reply.
+        3. Receive the Central's retransmission at event one.
+        4. Receive a valid new packet with the incremented SN.
+
+    Expected:
+        - Event one and the event after the retransmission are scheduled.
+        - The new packet restores the subrated schedule, with the Connection
+          Update exception for the event preceding the Instant.
+    """
+    connection = peripheral.connection
+    peripheral.lt_tx(pack('<B5H', Opcode.LL_SUBRATE_IND, 5, 0, 0, 0, 100))
+    peripheral.lt_rx_empty()
+    instant = 9
+    indication = (
+        connection_update_ind(32, instant)
+        if interval_change
+        else channel_map_ind(0x03, instant)
+    )
+    peripheral.lt_tx(indication, sn=0)
+    peripheral.lt_rx_empty(ack=False)
+    peripheral.event_done()
+
+    anchor = connection.anchor_us
+    packet = bytes([LlId.CONTROL, len(indication)]) + indication
+    peripheral.radio.incoming.append(
+        Received(packet, -45, anchor, anchor + Phy.LE_1M.airtime_us(len(packet)), True)
+    )
+    run(peripheral, anchor)
+    assert not peripheral.radio.incoming, 'the Peripheral skipped event one'
+    assert connection.event_index == connection.next_scheduled_event == 2
+
+    # The next valid packet toggles the Central's SN and confirms our ACK.
+    peripheral.lt_tx_raw(LlId.CONTINUATION, b'', sn=1)
+    assert connection.next_scheduled_event == 5
+    connection.step_event(4)
+    assert connection.next_scheduled_event == (8 if interval_change else instant)
 
 
 # ---------------------------------------------------------------------------

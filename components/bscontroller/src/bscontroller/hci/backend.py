@@ -56,6 +56,7 @@ class RadioBackend:
         | hci.LeFeatureMask.LE_POWER_CONTROL_REQUEST
         | hci.LeFeatureMask.LE_POWER_CONTROL_REQUEST_DUP
         | hci.LeFeatureMask.LE_PATH_LOSS_MONITORING
+        | hci.LeFeatureMask.CONNECTION_SUBRATING
     )
     lmp_features = (
         hci.LmpFeatureMask.LE_SUPPORTED_CONTROLLER
@@ -129,11 +130,14 @@ class RadioBackend:
             hci.HCI_READ_AUTHENTICATED_PAYLOAD_TIMEOUT_COMMAND,
             hci.HCI_WRITE_AUTHENTICATED_PAYLOAD_TIMEOUT_COMMAND,
             hci.HCI_LE_READ_REMOTE_FEATURES_COMMAND,
+            hci.HCI_LE_SET_HOST_FEATURE_COMMAND,
             hci.HCI_LE_REQUEST_PEER_SCA_COMMAND,
             hci.HCI_LE_MODIFY_SLEEP_CLOCK_ACCURACY_COMMAND,
             hci.HCI_LE_CONNECTION_UPDATE_COMMAND,
             hci.HCI_LE_REMOTE_CONNECTION_PARAMETER_REQUEST_REPLY_COMMAND,
             hci.HCI_LE_REMOTE_CONNECTION_PARAMETER_REQUEST_NEGATIVE_REPLY_COMMAND,
+            hci.HCI_LE_SET_DEFAULT_SUBRATE_COMMAND,
+            hci.HCI_LE_SUBRATE_REQUEST_COMMAND,
             hci.HCI_LE_SET_HOST_CHANNEL_CLASSIFICATION_COMMAND,
             hci.HCI_LE_READ_CHANNEL_MAP_COMMAND,
             hci.HCI_LE_READ_PHY_COMMAND,
@@ -197,8 +201,9 @@ class RadioBackend:
         if hasattr(self, 'link'):
             raise ValueError('a backend belongs to one Controller')
         controller.supported_commands = set(self.supported_commands)
-        controller.le_features = self.le_features
         controller.lmp_features = self.lmp_features
         controller.le_states = self.le_states
-        controller.le_procedures = LeControllerProcedures(controller, self.radio)
+        controller.le_procedures = LeControllerProcedures(
+            controller, self.radio, self.le_features
+        )
         self.link = controller.le_procedures.link

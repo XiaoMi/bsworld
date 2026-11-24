@@ -55,6 +55,15 @@ class NotificationSink(IsoListener, Protocol):
     def on_peer_sca(
         self, connection: ConnectionSnapshot, status: int, sca: int
     ) -> None: ...
+    def on_subrate_change(
+        self,
+        connection: ConnectionSnapshot,
+        status: int,
+        factor: int,
+        latency: int,
+        continuation: int,
+        timeout: int,
+    ) -> None: ...
     def on_transmit_power_reporting(
         self,
         connection: ConnectionSnapshot,
@@ -194,6 +203,24 @@ class NotificationAdapter:
 
     def on_peer_sca(self, connection: Connection, status: int, sca: int) -> None:
         self.sink.on_peer_sca(connection_snapshot(connection), status, sca)
+
+    def on_subrate_change(
+        self,
+        connection: Connection,
+        status: int,
+        factor: int,
+        latency: int,
+        continuation: int,
+        timeout: int,
+    ) -> None:
+        self.sink.on_subrate_change(
+            connection_snapshot(connection),
+            status,
+            factor,
+            latency,
+            continuation,
+            timeout,
+        )
 
     def on_transmit_power_reporting(
         self,

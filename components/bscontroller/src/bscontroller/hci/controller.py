@@ -134,6 +134,10 @@ class Controller:
         self._random_address = address
         logger.debug(f'new random address: {address}')
 
+    @property
+    def le_features(self) -> int:
+        return self.le_procedures.ll.features
+
     def on_packet(self, packet: bytes) -> None:
         if self._snoop is not None:
             self._snoop.capture(packet, received=False)

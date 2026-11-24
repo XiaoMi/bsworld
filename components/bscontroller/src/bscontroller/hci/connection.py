@@ -386,6 +386,12 @@ class LeConnectionCommands(LeControllerContext):
             ),
         )
 
+    def on_hci_le_set_host_feature_command(self, command):
+        """Set a Host-controlled feature bit (Core Vol 4, Part E, 7.8.115)."""
+        return hci.HCI_StatusReturnParameters(
+            self.ll.set_host_feature(command.bit_number, command.bit_value)
+        )
+
     def on_hci_read_remote_version_information_command(self, command):
         self._run_ll_request(
             command, self.ll.prepare_version(command.connection_handle)
@@ -401,6 +407,32 @@ class LeConnectionCommands(LeControllerContext):
                 command.max_latency,
                 command.supervision_timeout,
                 valid_ce_lengths=command.min_ce_length <= command.max_ce_length,
+            ),
+        )
+
+    def on_hci_le_set_default_subrate_command(self, command):
+        """Configure future Central ACLs (Core Vol 4, Part E, 7.8.123)."""
+        return hci.HCI_StatusReturnParameters(
+            self.ll.set_default_subrate(
+                command.subrate_min,
+                command.subrate_max,
+                command.max_latency,
+                command.continuation_number,
+                command.supervision_timeout,
+            )
+        )
+
+    def on_hci_le_subrate_request_command(self, command):
+        """Request a subrate change for an ACL (Core Vol 4, Part E, 7.8.124)."""
+        self._run_ll_request(
+            command,
+            self.ll.prepare_subrate(
+                command.connection_handle,
+                command.subrate_min,
+                command.subrate_max,
+                command.max_latency,
+                command.continuation_number,
+                command.supervision_timeout,
             ),
         )
 

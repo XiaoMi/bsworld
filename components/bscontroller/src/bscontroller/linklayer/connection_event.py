@@ -100,6 +100,7 @@ class ConnectionEvent:
         ):
             return False
         header, _ = pdu[:PDU_HEADER_SIZE]
+        duplicate = bool(header & PDU_DATA_SN_MASK) != self.rx_nesn
         acknowledged_control = (
             self.pending.payload
             if self.pending is not None
@@ -112,7 +113,7 @@ class ConnectionEvent:
             ReceiveContext(
                 header,
                 pdu[PDU_HEADER_SIZE:],
-                duplicate=bool(header & PDU_DATA_SN_MASK) != self.rx_nesn,
+                duplicate=duplicate,
                 acknowledged_control=acknowledged_control,
             )
         )
@@ -126,6 +127,7 @@ class ConnectionEvent:
         # a failed receive must leave the pending TX snapshot intact.
         self.connection.last_rx_us = self.connection.radio.now_us
         self.connection.establish()
+        self.control.packet_received(pdu[1], duplicate=duplicate)
         if (
             self.pending is not None
             and self.sent_pending
@@ -146,7 +148,7 @@ class ConnectionEvent:
             if terminate_reason is not None:
                 self.connection.complete(terminate_reason)
                 return True
-        if bool(header & PDU_DATA_SN_MASK) != self.rx_nesn:
+        if duplicate:
             # Retransmissions can carry a new ACK, but must not redeliver their payload.
             self.connection.link.trace("LL RX DUPLICATE")
             return True
@@ -241,8 +243,11 @@ class ConnectionEvent:
                 item.payload if item.llid == LlId.CONTROL else None
             ),
         )
-        if item.llid == LlId.CONTROL:
-            self.control.sent(item.payload, first=not self.sent_pending)
+        self.control.sent(
+            item.payload if item.llid == LlId.CONTROL else None,
+            first=not self.sent_pending,
+            length=len(self.pending_wire),
+        )
         self.sent_pending = True
         return bool(header & PDU_DATA_MD_MASK)
 
@@ -331,12 +336,18 @@ class ConnectionEvent:
             await self.connection.radio.advance_to_us(min(target_us, deadline))
             self.connection.check_timeout()
             return self.connection.radio.now_us
-        self.control.event_prepare()
+        exchange = self.control.event_prepare()
         if self.connection.closed:
             return self.connection.radio.now_us
         self.connection.unmapped_channel = (
             self.connection.unmapped_channel + self.connection.parameters.hop
         ) % LL_DATA_CHANNEL_COUNT
+        if not exchange:
+            # A pending non-connection-update Instant can fall on a skipped event.
+            await self.connection.radio.advance_to_us(self.connection.anchor_us)
+            self.connection.step_event()
+            self.connection.check_timeout()
+            return self.connection.radio.now_us
         channel = (
             channel_selection_2(
                 self.connection.event_counter,

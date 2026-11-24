@@ -34,6 +34,7 @@ import pytest
 from bscontroller.address import Address
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
+    LL_CONN_INTERVAL_UNIT_US,
     LL_DATA_CHANNEL_MAP_ALL,
     LL_EVENT_COUNTER_MASK,
     LL_HOP_INCREMENT_MAX,
@@ -44,6 +45,7 @@ from bscontroller.linklayer import (
     PDU_CRC_SIZE,
     AdvertisingMode,
     AdvertisingPduType,
+    LlId,
 )
 from bscontroller.linklayer.advertising import ExtendedPdu, SyncInfo
 from bscontroller.linklayer.bitstream import generate_access_address
@@ -72,6 +74,7 @@ from bscontroller.linklayer.scheduler import (
     higher_priority_overlap,
 )
 from bscontroller.linklayer.state import DataStatus, Role
+from bscontroller.linklayer.subrating import SubrateSchedule
 from bscontroller.radio.base import PHY_OCTET_BITS, Received
 from tests.unit.helpers import PARAMETERS, check_access_address
 from tests.unit.linklayer.air.harness import (
@@ -1128,6 +1131,48 @@ def test_acl_reservation_projects_full_intervals_with_fractional_drift(link):
         window = (expected, expected + reservation.duration_us)
         assert reservation.window_after(expected - 1) == window
         assert reservation.window_after(expected) == window
+
+
+@pytest.mark.parametrize('update_window', (False, True))
+def test_subrated_peripheral_reservation_covers_late_reply(link, update_window):
+    """Protect a Peripheral's widened receive window and response from periodic TX."""
+    link.sleep_clock_accuracy = LL_SCA_500_PPM
+    parameters = replace(
+        PARAMETERS,
+        interval=8,
+        latency=0,
+        sca=LL_SCA_500_PPM,
+        timeout=3200,
+        window_size=2,
+    )
+    connection = Connection(link, parameters, PEER, Role.PERIPHERAL, 0)
+    connection.established = True
+    connection.update_window = update_window
+    connection.last_rx_us = connection.anchor_us
+    factor = 400
+    connection.controls.subrating.schedule = SubrateSchedule(factor=factor)
+    link.connections[connection.handle] = connection
+    interval = parameters.interval * LL_CONN_INTERVAL_UNIT_US
+    anchor = connection.anchor_us + factor * interval
+    connection.step_event()
+
+    widening = connection.receive_widening_at(anchor)
+    latest_rx = anchor + widening + connection.receive_window_us - 1
+    (reservation,) = link.resource.reservations()
+    link.radio.script.append(
+        Air(
+            bytes((LlId.CONTINUATION, 0)),
+            at=latest_rx,
+            access_address=parameters.access_address,
+        )
+    )
+    run(link, link.advance_to_us(latest_rx))
+    (reply,) = link.radio.sent
+    assert reply.access_address == parameters.access_address
+    assert higher_priority_overlap(
+        [reservation], latest_rx, reply.end_us, RadioPriority.PERIODIC_TX
+    )
+    assert reservation.start_us + reservation.duration_us >= reply.end_us
 
 
 def test_colliding_acl_anchors_share_the_radio(link):

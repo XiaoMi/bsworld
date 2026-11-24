@@ -15,7 +15,6 @@ from cryptography.exceptions import InvalidTag
 from bscontroller import crypto
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
-    LL_CONN_INTERVAL_UNIT_US,
     LL_ENCRYPTION_IV_HALF_SIZE,
     LL_ENCRYPTION_RANDOM_SIZE,
     LL_ENCRYPTION_SKD_HALF_SIZE,
@@ -92,6 +91,12 @@ class Encryption:
     def stop_ping(self) -> None:
         if self.ping_context is not None:
             self.ping_context.finish()
+
+    def set_authenticated_timeout(self, timeout_us: int) -> None:
+        """A Host write restarts the running timer (Core Vol 6, Part B, 5.4)."""
+        self.auth_timeout_us = timeout_us
+        if self.enabled:
+            self.last_authenticated_us = self.connection.radio.now_us
 
     @property
     def listener(self) -> EncryptionListener:
@@ -414,10 +419,7 @@ class Encryption:
             timeout_us // 2,
             # One interval to align the request to an event and another for
             # the peer's response when the request closes that event.
-            2
-            * self.connection.parameters.interval
-            * LL_CONN_INTERVAL_UNIT_US
-            * (self.connection.parameters.latency + 1),
+            2 * self.connection.listening_interval_us,
         )
         return self.last_authenticated_us + timeout_us - reserve_us
 

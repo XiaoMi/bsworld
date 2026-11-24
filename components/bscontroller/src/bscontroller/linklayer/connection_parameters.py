@@ -34,6 +34,7 @@ from bscontroller.linklayer.procedure import (
     ProcedurePhase,
 )
 from bscontroller.linklayer.state import Role
+from bscontroller.linklayer.subrating import maximum_latency
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.control import ControlProcedures
@@ -160,6 +161,18 @@ class ConnectionParametersProcedure:
         notify: bool = True,
     ) -> None:
         """Central sends LL_CONNECTION_UPDATE_IND (Core Vol 6, Part B, 5.1.1)."""
+        if interval == self.connection.parameters.interval:
+            factor = self.owner.subrating.schedule.factor
+            latency = min(latency, maximum_latency(interval, factor, timeout))
+            if latency < 0:
+                reason = ErrorCode.UNACCEPTABLE_CONNECTION_PARAMETERS_ERROR
+                if self.remote_context is not None and self.remote_context.active:
+                    self.reject_remote_parameters(reason)
+                else:
+                    self.finish()
+                if notify:
+                    self.owner.listener.on_connection_updated(self.connection, reason)
+                return
         instant = self.owner.instant()
         offset = (
             anchor_offset(
@@ -357,6 +370,13 @@ class ConnectionParametersProcedure:
             )
             if (
                 not valid_timing(interval, interval, latency, timeout)
+                or (
+                    interval == connection.parameters.interval
+                    and latency
+                    > maximum_latency(
+                        interval, self.owner.subrating.schedule.factor, timeout
+                    )
+                )
                 or not LL_CONN_WINDOW_SIZE_MIN
                 <= size
                 <= min(LL_CONN_WINDOW_SIZE_MAX, interval - 1)

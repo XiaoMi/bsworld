@@ -150,6 +150,44 @@ def test_central_loc_param_req_disjoint_peer_range(central):
     assert_idle(central)
 
 
+def test_disconnect_completes_connection_update_waiting_for_subrate(central):
+    """Report failure for a Host update accepted while subrating is pending.
+
+    Purpose: Verify a successful Command Status is followed by completion
+    even when the connection closes before the update can start
+    (Core Vol 4, Part E, 7.8.18).
+
+    Steps:
+        1. The Host requests a subrate change and then a connection update.
+        2. The connection ends before the update can run.
+
+    Expected:
+        - The Host receives both failed procedure completions for this handle.
+        - The connection update did not send a PDU or change any parameters.
+    """
+    central.set_peer_features(LeFeatureMask.CONNECTION_SUBRATING_HOST_SUPPORT)
+    for command in (
+        hci.HCI_LE_Subrate_Request_Command(central.handle, 3, 3, 0, 0, 200),
+        hci.HCI_LE_Connection_Update_Command(central.handle, 30, 30, 0, 200, 0, 0),
+    ):
+        central.hci(command)
+        central.ut_rx(
+            hci.HCI_Command_Status_Event,
+            command_opcode=command.op_code,
+            status=ErrorCode.SUCCESS,
+        )
+    central.event_prepare()
+    central.lt_rx(Opcode.LL_SUBRATE_IND)
+
+    reason = ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR
+    central.connection.complete(reason)
+    for event_type in (UPDATE_DONE, hci.HCI_LE_Subrate_Change_Event):
+        central.ut_rx(event_type, status=reason, connection_handle=central.handle)
+    central.ut_rx(DISCONNECTED, reason=reason)
+    assert central.connection.parameters.interval == 24
+    central.ut_rx_q_is_empty()
+
+
 @pytest.mark.parametrize(
     'response',
     [

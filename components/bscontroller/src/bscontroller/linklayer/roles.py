@@ -90,7 +90,7 @@ from bscontroller.linklayer.scheduler import (
     RadioReservation,
     first_radio_gap,
 )
-from bscontroller.linklayer.state import DataStatus
+from bscontroller.linklayer.state import DataStatus, Role
 from bscontroller.linklayer.timing import (
     LL_CONN_EVENT_GUARD_US,
     LL_DEFAULT_SCAN_INTERVAL_US,
@@ -126,27 +126,39 @@ LL_PERIODIC_CHANNEL_MAP_UPDATE_EVENTS = LL_INSTANT_MIN_LISTENING_EVENTS + 1
 
 
 def connection_window(connection: Connection) -> RadioReservation:
-    """Next connection event, from its (widened) start to the guard before the next
-    anchor.
-    """
-    interval, fraction = divmod(
-        connection.event_interval_fixed_us, PHY_TIME_UNITS_PER_SECOND
+    """Protect the first packet exchange at each scheduled connection anchor."""
+    subrating = connection.controls.subrating
+    index = connection.next_scheduled_event
+    period = connection.event_interval_fixed_us
+    offset, phase = divmod(
+        period * (index - connection.event_index) + connection.clock_remainder,
+        PHY_TIME_UNITS_PER_SECOND,
     )
-    return RadioReservation(
-        connection.event_start_us - RADIO_SWITCH_TIME_US,
-        max(
-            connection.next_exchange_us(),
-            (
-                connection.parameters.window_size * LL_CONN_INTERVAL_UNIT_US
-                if not connection.established
-                else 0
-            ),
+    anchor = connection.anchor_us + offset
+    start = anchor
+    duration = connection.next_exchange_us()
+    if connection.role == Role.PERIPHERAL:
+        widening = connection.receive_widening_at(anchor)
+        start -= widening
+        # The Central can start as late as the end of the widened RX window.
+        duration += 2 * widening + connection.receive_window_us
+    elif not connection.established:
+        duration = max(
+            duration, connection.parameters.window_size * LL_CONN_INTERVAL_UNIT_US
         )
-        + LL_CONN_EVENT_GUARD_US
-        + RADIO_SWITCH_TIME_US,
+    # During a change or a continuation burst, protect the temporary extra
+    # radio slots. The periodic reservation then follows the committed phase.
+    schedule = subrating.schedule
+    regular = schedule.next_event(index) == index
+    if regular and subrating.transition is None and connection.controls.pending is None:
+        period *= schedule.factor
+    interval, fraction = divmod(period, PHY_TIME_UNITS_PER_SECOND)
+    return RadioReservation(
+        start - RADIO_SWITCH_TIME_US,
+        duration + LL_CONN_EVENT_GUARD_US + RADIO_SWITCH_TIME_US,
         interval,
         interval_fraction=fraction,
-        start_fraction=connection.clock_remainder,
+        start_fraction=phase,
     )
 
 

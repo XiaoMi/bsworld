@@ -65,7 +65,7 @@ from bscontroller.linklayer.extended import (
     required_periodic_interval,
     subevent_pdu,
 )
-from bscontroller.linklayer.features import FEATURE_MAX_PAGE
+from bscontroller.linklayer.features import FEATURE_MAX_PAGE, LeFeature, LeFeatureMask
 from bscontroller.linklayer.llcp import PreparedProcedure
 from bscontroller.linklayer.pawr import (
     LL_PAWR_SUBEVENT_INTERVAL_MAX,
@@ -82,6 +82,7 @@ from bscontroller.linklayer.power_control import (
     compensated_power,
 )
 from bscontroller.linklayer.state import Role
+from bscontroller.linklayer.subrating import SubrateRequest
 from bscontroller.linklayer.transfer import (
     AdvertisingSource,
     SynchronizationSource,
@@ -560,6 +561,35 @@ class LinkLayerService:
         self.link.default_tx_phys = self.link.default_rx_phys = (
             CONTROLLER_SUPPORTED_PHY_MASK
         )
+
+    @property
+    def features(self) -> int:
+        return self.link.features
+
+    def set_host_feature(self, bit: int, value: int) -> int:
+        """Set a Host-controlled bit (Core Vol 4, Part E, 7.8.115)."""
+        host_bits = (
+            LeFeature.CONNECTED_ISOCHRONOUS_STREAM,
+            LeFeature.CONNECTION_SUBRATING_HOST_SUPPORT,
+            LeFeature.ADVERTISING_CODING_SELECTION_HOST_SUPPORT,
+            LeFeature.CHANNEL_SOUNDING_HOST_SUPPORT,
+            LeFeature.SHORTER_CONNECTION_INTERVALS_HOST_SUPPORT,
+        )
+        if value not in (0, 1):
+            return INVALID
+        if bit not in host_bits or (
+            value
+            and (
+                bit != LeFeature.CONNECTION_SUBRATING_HOST_SUPPORT
+                or not self.features & LeFeatureMask.CONNECTION_SUBRATING
+            )
+        ):
+            return ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR
+        if self.link.connections:
+            return DISALLOWED
+        mask = 1 << bit
+        self.link.features = self.link.features & ~mask | value * mask
+        return SUCCESS
 
     @property
     def scan_parameters(self) -> ScanningSnapshot:
@@ -1176,6 +1206,34 @@ class LinkLayerService:
         power.report_local, power.report_remote = bool(local), bool(remote)
         return SUCCESS
 
+    def set_default_subrate(
+        self, minimum: int, maximum: int, latency: int, continuation: int, timeout: int
+    ) -> int:
+        request = SubrateRequest(minimum, maximum, latency, continuation, timeout)
+        if not request.valid_host_parameters:
+            return INVALID
+        self.link.default_subrate = request
+        return SUCCESS
+
+    def prepare_subrate(
+        self,
+        handle: int,
+        minimum: int,
+        maximum: int,
+        latency: int,
+        continuation: int,
+        timeout: int,
+    ) -> PreparedProcedure:
+        connection = self._connection(handle)
+        if connection is None:
+            return PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
+        request = SubrateRequest(minimum, maximum, latency, continuation, timeout)
+        if not request.valid_host_parameters or not request.fits_connection(
+            connection.parameters.interval
+        ):
+            return PreparedProcedure(INVALID)
+        return connection.llcp.prepare_subrate(request)
+
     def prepare_encryption(
         self, handle: int, rand: bytes, ediv: int, key: bytes
     ) -> PreparedProcedure:
@@ -1283,7 +1341,9 @@ class LinkLayerService:
             return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
         if not timeout_us:
             return INVALID
-        connection.encryption.auth_timeout_us = timeout_us
+        if timeout_us < connection.listening_interval_us:
+            return DISALLOWED
+        connection.encryption.set_authenticated_timeout(timeout_us)
         return SUCCESS
 
     def disconnect(self, handle: int, reason: int) -> int:

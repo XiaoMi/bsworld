@@ -47,6 +47,15 @@ class ControlListener(Protocol):
     def on_connection_updated(self, connection: Connection, status: int) -> None: ...
     def on_phy_updated(self, connection: Connection, status: int) -> None: ...
     def on_peer_sca(self, connection: Connection, status: int, sca: int) -> None: ...
+    def on_subrate_change(
+        self,
+        connection: Connection,
+        status: int,
+        factor: int,
+        latency: int,
+        continuation: int,
+        timeout: int,
+    ) -> None: ...
     def on_transmit_power_reporting(
         self,
         connection: Connection,

@@ -242,7 +242,9 @@ class DataLengthProcedure:
             self.local.tx_octets != PDU_DATA_PAYLOAD_SIZE_MIN
             or self.local.tx_time != initial_time
         ):
-            self.request(self.local.tx_octets, self.local.tx_time)
+            self.connection.llcp.set_data_length(
+                self.local.tx_octets, self.local.tx_time
+            )
 
     def control(self, payload: bytes) -> bool:
         """Handle LL_LENGTH_REQ/RSP and rejection of LL_LENGTH_REQ (Core Vol 6, Part B,
