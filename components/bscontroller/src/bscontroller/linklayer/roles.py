@@ -92,7 +92,6 @@ from bscontroller.linklayer.scheduler import (
 )
 from bscontroller.linklayer.state import DataStatus, Role
 from bscontroller.linklayer.timing import (
-    LL_CONN_EVENT_GUARD_US,
     LL_DEFAULT_SCAN_INTERVAL_US,
     LL_INSTANT_PAST_THRESHOLD,
     window_widening,
@@ -136,16 +135,24 @@ def connection_window(connection: Connection) -> RadioReservation:
     )
     anchor = connection.anchor_us + offset
     start = anchor
-    duration = connection.next_exchange_us()
+    duration = connection.first_exchange_us()
+    anchor_uncertainty = 0
     if connection.role == Role.PERIPHERAL:
         widening = connection.receive_widening_at(anchor)
         start -= widening
         # The Central can start as late as the end of the widened RX window.
-        duration += 2 * widening + connection.receive_window_us
+        anchor_uncertainty = 2 * widening + connection.receive_window_us
+        duration += anchor_uncertainty
     elif not connection.established:
         duration = max(
             duration, connection.parameters.window_size * LL_CONN_INTERVAL_UNIT_US
         )
+    # An outstanding Frame Space request or a long ACL packet can make the
+    # unconstrained exchange estimate larger than the event it protects.
+    own_interval = (period + phase) // PHY_TIME_UNITS_PER_SECOND
+    duration = min(
+        duration + connection.event_guard_us, own_interval + anchor_uncertainty
+    )
     # During a change or a continuation burst, protect the temporary extra
     # radio slots. The periodic reservation then follows the committed phase.
     schedule = subrating.schedule
@@ -155,7 +162,7 @@ def connection_window(connection: Connection) -> RadioReservation:
     interval, fraction = divmod(period, PHY_TIME_UNITS_PER_SECOND)
     return RadioReservation(
         start - RADIO_SWITCH_TIME_US,
-        duration + LL_CONN_EVENT_GUARD_US + RADIO_SWITCH_TIME_US,
+        duration + RADIO_SWITCH_TIME_US,
         interval,
         interval_fraction=fraction,
         start_fraction=phase,

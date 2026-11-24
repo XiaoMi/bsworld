@@ -27,6 +27,7 @@ from bscontroller.linklayer.features import (
     FEATURE_PAGE_SIZE,
     FEATURE_SET_SIZE,
     FEATURES_NOT_SENT_TO_PEER,
+    LeFeature,
     LeFeatureMask,
     feature_max_page,
     feature_page,
@@ -68,6 +69,26 @@ class FeatureExchangeProcedure:
     @property
     def local_features(self) -> int:
         return self.connection.link.features & ~FEATURES_NOT_SENT_TO_PEER
+
+    def supports(self, feature: LeFeature) -> bool | None:
+        """Return the peer's feature bit when its page is known."""
+        base = self.connection.peer_features
+        if feature < PDU_CONTROL_FEATURE_SET_SIZE * 8:
+            return None if base is None else bool(base & (1 << feature))
+        page, bit = divmod(
+            feature - PDU_CONTROL_FEATURE_SET_SIZE * 8, FEATURE_PAGE_SIZE * 8
+        )
+        page += 1
+        if (data := self._peer_pages.get(page)) is not None:
+            return bool(data[bit // 8] & (1 << (bit % 8)))
+        if (
+            self._peer_max_page is not None
+            and page > self._peer_max_page
+            or base is not None
+            and not base & LeFeatureMask.LL_EXTENDED_FEATURE_SET
+        ):
+            return False
+        return None
 
     def request(self, pages: int | None = None) -> None:
         """Start Feature Exchange or report the cached result (Core Vol 6, Part B,

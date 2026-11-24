@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
     LL_CONN_INTERVAL_UNIT_US,
-    LL_IFS_US,
     LL_RESPONSE_TIMEOUT_US,
     PDU_CONTROL_OPCODE_SIZE,
     PDU_CONTROL_REJECT_EXT_SIZE,
@@ -36,6 +35,7 @@ from bscontroller.radio.base import PHY_CODED_S8_FACTOR, Phy
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.connection import Connection
+    from bscontroller.linklayer.frame_space import FrameSpaceProcedure
     from bscontroller.linklayer.listener import ControlListener
 
 Opcode = ControlOpcode
@@ -76,8 +76,9 @@ class DataLengths:
 
 
 class DataLengthProcedure:
-    def __init__(self, connection: Connection):
+    def __init__(self, connection: Connection, frame_space: FrameSpaceProcedure):
         self.connection = connection
+        self.frame_space = frame_space
         initial_time = initial_time_us(connection.tx_phy)
         self.local = DataLengths(
             PDU_DATA_PAYLOAD_SIZE_MIN,
@@ -113,6 +114,27 @@ class DataLengthProcedure:
     def listener(self) -> ControlListener:
         return self.connection.link.listener
 
+    def _receive_limits(self, phy: Phy) -> tuple[int, int]:
+        octets = min(self.local.rx_octets, self.remote.tx_octets)
+        time = min(self.local.rx_time, self.remote.tx_time)
+        if phy == Phy.LE_CODED:
+            time = max(PDU_DATA_PAYLOAD_TIME_CODED_MIN_US, time)
+        return octets, time
+
+    def _interval_required_us(self, rx_phy: Phy, spacing_us: int) -> int:
+        octets, time = self._receive_limits(rx_phy)
+        return spacing_us + min(
+            time,
+            octets * PDU_DATA_OCTET_TIME_CODED_S8_US + PDU_DATA_EMPTY_TIME_CODED_S8_US,
+        )
+
+    def minimum_interval_us(self, tx_phy: Phy, rx_phy: Phy, spacing_us: int) -> int:
+        """connIntervalUncodedMin or connIntervalCodedMin (Core 6, Part B, 4.5.10)."""
+        limiting_phy = Phy.LE_CODED if Phy.LE_CODED in (tx_phy, rx_phy) else tx_phy
+        return self._interval_required_us(rx_phy, spacing_us) + initial_time_us(
+            limiting_phy
+        )
+
     def effective(self, *, tx_phy=None, rx_phy=None, interval_us=None) -> DataLengths:
         """connEffectiveMax* values, with the Coded PHY minimum of 2704 us (Core Vol 6,
         Part B, 4.5.10).
@@ -125,20 +147,14 @@ class DataLengthProcedure:
             if interval_us is None
             else interval_us
         )
-        rx_octets = min(self.local.rx_octets, self.remote.tx_octets)
+        rx_octets, rx_time = self._receive_limits(rx_phy)
         # Match each sender maximum against the opposite endpoint's receiver
         # maximum; the resulting TX and RX limits can differ.
         tx_octets = min(self.local.tx_octets, self.remote.rx_octets)
-        rx_time = min(self.local.rx_time, self.remote.tx_time)
         tx_time = min(self.local.tx_time, self.remote.rx_time)
-        if rx_phy == Phy.LE_CODED:
-            rx_time = max(PDU_DATA_PAYLOAD_TIME_CODED_MIN_US, rx_time)
         if tx_phy == Phy.LE_CODED:
-            required = 2 * LL_IFS_US + min(
-                rx_time,
-                rx_octets * PDU_DATA_OCTET_TIME_CODED_S8_US
-                + PDU_DATA_EMPTY_TIME_CODED_S8_US,
-            )
+            spacing = self.frame_space.interval_overhead_us(tx_phy, rx_phy)
+            required = self._interval_required_us(rx_phy, spacing)
             tx_time = max(
                 PDU_DATA_PAYLOAD_TIME_CODED_MIN_US, min(tx_time, interval_us - required)
             )

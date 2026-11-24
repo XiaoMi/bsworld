@@ -527,7 +527,7 @@ def test_suggested_defaults_are_captured_at_connection_creation(central):
     link = central.link
     link.default_tx_octets, link.default_tx_time = MAX, MAX_TIME
     assert lengths(central).local.tx_octets == MIN
-    fresh = DataLengthProcedure(central.connection)
+    fresh = DataLengthProcedure(central.connection, central.controls.frame_space)
     assert (fresh.local.tx_octets, fresh.local.tx_time) == (MAX, MAX_TIME)
 
 

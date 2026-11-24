@@ -241,6 +241,14 @@ class PeerLink:
             'phy': self.tx_phy,
         }
 
+    @property
+    def tx_ifs_us(self):
+        return LL_IFS_US
+
+    @property
+    def rx_ifs_us(self):
+        return LL_IFS_US
+
     async def exchange(
         self,
         data=b'',
@@ -279,7 +287,7 @@ class PeerLink:
             self._accept(response)
             if reply is not None:
                 data, llid = reply(response)
-            start = response.end_us + LL_IFS_US
+            start = response.end_us + self.tx_ifs_us
         else:
             assert reply is None, 'only a peer Peripheral can reply to a received PDU'
             start = self.anchor
@@ -291,13 +299,13 @@ class PeerLink:
             response = await receive(
                 channel,
                 duration_us=max(
-                    1000,
+                    1000 + self.rx_ifs_us - LL_IFS_US,
                     self.rx_phy.airtime_us(PDU_HEADER_SIZE + PDU_DATA_PAYLOAD_SIZE_MIN),
                 ),
                 **(kwargs | {'phy': self.rx_phy}),
             )
             if response is not None:
-                assert response.start_us == end + LL_IFS_US
+                assert response.start_us == end + self.rx_ifs_us
                 if check_ack:
                     assert int(bool(response.pdu[0] & PDU_DATA_NESN_MASK)) != sent_sn, (
                         'peer PDU not acknowledged'

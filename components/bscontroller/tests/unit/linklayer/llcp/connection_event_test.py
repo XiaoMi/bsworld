@@ -844,32 +844,32 @@ def test_csa2_uses_event_counter(central):
 @pytest.mark.parametrize(
     'phy,coding,expected',
     [
-        (Phy.LE_1M, PHY_CODED_S8_FACTOR, 892),
-        (Phy.LE_2M, PHY_CODED_S8_FACTOR, 604),
-        (Phy.LE_CODED, PHY_CODED_S8_FACTOR, 5196),
-        (Phy.LE_CODED, PHY_CODED_S2_FACTOR, 3642),
+        (Phy.LE_1M, PHY_CODED_S8_FACTOR, 742),
+        (Phy.LE_2M, PHY_CODED_S8_FACTOR, 454),
+        (Phy.LE_CODED, PHY_CODED_S8_FACTOR, 5046),
+        (Phy.LE_CODED, PHY_CODED_S2_FACTOR, 3492),
     ],
 )
 def test_exchange_reserves_complete_phy_exchange(central, phy, coding, expected):
     """The reserved exchange duration matches the PHY and coding in use.
 
-    Purpose: Verify that next_exchange_us returns the full time for a complete
+    Purpose: Verify that first_exchange_us returns the full time for a complete
     packet exchange on the connection's PHY and coding, so an event is only
     started when it fits (4.5.6). Runs for 1M, 2M and Coded (S8 and S2).
 
     Steps:
         1. Set the connection's TX/RX PHY and TX coding.
-        2. Queue a 27-byte ACL fragment and read next_exchange_us.
+        2. Queue a 27-byte ACL fragment and read first_exchange_us.
 
     Expected:
-        - next_exchange_us equals the expected microsecond value for that PHY and
+        - first_exchange_us equals the expected microsecond value for that PHY and
           coding.
     """
     connection = central.connection
     connection.tx_phy = connection.rx_phy = phy
     connection.tx_coding = coding
     connection.enqueue_acl(False, bytes(27))
-    assert connection.next_exchange_us() == expected
+    assert connection.first_exchange_us() == expected
 
 
 @pytest.mark.parametrize('encrypted', [False, True])
@@ -887,11 +887,11 @@ def test_initial_exchange_does_not_reserve_maximum_ack(central, encrypted):
         3. Compare minimal and full-RX exchange durations.
 
     Expected:
-        - next_exchange_us(max_rx=False) still equals the recorded minimal value.
-        - next_exchange_us() (full RX) is strictly larger.
+        - first_exchange_us(max_rx=False) still equals the recorded minimal value.
+        - first_exchange_us() (full RX) is strictly larger.
     """
     connection = central.connection
-    minimal = connection.next_exchange_us(max_rx=False)
+    minimal = connection.first_exchange_us(max_rx=False)
     lengths = connection.controls.data_length
     lengths.local = lengths.remote = DataLengths(
         PDU_DATA_PAYLOAD_SIZE_MAX,
@@ -900,8 +900,8 @@ def test_initial_exchange_does_not_reserve_maximum_ack(central, encrypted):
         PDU_DATA_PAYLOAD_TIME_UNCODED_MAX_US,
     )
     connection.packet_security.rx_enabled = encrypted
-    assert connection.next_exchange_us(max_rx=False) == minimal
-    assert connection.next_exchange_us() > minimal
+    assert connection.first_exchange_us(max_rx=False) == minimal
+    assert connection.first_exchange_us() > minimal
 
 
 def test_event_without_room_for_exchange_is_skipped(central):
@@ -912,19 +912,19 @@ def test_event_without_room_for_exchange_is_skipped(central):
     (4.5.6).
 
     Steps:
-        1. Queue a 27-byte ACL fragment.
-        2. Advance with the radio reserved until just under one exchange past the
-           anchor.
+        1. Record the duration of an exchange of two Empty PDUs at the anchor.
+        2. Queue a 27-byte ACL fragment and advance with less airtime available.
 
     Expected:
         - Nothing is transmitted and event_counter is 1.
     """
     connection = central.connection
+    minimum_exchange_us = connection.first_exchange_us(max_rx=False)
     connection.enqueue_acl(False, bytes(27))
     run(
         central,
         connection.anchor_us,
-        radio_until_us=connection.anchor_us + connection.next_exchange_us(max_rx=False),
+        radio_until_us=connection.anchor_us + minimum_exchange_us - 1,
     )
     assert not central.radio.sent and connection.event_counter == 1
 

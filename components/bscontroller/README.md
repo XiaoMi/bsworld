@@ -221,7 +221,7 @@ The table groups Link Layer features by the Bluetooth Core version that introduc
 | 6.0 | Decision-Based Advertising Filtering | * |
 | 6.0 | LL Extended Feature Set | * |
 | 6.0 | Monitoring Advertisers | * |
-| 6.0 | Frame Space Update |  |
+| 6.0 | Frame Space Update | * |
 | 6.1 | Randomized RPA Updates | * |
 | 6.2 | Shorter Connection Intervals |  |
 | 6.2 | Channel Sounding Amplitude-based Attack Resilience |  |

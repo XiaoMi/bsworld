@@ -58,6 +58,8 @@ IV = bytes(range(4))
 LTK = bytes(range(16))
 # Public test vector: the Lower Tester's eight-octet session-key-diversifier component.
 SKD = bytes(range(8))
+RAND = bytes(range(8))
+EDIV = 0x1234
 # Selected scanner IXIT: minimum base advertising interval with 5-ms mean AdvDelay.
 SCAN_ADV_INTERVAL_US = hci.HCI_LE_ADV_INTERVAL_MIN * hci.HCI_LE_ADV_INTERVAL_UNIT_US
 # LL.TS.p28 scan-response verdict permits a 2-us deviation from T_IFS.
@@ -506,6 +508,75 @@ class _EncryptedPeer(PeerLink):
         )
         self.rx_counter += int(not duplicate)
         return replace(packet, pdu=bytes([header, len(data)]) + data)
+
+
+async def start_encryption(tester, link, *, refresh=False, parameter_request=None):
+    """Perform the role-specific wire handshake, with HCI event validation."""
+    if link.central:
+        await tester.command(
+            hci.HCI_LE_Enable_Encryption_Command(link.handle, RAND, EDIV, LTK)
+        )
+        if refresh:
+            assert await link.control(Opcode.LL_PAUSE_ENC_REQ) == bytes(
+                [Opcode.LL_PAUSE_ENC_REQ]
+            )
+            await link.exchange(bytes([Opcode.LL_PAUSE_ENC_RSP]), llid=LlId.CONTROL)
+            link.rx_enabled = False
+            assert await link.control(Opcode.LL_PAUSE_ENC_RSP) == bytes(
+                [Opcode.LL_PAUSE_ENC_RSP]
+            )
+            link.tx_enabled = False
+        request = await link.control(Opcode.LL_ENC_REQ, response=parameter_request)
+        assert request[1:9] == RAND and int.from_bytes(request[9:11], 'little') == EDIV
+        link.install(request[11:19] + SKD, request[19:23] + IV)
+        await link.exchange(bytes([Opcode.LL_ENC_RSP]) + SKD + IV, llid=LlId.CONTROL)
+        link.rx_enabled = True
+        await link.exchange(bytes([Opcode.LL_START_ENC_REQ]), llid=LlId.CONTROL)
+        assert await link.control(Opcode.LL_START_ENC_RSP) == bytes(
+            [Opcode.LL_START_ENC_RSP]
+        )
+        link.tx_enabled = True
+        await link.exchange(bytes([Opcode.LL_START_ENC_RSP]), llid=LlId.CONTROL)
+    else:
+        if refresh:
+            assert await link.control(
+                Opcode.LL_PAUSE_ENC_RSP, bytes([Opcode.LL_PAUSE_ENC_REQ])
+            ) == bytes([Opcode.LL_PAUSE_ENC_RSP])
+            link.tx_enabled = link.rx_enabled = False
+            await link.exchange(bytes([Opcode.LL_PAUSE_ENC_RSP]), llid=LlId.CONTROL)
+        response = await link.control(
+            Opcode.LL_ENC_RSP,
+            bytes([Opcode.LL_ENC_REQ]) + RAND + EDIV.to_bytes(2, 'little') + SKD + IV,
+        )
+        request = await tester.event(hci.HCI_LE_Long_Term_Key_Request_Event)
+        assert (
+            request.connection_handle == link.handle
+            and request.random_number == RAND
+            and (request.encryption_diversifier == EDIV)
+        )
+        link.install(SKD + response[1:9], IV + response[9:13])
+        await tester.command(
+            hci.HCI_LE_Long_Term_Key_Request_Reply_Command(link.handle, LTK)
+        )
+        assert await link.control(Opcode.LL_START_ENC_REQ) == bytes(
+            [Opcode.LL_START_ENC_REQ]
+        )
+        link.tx_enabled = link.rx_enabled = True
+        assert await link.control(
+            Opcode.LL_START_ENC_RSP, bytes([Opcode.LL_START_ENC_RSP])
+        ) == bytes([Opcode.LL_START_ENC_RSP])
+    await link.exchange()
+    event = await tester.event(
+        hci.HCI_Encryption_Key_Refresh_Complete_Event
+        if refresh
+        else hci.HCI_Encryption_Change_Event
+    )
+    assert event.status == ErrorCode.SUCCESS and event.connection_handle == link.handle
+    if not refresh:
+        assert (
+            event.encryption_enabled
+            == hci.HCI_Encryption_Change_Event.Enabled.E0_OR_AES_CCM
+        )
 
 
 SCAN_INTERVAL_US = 3 * (SCAN_ADV_INTERVAL_US + LL_ADV_DELAY_MAX_US // 2)

@@ -48,6 +48,7 @@ from bscontroller.linklayer.data_length import DataLengthProcedure
 from bscontroller.linklayer.data_path import TransmissionConstraints
 from bscontroller.linklayer.feature_exchange import FeatureExchangeProcedure
 from bscontroller.linklayer.features import LeFeatureMask
+from bscontroller.linklayer.frame_space import FrameSpaceProcedure
 from bscontroller.linklayer.instant import InstantUpdate
 from bscontroller.linklayer.parameters import valid_channel_map
 from bscontroller.linklayer.phy import PhyProcedure
@@ -91,7 +92,8 @@ class ControlProcedures:
         self.transmitted = False
         self.acknowledged = False
         self._awaiting_instant_ack_confirmation = False
-        self.data_length = DataLengthProcedure(connection)
+        self.frame_space = FrameSpaceProcedure(self)
+        self.data_length = DataLengthProcedure(connection, self.frame_space)
         self.features = FeatureExchangeProcedure(self)
         self.power = PowerControl(self)
         self.clock_accuracy = ClockAccuracyProcedure(self)
@@ -131,6 +133,7 @@ class ControlProcedures:
             self.power.context,
             self.clock_accuracy.context,
             self.subrating.context,
+            self.frame_space.context,
         )
         return tuple(context for context in contexts if context is not None)
 
@@ -163,6 +166,7 @@ class ControlProcedures:
             or self.power.pending
             or self.clock_accuracy.pending
             or self.subrating.pending
+            or self.frame_space.busy
         )
 
     @property
@@ -177,10 +181,30 @@ class ControlProcedures:
                 self.power.deadline_us,
                 self.clock_accuracy.deadline_us,
                 self.subrating.deadline_us,
+                self.frame_space.deadline_us,
             )
             if deadline
         ]
         return min(deadlines) if deadlines else 0
+
+    def _instant_phys(self, update: InstantUpdate) -> tuple[int, int]:
+        if self.connection.role == Role.CENTRAL:
+            return update.central_tx_phy, update.peripheral_tx_phy
+        return update.peripheral_tx_phy, update.central_tx_phy
+
+    def link_timings(self) -> tuple[tuple[Phy, Phy, int], ...]:
+        """Return the current timing and any timing scheduled at an Instant."""
+        connection, update = self.connection, self.pending
+        current = connection.tx_phy, connection.rx_phy, connection.parameters.interval
+        if update is None:
+            return (current,)
+        tx, rx = self._instant_phys(update)
+        pending = (
+            Phy(tx or connection.tx_phy),
+            Phy(rx or connection.rx_phy),
+            (update.parameters or connection.parameters).interval,
+        )
+        return (current,) if pending == current else (current, pending)
 
     def transmission_constraints(self) -> TransmissionConstraints:
         """Combine committed link state with admitted transition restrictions.
@@ -201,11 +225,7 @@ class ControlProcedures:
             update = controls.pending
             if update.parameters:
                 interval = min(interval, update.parameters.interval)
-            tx, rx = (
-                (update.central_tx_phy, update.peripheral_tx_phy)
-                if connection.role == Role.CENTRAL
-                else (update.peripheral_tx_phy, update.central_tx_phy)
-            )
+            tx, rx = self._instant_phys(update)
             # PHY packet-time restrictions start at the local control transmission.
             if update.local and not controls.transmitted:
                 tx = rx = 0
@@ -228,13 +248,15 @@ class ControlProcedures:
             frozenset(tx_phys), rx_phy, interval * LL_CONN_INTERVAL_UNIT_US
         )
 
-    def enqueue(self, payload: bytes) -> None:
+    def enqueue(self, payload: bytes, *, priority: bool = False) -> None:
         # Core Vol 6, Part B, 5.2: each queued procedure PDU restarts a running T_PRT.
         self.response_timer.restart(self.connection.radio.now_us)
-        self.connection.enqueue_control(payload)
+        self.connection.enqueue_control(payload, priority=priority)
 
-    def reject(self, opcode: int, reason: int) -> None:
-        self.enqueue(bytes([Opcode.LL_REJECT_EXT_IND, opcode, reason]))
+    def reject(self, opcode: int, reason: int, *, priority: bool = False) -> None:
+        self.enqueue(
+            bytes([Opcode.LL_REJECT_EXT_IND, opcode, reason]), priority=priority
+        )
 
     def instant(self) -> int:
         """Follow the recommended six listening-event lead (Core 6.3, Vol 6, Part B,
@@ -397,6 +419,7 @@ class ControlProcedures:
         and preserve the recommended Instant lead (Core 6.3, Vol 6, Part B,
         2.4.2.27 and 5.5).
         """
+        payload = self.frame_space.prepare(payload)
         if (
             payload[0] in (Opcode.LL_PERIODIC_SYNC_IND, Opcode.LL_PERIODIC_SYNC_WR_IND)
             and self.released
@@ -473,6 +496,7 @@ class ControlProcedures:
 
     def sent(self, payload: bytes) -> None:
         self.subrating.sent(payload)
+        self.frame_space.sent(payload)
         if payload[0] == Opcode.LL_PHY_UPDATE_IND:
             self.phy.indication_sent(payload)
 
@@ -522,6 +546,8 @@ class ControlProcedures:
         if self.power.control(payload) or self.clock_accuracy.control(payload):
             return True
         if self.subrating.control(payload):
+            return True
+        if self.frame_space.control(payload):
             return True
         opcode = payload[0]
         if (
@@ -689,11 +715,7 @@ class ControlProcedures:
             )
         if update.central_tx_phy or update.peripheral_tx_phy:
             # On-air fields name roles; translate them into this endpoint's TX/RX.
-            tx, rx = (
-                (update.central_tx_phy, update.peripheral_tx_phy)
-                if connection.role == Role.CENTRAL
-                else (update.peripheral_tx_phy, update.central_tx_phy)
-            )
+            tx, rx = self._instant_phys(update)
             connection.tx_phy = Phy(tx or connection.tx_phy)
             connection.rx_phy = Phy(rx or connection.rx_phy)
             self.power.update_transmitter()
@@ -722,6 +744,7 @@ class ControlProcedures:
                 self.power.deadline_us,
                 self.clock_accuracy.deadline_us,
                 self.subrating.deadline_us,
+                self.frame_space.deadline_us,
             )
         ):
             self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)

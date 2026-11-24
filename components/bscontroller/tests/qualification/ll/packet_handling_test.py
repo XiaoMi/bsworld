@@ -113,6 +113,8 @@ SUPPORTED_CONTROLS = frozenset(
         Opcode.LL_SUBRATE_REQ,
         Opcode.LL_SUBRATE_IND,
         Opcode.LL_PERIODIC_SYNC_WR_IND,
+        Opcode.LL_FRAME_SPACE_REQ,
+        Opcode.LL_FRAME_SPACE_RSP,
     }
 )
 # Core 6.3, Vol 6 Part B, 2.4.2.25-58: defined CtrData, capped at 26 octets
@@ -142,8 +144,6 @@ UNSUPPORTED_CONTROL_DATA_LENGTHS = {
     Opcode.LL_CS_CHANNEL_MAP_IND: 12,
     Opcode.LL_CS_SEC_REQ: 20,
     Opcode.LL_CS_TERMINATE_RSP: 4,
-    Opcode.LL_FRAME_SPACE_REQ: 7,
-    Opcode.LL_FRAME_SPACE_RSP: 5,
     Opcode.LL_OTA_UTP_IND: 26,
     Opcode.LL_CONNECTION_RATE_REQ: 26,
     Opcode.LL_CONNECTION_RATE_IND: 14,
@@ -187,6 +187,8 @@ INVALID_LENGTH_CASES = {
     Opcode.LL_SUBRATE_REQ: (struct.calcsize('<5H'), 'abc'),
     Opcode.LL_SUBRATE_IND: (struct.calcsize('<5H'), 'ad'),
     Opcode.LL_PERIODIC_SYNC_WR_IND: (PDU_CONTROL_PERIODIC_SYNC_WR_SIZE - 1, 'ad'),
+    Opcode.LL_FRAME_SPACE_REQ: (struct.calcsize('<HHBH'), 'abc'),
+    Opcode.LL_FRAME_SPACE_RSP: (struct.calcsize('<HBH'), 'ad'),
 }
 # Section 4.7.3.3 requires six distinct invalid lengths per supported opcode.
 INVALID_LENGTH_ROUNDS = 6

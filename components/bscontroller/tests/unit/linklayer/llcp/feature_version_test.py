@@ -40,8 +40,11 @@ PEER_FEATURES = int(
 )
 
 
-# Core Vol 6, Part B, Table 4.9: locally reported bits forbidden on the ACL.
-HCI_ONLY_FEATURES = (1 << 27) | (1 << 42) | (1 << 48) | (1 << 64)
+# Core Vol 6, Part B, 5.1.4 and Table 4.9: legacy feature PDUs
+# carry eight octets, with HCI-only page-zero bits cleared.
+FEATURE_PAGE_ZERO_SIZE = 8
+FEATURE_PAGE_ZERO_MASK = (1 << (8 * FEATURE_PAGE_ZERO_SIZE)) - 1
+HCI_ONLY_PAGE_ZERO_FEATURES = (1 << 27) | (1 << 42) | (1 << 48)
 
 
 def request_opcode(role):
@@ -52,6 +55,10 @@ def request_opcode(role):
 
 def le_features(event):
     return int.from_bytes(event.le_features, 'little')
+
+
+def local_page_zero(dut):
+    return dut.link.features & FEATURE_PAGE_ZERO_MASK & ~HCI_ONLY_PAGE_ZERO_FEATURES
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +124,7 @@ def test_feature_loc(iut, role):
     dut.host_start('prepare_features')
     dut.event_prepare()
     sent = dut.lt_rx(request_opcode(role))
-    assert int.from_bytes(sent[1:], 'little') == dut.link.features & ~HCI_ONLY_FEATURES
+    assert sent[1:] == local_page_zero(dut).to_bytes(FEATURE_PAGE_ZERO_SIZE, 'little')
     dut.lt_tx(feature(Opcode.LL_FEATURE_RSP, PEER_FEATURES))
     dut.event_done()
     event = dut.ut_rx(FEATURES_DONE, status=0, connection_handle=dut.handle)
@@ -333,7 +340,7 @@ def test_feature_rem(iut, role):
 
     Expected:
         - Response octet 0 equals local AND peer AND 0xFF.
-        - Response octets above 0 equal the local features' upper octets.
+        - Response octets 1 through 7 equal the local page-zero feature octets.
         - The connection caches the full peer features, nothing reaches the Host.
     """
     dut = iut(role)
@@ -345,10 +352,11 @@ def test_feature_rem(iut, role):
     dut.event_done()
     dut.event_prepare()
     response = dut.lt_rx(Opcode.LL_FEATURE_RSP)
+    assert len(response[1:]) == FEATURE_PAGE_ZERO_SIZE
     features = int.from_bytes(response[1:], 'little')
     # Octet 0 is the intersection; higher octets are local (5.1.4.1, 5.1.4.2).
-    assert features & 0xFF == dut.link.features & peer & 0xFF
-    assert features & ~0xFF == dut.link.features & ~(0xFF | HCI_ONLY_FEATURES)
+    assert features & 0xFF == local_page_zero(dut) & peer & 0xFF
+    assert features & ~0xFF == local_page_zero(dut) & ~0xFF
     dut.tx_ack()
     dut.event_done()
     assert dut.connection.peer_features == peer
@@ -714,26 +722,26 @@ def test_unknown_handle(central, method):
 @pytest.mark.parametrize('role', ROLES)
 @pytest.mark.parametrize('local', [True, False])
 def test_hci_only_features_are_never_sent_in_acl_exchange(iut, role, local):
-    """Features marked Send to Peer = N never appear in Feature Exchange PDUs.
+    """Page-zero features marked Send to Peer = N stay clear on the air.
 
-    Purpose: Verify that feature bits 27, 42, 48 and 64, which have Send to Peer
+    Purpose: Verify that feature bits 27, 42 and 48, which have Send to Peer
     = N, stay zero in both the initiating request and the LL_FEATURE_RSP,
     for both roles (Vol 6, Part B, Table 4.9).
 
     Steps:
-        1. Set the four HCI-only bits in the IUT's local features.
+        1. Set the three page-zero HCI-only bits in the IUT's local features.
         2. Either Upper Tester starts a local Feature Exchange, or Lower Tester
            sends the peer role's feature request with an empty feature set.
         3. Lower Tester receives the IUT's request or LL_FEATURE_RSP.
 
     Expected:
-        - None of bits 27, 42, 48 or 64 is set in the sent FeatureSet.
+        - None of bits 27, 42 or 48 is set in the sent FeatureSet.
         - A request carries the remaining local features; a response also
           clears the first octet, which reflects the peer's empty set.
     """
     dut = iut(role)
-    excluded = HCI_ONLY_FEATURES
-    baseline = dut.link.features & ~excluded
+    excluded = HCI_ONLY_PAGE_ZERO_FEATURES
+    baseline = local_page_zero(dut)
     dut.link.features |= excluded
     if local:
         dut.host_start('prepare_features')
@@ -743,6 +751,5 @@ def test_hci_only_features_are_never_sent_in_acl_exchange(iut, role, local):
         )
     dut.event_prepare()
     sent = dut.lt_rx(request_opcode(role) if local else Opcode.LL_FEATURE_RSP)
-    actual = int.from_bytes(sent[1:], 'little')
-    assert not actual & excluded
-    assert actual == (baseline if local else baseline & ~0xFF)
+    expected = baseline if local else baseline & ~0xFF
+    assert sent[1:] == expected.to_bytes(FEATURE_PAGE_ZERO_SIZE, 'little')

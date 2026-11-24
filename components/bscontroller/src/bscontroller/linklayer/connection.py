@@ -29,6 +29,7 @@ from bscontroller.linklayer.llcp import LlcpCoordinator
 from bscontroller.linklayer.parameters import Parameters
 from bscontroller.linklayer.state import Role
 from bscontroller.linklayer.timing import (
+    LL_CONN_EVENT_GUARD_US,
     LL_CONN_RX_WINDOW_CODED_US,
     LL_CONN_RX_WINDOW_UNCODED_US,
     window_widening,
@@ -224,15 +225,16 @@ class Connection:
         return self.event.accept(pdu, valid_crc)
 
     async def send(self, channel: int, start_us: int) -> bool:
-        return await self.event.send(channel, start_us)
+        more, _ = await self.event.send(channel, start_us)
+        return more
 
     async def receive(
         self, channel: int, until_us: int, *, start_us: int | None = None
     ):
         return await self.event.receive(channel, until_us, start_us=start_us)
 
-    def next_exchange_us(self, *, max_rx: bool = True) -> int:
-        return self.event.next_exchange_us(max_rx=max_rx)
+    def first_exchange_us(self, *, max_rx: bool = True) -> int:
+        return self.event.first_exchange_us(max_rx=max_rx)
 
     @property
     def response_window_us(self) -> int:
@@ -280,6 +282,17 @@ class Connection:
             self.anchor_us
             + (self.event_interval_fixed_us + self.clock_remainder)
             // PHY_TIME_UNITS_PER_SECOND
+        )
+
+    @property
+    def event_guard_us(self) -> int:
+        return self.event_guard_for_us()
+
+    def event_guard_for_us(self, opcode: int | None = None) -> int:
+        central_phy = self.tx_phy if self.role == Role.CENTRAL else self.rx_phy
+        return max(
+            LL_CONN_EVENT_GUARD_US,
+            self.controls.frame_space.event_spacing_us(central_phy, opcode),
         )
 
     @property
