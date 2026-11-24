@@ -36,6 +36,7 @@ from bscontroller.linklayer.discovery import (
     Scanning,
 )
 from bscontroller.linklayer.extended import ExtendedProcedures
+from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.listener import Listener
 from bscontroller.linklayer.monitoring import AdvertiserMonitoring
 from bscontroller.linklayer.parameters import Parameters
@@ -44,6 +45,7 @@ from bscontroller.linklayer.privacy import Privacy
 from bscontroller.linklayer.resource import RadioResourceManager
 from bscontroller.linklayer.roles import LinkRoles
 from bscontroller.linklayer.scheduler import first_radio_gap
+from bscontroller.linklayer.subrating import SubrateRequest
 from bscontroller.linklayer.timing import (
     LL_CONN_EVENT_GUARD_US,
     LL_RESPONSE_START_TOLERANCE_US,
@@ -86,6 +88,7 @@ class RadioLink:
         self.periodic_advertiser_list: set[tuple[Address, int]] = set()
         # Host default transfer mode for subsequent connections (7.8.92).
         self.sync_transfer = SyncTransferConfig()
+        self.default_subrate = SubrateRequest()
         self.default_tx_octets = PDU_DATA_PAYLOAD_SIZE_MIN
         self.default_tx_time = PDU_DATA_PAYLOAD_TIME_MIN_US
         self.rf_tx_path_compensation = 0
@@ -134,6 +137,8 @@ class RadioLink:
         self.accept_list.clear()
         self.periodic_advertiser_list.clear()
         self.sync_transfer = SyncTransferConfig()
+        self.default_subrate = SubrateRequest()
+        self.features &= ~int(LeFeatureMask.CONNECTION_SUBRATING_HOST_SUPPORT)
         self.default_tx_octets = PDU_DATA_PAYLOAD_SIZE_MIN
         self.default_tx_time = PDU_DATA_PAYLOAD_TIME_MIN_US
         self.rf_tx_path_compensation = 0

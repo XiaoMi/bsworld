@@ -41,6 +41,7 @@ from bscontroller.radio.base import Received
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.connection import Connection
+    from bscontroller.linklayer.subrating import SubrateRequest
     from bscontroller.linklayer.transfer import TrainSource
 
 SUCCESS = ErrorCode.SUCCESS
@@ -83,11 +84,13 @@ LL_CONTROL_PDU_SENDER_ROLES: dict[int, Role] = {
     Opcode.LL_FEATURE_REQ: Role.CENTRAL,
     Opcode.LL_PAUSE_ENC_REQ: Role.CENTRAL,
     Opcode.LL_PHY_UPDATE_IND: Role.CENTRAL,
+    Opcode.LL_SUBRATE_IND: Role.CENTRAL,
     Opcode.LL_ENC_RSP: Role.PERIPHERAL,
     Opcode.LL_START_ENC_REQ: Role.PERIPHERAL,
     Opcode.LL_PERIPHERAL_FEATURE_REQ: Role.PERIPHERAL,
     Opcode.LL_PHY_RSP: Role.PERIPHERAL,
     Opcode.LL_MIN_USED_CHANNELS_IND: Role.PERIPHERAL,
+    Opcode.LL_SUBRATE_REQ: Role.PERIPHERAL,
 }
 
 
@@ -143,6 +146,8 @@ class LlcpCoordinator:
             return controls.version_request
         if kind == 'encryption':
             return self.encryption.busy
+        if kind == 'subrate':
+            return controls.subrating.pending
         return bool(controls.data_length.pending)
 
     @property
@@ -224,7 +229,7 @@ class LlcpCoordinator:
     def prepare(self, payload: bytes) -> bytes:
         return self.controls.prepare(payload)
 
-    def sent(self, payload: bytes, *, first: bool) -> None:
+    def _control_sent(self, payload: bytes, *, first: bool) -> None:
         if first:
             contexts = (*self.controls.local_contexts(), self.encryption.ping_context)
             for context in contexts:
@@ -238,10 +243,15 @@ class LlcpCoordinator:
                     context.transmitted = True
                     self.local_exchanges[context.request] = context
                     break
-        if first:
             self.controls.sent(payload)
         self.encryption.sent(payload)
-        self._prune_exchanges()
+
+    def sent(self, payload: bytes | None, *, length: int, first: bool) -> None:
+        if payload is not None:
+            self._control_sent(payload, first=first)
+        completed_subrate = self.controls.subrating.sent_packet(length)
+        if payload is not None or completed_subrate:
+            self._prune_exchanges()
 
     def acknowledged(self, payload: bytes) -> int | None:
         self.controls.acknowledge(payload)
@@ -249,6 +259,11 @@ class LlcpCoordinator:
         if payload[0] == Opcode.LL_TERMINATE_IND:
             return self.connection.termination_status
         return None
+
+    def packet_received(self, length: int, *, duplicate: bool) -> None:
+        self.controls.subrating.record_activity(length)
+        if not duplicate:
+            self.controls.confirm_instant_acknowledgment()
 
     def receive(self, context: ReceiveContext) -> bytes | None:
         """Authenticate, check cross-procedure admissibility, then permit ACK
@@ -335,22 +350,28 @@ class LlcpCoordinator:
             if context.active
         }
 
-    def event_prepare(self) -> None:
+    def event_prepare(self) -> bool:
+        """Apply due control changes and tell the executor whether to use the radio."""
+        force_exchange = self.controls.instant_forces_exchange
         self.controls.apply()
         if self.connection.closed:
-            return
+            return False
         self.controls.release_transfers()
         self.start_deferred()
+        self.controls.subrating.start_peer_request()
         self.controls.power.update_transmitter()
         self.controls.clock_accuracy.start_if_needed()
         self.controls.power.request_if_needed()
         self._prune_exchanges()
+        index = self.connection.event_index
+        return force_exchange or self.controls.subrating.next_event(index) == index
 
     def close(self, reason: int) -> None:
         while self.deferred:
             procedure = self.deferred.popleft()
             if procedure.cancel is not None:
                 procedure.cancel(reason)
+        self.controls.subrating.close(reason)
         self.controls.features.finish(reason)
         self.controls.finish_version(None)
         self.controls.power.close(reason)
@@ -412,6 +433,16 @@ class LlcpCoordinator:
             connection.enqueue_control(
                 bytes([Opcode.LL_UNKNOWN_RSP, opcode]), priority=True
             )
+
+    def prepare_subrate(self, request: SubrateRequest) -> PreparedProcedure:
+        subrating = self.controls.subrating
+        if not subrating.peer_supported:
+            return PreparedProcedure(ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
+        return self._prepare(
+            DeferredProcedure(
+                'subrate', lambda: subrating.request(request), subrating.report
+            )
+        )
 
     def prepare_encryption(
         self, rand: bytes, ediv: int, key: bytes
@@ -476,7 +507,17 @@ class LlcpCoordinator:
     ) -> PreparedProcedure:
         if self._duplicate('parameters'):
             return PreparedProcedure(DISALLOWED)
-        if not valid_timing(minimum, maximum, latency, timeout) or not valid_ce_lengths:
+
+        def valid_request() -> bool:
+            return valid_timing(
+                minimum,
+                maximum,
+                latency,
+                timeout,
+                subrate=self.controls.subrating.schedule.factor,
+            )
+
+        if not valid_request() or not valid_ce_lengths:
             return PreparedProcedure(INVALID)
         if (
             self.connection.role == Role.PERIPHERAL
@@ -484,7 +525,13 @@ class LlcpCoordinator:
         ):
             return PreparedProcedure(ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
 
+        def complete(status: int) -> None:
+            self.controls.listener.on_connection_updated(self.connection, status)
+
         def request():
+            if not valid_request():
+                complete(INVALID)
+                return
             # Only the Central can fall back to UPDATE_IND (Vol 6, Part B, 5.1.1).
             if (
                 self.connection.role == Role.CENTRAL
@@ -498,7 +545,7 @@ class LlcpCoordinator:
                     minimum, maximum, latency, timeout
                 )
 
-        return self._prepare(DeferredProcedure('parameters', request))
+        return self._prepare(DeferredProcedure('parameters', request, complete))
 
     def supply_key(self, key: bytes | None) -> int:
         if (
@@ -514,7 +561,13 @@ class LlcpCoordinator:
     ) -> int:
         if self.controls.connection_parameters.remote_parameters is None:
             return DISALLOWED
-        if not valid_timing(minimum, maximum, latency, timeout):
+        if not valid_timing(
+            minimum,
+            maximum,
+            latency,
+            timeout,
+            subrate=self.controls.subrating.schedule.factor,
+        ):
             return INVALID
         self.controls.connection_parameters.reply_parameters(
             minimum, maximum, latency, timeout
@@ -532,17 +585,20 @@ class LlcpCoordinator:
             return INVALID
         if self._duplicate('data_length'):
             return DISALLOWED
-        if (
-            self.connection.peer_features is not None
-            and not self.connection.peer_features
-            & LeFeatureMask.LE_DATA_PACKET_LENGTH_EXTENSION
-        ):
+        if not self._peer_supports_data_length:
             return ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
-        return self._admit(
-            DeferredProcedure(
-                'data_length',
-                lambda: self.controls.data_length.request(octets, time_us),
-            )
+
+        def start() -> None:
+            if self._peer_supports_data_length:
+                self.controls.data_length.request(octets, time_us)
+
+        return self._admit(DeferredProcedure('data_length', start))
+
+    @property
+    def _peer_supports_data_length(self) -> bool:
+        features = self.connection.peer_features
+        return features is None or bool(
+            features & LeFeatureMask.LE_DATA_PACKET_LENGTH_EXTENSION
         )
 
     def transfer(self, source: TrainSource, service_data: int) -> int:

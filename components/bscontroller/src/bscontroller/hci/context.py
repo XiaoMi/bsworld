@@ -32,13 +32,13 @@ UNKNOWN_ADV = hci.HCI_ErrorCode.UNKNOWN_ADVERTISING_IDENTIFIER_ERROR
 class LeControllerContext(LeControllerEvents):
     """The public Controller owns HCI configuration; RadioLink owns active RF."""
 
-    def __init__(self, controller: 'Controller', radio: Radio):
+    def __init__(self, controller: 'Controller', radio: Radio, le_features: int):
         self.controller = controller
         notifications = NotificationAdapter(self)
         self.link = RadioLink(
             radio,
             notifications,
-            int(controller.le_features),
+            int(le_features),
             seed=int.from_bytes(bytes(controller.public_address), 'little'),
             config=controller.config,
         )

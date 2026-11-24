@@ -187,6 +187,22 @@ class LeControllerEvents:
             )
         )
 
+    def on_subrate_change(
+        self,
+        connection: ConnectionSnapshot,
+        status: int,
+        factor: int,
+        latency: int,
+        continuation: int,
+        timeout: int,
+    ) -> None:
+        """Report the Subrate Update result (Core Vol 4, Part E, 7.7.65.35)."""
+        self._emit_hci_packet(
+            hci.HCI_LE_Subrate_Change_Event(
+                status, connection.handle, factor, latency, continuation, timeout
+            )
+        )
+
     def on_remote_parameters(
         self, connection: ConnectionSnapshot, minimum, maximum, latency, timeout
     ):

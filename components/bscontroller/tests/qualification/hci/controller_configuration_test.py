@@ -27,7 +27,7 @@ from tests.qualification.cases import (
     verify_case,
 )
 from tests.qualification.hci.power_control_test import expect_remote_power_read_error
-from tests.qualification.peer import establish
+from tests.qualification.peer import establish, exchange_features
 from tests.qualification.tester import (
     PEER_ADDRESS,
     create_connection,
@@ -1685,6 +1685,9 @@ PROCEDURES |= procedure_cases(
 
 RADIO_CASES = (
     'HCI/CCO/BV-09-C',
+    'HCI/CCO/BI-36-C',
+    'HCI/CCO/BI-37-C',
+    'HCI/CCO/BI-39-C',
     'HCI/CCO/BI-40-C',
     'HCI/CCO/BI-43-C',
     'HCI/CCO/BI-63-C',
@@ -1846,6 +1849,231 @@ PROCEDURES |= procedure_cases(
 PROCEDURES |= procedure_cases(
     invalid_monitored_advertisers_parameters,
     {'HCI/CCO/BI-71-C': ('Invalid LE Monitoring Advertisers Parameters', {})},
+)
+
+
+async def invalid_subrate_parameters(tester, *, existing):
+    """Invalid Subrate Parameters.
+
+    Initial Condition:
+        The IUT has a Central ACL with a 10 ms connection interval. The
+        Lower Tester supports Connection Subrating.
+
+    Test Case Configuration:
+        BI-36 uses LE Subrate Request and checks Command Status. BI-37 uses
+        LE Set Default Subrate and checks Command Complete.
+
+    Test Steps:
+        1. For BI-36, send LE Subrate Request with an unused handle and
+           otherwise valid parameters.
+        2. Require Command Status with Unknown Connection Identifier (0x02).
+        3. Execute the rounds in Table 4.44 using the selected command.
+           Only BI-36 runs round 9, which depends on the current interval.
+        4. Require Invalid HCI Command Parameters (0x12) for each round.
+
+    Expected Outcome:
+        The command response has the selected event type and the specified
+        status for each invalid handle or parameter set.
+
+    Reference:
+        HCI.TS.p39, 4.10.7, Tables 4.43 and 4.44, PDF pages 186-188;
+        Core Vol 4, Part E, 7.8.123 and 7.8.124.
+    """
+    link = await establish(tester, central=True, interval=8)
+    if existing:
+        await exchange_features(
+            link,
+            int(
+                hci.LeFeatureMask.CONNECTION_SUBRATING
+                | hci.LeFeatureMask.CONNECTION_SUBRATING_HOST_SUPPORT
+            ),
+        )
+        await tester.command(
+            hci.HCI_LE_Subrate_Request_Command(0x0EFF, 1, 2, 0, 0, 50),
+            ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR,
+        )
+
+    rounds = (
+        (0, 2, 2, 0, 50),
+        (4, 3, 2, 0, 50),
+        (501, 500, 500, 0, 50),
+        (2, 501, 2, 0, 50),
+        (2, 3, 0x01F4, 0, 50),
+        (2, 0x01F4, 2, 0x01F4, 50),
+        (2, 3, 3, 0, 0x0009),
+        (2, 3, 3, 0, 0x0C81),
+        (25, 25, 5, 0, 0x00C8),
+        (3, 5, 2, 5, 50),
+    )
+    for number, values in enumerate(rounds, start=1):
+        if not existing and number == 9:
+            continue
+        command = (
+            hci.HCI_LE_Subrate_Request_Command(link.handle, *values)
+            if existing
+            else hci.HCI_LE_Set_Default_Subrate_Command(*values)
+        )
+        await tester.command(command, ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR)
+
+
+async def invalid_default_subrate_in_standby(tester):
+    """LE Set Default Subrate, Invalid Parameters.
+
+    Initial Condition:
+        The IUT is in standby. Unspecified fields use zero latency or
+        continuation and a 500 ms supervision timeout.
+
+    Test Steps:
+        1. Set Subrate_Min = 1, Subrate_Max = 3 and Max_Latency = 166.
+        2. Set Subrate_Min = 2 and Subrate_Max = 1.
+        3. Set Subrate_Min = 1, Subrate_Max = 2 and Continuation_Number = 3.
+        After each command, require Command Complete with Invalid HCI
+        Command Parameters (0x12).
+
+    Expected Outcome:
+        All three invalid commands return status 0x12.
+
+    Reference:
+        HCI.TS.p39, 4.10, HCI/CCO/BI-120-C, PDF pages 246-247;
+        Core Vol 4, Part E, 7.8.123.
+    """
+    for values in ((1, 3, 166, 0), (2, 1, 0, 0), (1, 2, 0, 3)):
+        await tester.command(
+            hci.HCI_LE_Set_Default_Subrate_Command(*values, 50),
+            ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+        )
+
+
+async def invalid_auth_timeout_for_subrate(tester):
+    """Invalid Write Authenticated Payload Timeout Parameters.
+
+    Initial Condition:
+        The IUT is Peripheral on a 10 ms ACL. The Lower Tester sets the
+        subrate factor to 3, continuation number to 0 and latency to 2.
+
+    Test Steps:
+        1. Write Authenticated Payload Timeout = 0x0008 (80 ms).
+        2. Verify the returned error status. The source warns unless the
+           status is Command Disallowed (0x0C), which this DUT returns.
+        3. Write 0x0009 (90 ms) on the same connection.
+        4. Require a successful Command Complete.
+
+    Expected Outcome:
+        An 80 ms timeout is rejected and a 90 ms timeout is accepted.
+
+    Reference:
+        HCI.TS.p39, 4.10, HCI/CCO/BI-39-C, PDF page 189;
+        Core Vol 4, Part E, 7.3.94.
+    """
+    await tester.command(
+        hci.HCI_LE_Set_Host_Feature_Command(
+            hci.LeFeature.CONNECTION_SUBRATING_HOST_SUPPORT, 1
+        )
+    )
+    link = await establish(tester, interval=8)
+    await exchange_features(
+        link,
+        int(
+            hci.LeFeatureMask.CONNECTION_SUBRATING
+            | hci.LeFeatureMask.CONNECTION_SUBRATING_HOST_SUPPORT
+        ),
+    )
+    await link.exchange(
+        struct.pack('<B5H', Opcode.LL_SUBRATE_IND, 3, link.counter, 2, 0, 50),
+        llid=LlId.CONTROL,
+        check_ack=True,
+    )
+    event = await tester.event(hci.HCI_LE_Subrate_Change_Event)
+    assert (
+        event.status,
+        event.connection_handle,
+        event.subrate_factor,
+        event.peripheral_latency,
+        event.continuation_number,
+        event.supervision_timeout,
+    ) == (ErrorCode.SUCCESS, link.handle, 3, 2, 0, 50)
+
+    await tester.command(
+        hci.HCI_Write_Authenticated_Payload_Timeout_Command(link.handle, 8),
+        ErrorCode.COMMAND_DISALLOWED_ERROR,
+    )
+    result = await tester.command(
+        hci.HCI_Write_Authenticated_Payload_Timeout_Command(link.handle, 9)
+    )
+    assert result.connection_handle == link.handle
+
+
+async def unsupported_host_feature(tester, *, bit):
+    """Reject Setting Host Controlled FeatureSet Bit, Unsupported Feature on Controller.
+
+    Initial Condition:
+        The IUT has no connection and the selected FeatureSet bit is clear.
+
+    Test Case Configuration:
+        BI-44 selects bit 32 (CIS Host Support), BI-121 bit 41 (Advertising
+        Coding Selection Host Support), BI-122 bit 47 (Channel Sounding Host
+        Support), and BI-133 bit 72 (Shorter Connection Intervals).
+
+    Test Steps:
+        1. Send LE Set Host Feature with the selected bit number and value 1.
+        2. Require Command Complete with Unsupported Feature or Parameter
+           Value (0x11).
+
+    Expected Outcome:
+        The command returns status 0x11.
+
+    Reference:
+        HCI.TS.p39, 4.10.8, Table 4.47 and Figure 4.107, PDF pages 192-193;
+        Core Vol 4, Part E, 7.8.115 and Vol 6, Part B, 4.6.
+
+    Source Correction:
+        Table 4.47 lists bit 72 for BI-133. The current Core assigns bit 72
+        to the Controller feature and bit 73 to its Host Support bit.
+    """
+    await tester.command(
+        hci.HCI_LE_Set_Host_Feature_Command(bit, 1),
+        ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR,
+    )
+
+
+# Validate all Table 4.44 rounds applicable to each of the two subrate commands.
+PROCEDURES |= procedure_cases(
+    invalid_subrate_parameters,
+    {
+        'HCI/CCO/BI-36-C': (
+            'Invalid Subrate Parameters – LE Subrate Request',
+            {'existing': True},
+        ),
+        'HCI/CCO/BI-37-C': (
+            'Invalid Subrate Parameters – LE Set Default Subrate',
+            {'existing': False},
+        ),
+    },
+)
+
+# Verify the authenticated payload timeout bound on a subrated connection.
+PROCEDURES |= procedure_cases(
+    invalid_auth_timeout_for_subrate,
+    {'HCI/CCO/BI-39-C': ('Invalid Write Authenticated Payload Timeout Parameters', {})},
+)
+
+# Reject LE Set Default Subrate with invalid latency, factor or continuation.
+PROCEDURES |= procedure_cases(
+    invalid_default_subrate_in_standby,
+    {'HCI/CCO/BI-120-C': ('LE Set Default Subrate, Invalid Parameters', {})},
+)
+
+# Reject the unsupported feature bits selected in Table 4.47.
+PROCEDURES |= procedure_cases(
+    unsupported_host_feature,
+    {
+        f'HCI/CCO/BI-{number}-C': (
+            f'Reject Setting Host FeatureSet Bit {bit}, '
+            'Unsupported Feature on Controller',
+            {'bit': bit},
+        )
+        for number, bit in ((44, 32), (121, 41), (122, 47), (133, 72))
+    },
 )
 
 

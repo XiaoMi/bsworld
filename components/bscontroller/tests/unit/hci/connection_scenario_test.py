@@ -213,7 +213,7 @@ def test_remote_power_read_preserves_unmanaged_phy_without_change_report(host):
     def read_power(power, flags):
         host.cmd_status(command)
         host.in_loop(connection.llcp.event_prepare)
-        host.in_loop(connection.llcp.sent, request, first=True)
+        host.in_loop(connection.llcp.sent, request, length=len(request), first=True)
         response = (
             bytes((ControlOpcode.LL_POWER_CONTROL_RSP, flags, 0))
             + power.to_bytes(1, 'little', signed=True)

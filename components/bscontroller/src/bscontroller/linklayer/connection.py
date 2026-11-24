@@ -78,6 +78,7 @@ class Connection:
             + parameters.window_offset * LL_CONN_INTERVAL_UNIT_US
         )
         self.event_counter: int = 0
+        self.event_epoch = 0
         self.clock_remainder = 0
         # The latest event with a received packet and the one before it, for
         # syncConnEventCount; None until there is one.
@@ -251,8 +252,11 @@ class Connection:
 
     @property
     def receive_widening_us(self) -> int:
+        return self.receive_widening_at(self.anchor_us)
+
+    def receive_widening_at(self, anchor_us: int) -> int:
         return window_widening(
-            self.anchor_us - self.last_rx_us,
+            anchor_us - self.last_rx_us,
             self.controls.clock_accuracy.peer_accuracy,
             local_sca=self.link.sleep_clock_accuracy,
         )
@@ -278,19 +282,49 @@ class Connection:
             // PHY_TIME_UNITS_PER_SECOND
         )
 
-    def step_event(self) -> None:
+    @property
+    def event_index(self) -> int:
+        return self.event_epoch + self.event_counter
+
+    @property
+    def next_scheduled_event(self) -> int:
+        current = self.event_index
+        index = self.controls.subrating.next_event(current)
+        if index == current:
+            return index
+        instant = self.controls.next_instant_event()
+        return index if instant is None else min(instant, index)
+
+    @property
+    def listening_interval_us(self) -> int:
+        return (
+            self.parameters.interval
+            * LL_CONN_INTERVAL_UNIT_US
+            * self.controls.subrating.schedule.factor
+            * (self.parameters.latency + 1)
+        )
+
+    def step_event(self, count: int = 1) -> None:
         # Carry the fraction across events so the integer PHY timestamps do
         # not accumulate rounding error.
         interval, self.clock_remainder = divmod(
-            self.event_interval_fixed_us + self.clock_remainder,
+            self.event_interval_fixed_us * count + self.clock_remainder,
             PHY_TIME_UNITS_PER_SECOND,
         )
         self.anchor_us += interval
-        self.event_counter = (self.event_counter + 1) & LL_EVENT_COUNTER_MASK
+        index = self.event_index + count
+        self.event_counter = index & LL_EVENT_COUNTER_MASK
+        self.event_epoch = index - self.event_counter
 
     def skip_missed_events(self) -> None:
         """A radio conflict advances counters and Instants, never transmits late."""
         while not self.closed:
+            skipped = self.next_scheduled_event - self.event_index
+            if skipped:
+                self.unmapped_channel = (
+                    self.unmapped_channel + skipped * self.parameters.hop
+                ) % LL_DATA_CHANNEL_COUNT
+                self.step_event(skipped)
             latest = self.anchor_us
             if self.role == Role.PERIPHERAL:
                 latest += self.receive_window_us + self.receive_widening_us

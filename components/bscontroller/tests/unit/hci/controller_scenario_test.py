@@ -331,6 +331,46 @@ def test_read_le_features_and_states(host):
     assert len(states) == 8 and any(states)
 
 
+def test_host_subrating_feature_updates_both_hci_feature_reads(host):
+    """Report the Host's Subrating opt-in in Page 0 and the full FeatureSet.
+
+    Purpose: Keep the Controller capability independent of Host opt-in
+    across both reads and Reset (Vol 4, Part E, 7.8.115; Vol 6, Part B, 4.6.33).
+
+    Steps:
+        1. Read both feature bitmaps at power-on.
+        2. Set Host Support and read both bitmaps again.
+        3. Reset and read both bitmaps.
+
+    Expected:
+        - Both reads always report Controller Subrating support.
+        - Both reads report Host Support only after the successful command.
+    """
+    controller = hci.LeFeatureMask.CONNECTION_SUBRATING
+    host_support = hci.LeFeatureMask.CONNECTION_SUBRATING_HOST_SUPPORT
+    reads = (
+        hci.HCI_LE_Read_Local_Supported_Features_Command,
+        hci.HCI_LE_Read_All_Local_Supported_Features_Command,
+    )
+
+    def feature_masks():
+        return [
+            int.from_bytes(host.cmd(read()).le_features, 'little')
+            & (controller | host_support)
+            for read in reads
+        ]
+
+    assert feature_masks() == [controller] * 2
+    host.cmd(
+        hci.HCI_LE_Set_Host_Feature_Command(
+            hci.LeFeature.CONNECTION_SUBRATING_HOST_SUPPORT, 1
+        )
+    )
+    assert feature_masks() == [controller | host_support] * 2
+    host.cmd(hci.HCI_Reset_Command())
+    assert feature_masks() == [controller] * 2
+
+
 def test_buffer_and_data_length_capabilities(host):
     """LE buffer size and maximum data length report the capability constants.
 

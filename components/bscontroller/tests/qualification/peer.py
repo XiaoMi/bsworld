@@ -561,6 +561,7 @@ async def establish(
     channel=37,
     advertising_channels=None,
     high_duty=False,
+    legacy_advertising_data=None,
     connection_parameters=None,
     connection_complete_event=None,
     air_address=None,
@@ -571,6 +572,7 @@ async def establish(
 
     ``air_address`` is the Lower Tester's over-air address, such as an RPA the
     IUT resolves to the identity ``peer_address``; it defaults to that address.
+    ``legacy_advertising_data`` sets the IUT's advertising payload before enable.
     """
     address = DUT_ADDRESS
     air_address = peer_address if air_address is None else air_address
@@ -688,6 +690,10 @@ async def establish(
                     ),
                 )
             )
+            if legacy_advertising_data is not None:
+                await tester.command(
+                    hci.HCI_LE_Set_Advertising_Data_Command(legacy_advertising_data)
+                )
             await tester.command(hci.HCI_LE_Set_Advertising_Enable_Command(1))
         if extended and not legacy:
             channel, advertisement, fields = await receive_extended(tester, phy=phy)

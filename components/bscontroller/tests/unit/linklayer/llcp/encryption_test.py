@@ -15,6 +15,8 @@ that AES-CCM, MIC failures and plaintext/encrypted RX transitions are exercised 
 real traffic.
 """
 
+from struct import pack
+
 import pytest
 
 from bscontroller.linklayer import LL_CONN_INTERVAL_UNIT_US
@@ -1318,6 +1320,50 @@ def test_authenticated_timeout_host_command(central):
     assert (
         central.controller.le_procedures.ll.set_authenticated_timeout(0x0EFF, 1)
         == ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+    )
+
+
+def test_writing_authenticated_timeout_restarts_timer_on_subrated_link(peripheral):
+    """Restart the authenticated payload timer on a successful write.
+
+    Purpose: Verify a new timeout starts at the HCI write on an encrypted
+    connection (Core Vol 6, Part B, 5.4).
+
+    Steps:
+        1. Apply factor 3 and latency 2 to a 10 ms connection.
+        2. Wait 100 ms without a valid MIC, then write a 90 ms timeout.
+        3. Wait until just before the new deadline and then until expiry.
+
+    Expected:
+        - The command succeeds and sends no immediate expiry notification.
+        - The Host receives an expiry after 90 ms measured from the write.
+    """
+    peripheral.set_parameters(interval=8)
+    peripheral.enable_encryption()
+    peripheral.lt_tx(pdu(Opcode.LL_SUBRATE_IND, pack('<5H', 3, 0, 2, 0, 100)))
+    peripheral.lt_rx_empty()
+    peripheral.ut_rx(hci.HCI_LE_Subrate_Change_Event, subrate_factor=3)
+    assert not peripheral.elapse(100_000)
+    written_at = peripheral.radio.now_us
+    command = hci.HCI_Write_Authenticated_Payload_Timeout_Command(peripheral.handle, 9)
+    peripheral.hci(command)
+    result = peripheral.ut_rx(
+        hci.HCI_Command_Complete_Event, command_opcode=command.op_code
+    )
+    assert result.return_parameters.status == ErrorCode.SUCCESS
+
+    assert not peripheral.elapse(0)
+    assert not peripheral.elapse(0)
+    peripheral.ut_rx_q_is_empty()
+    assert not peripheral.elapse(45_000)
+    peripheral.lt_rx(Opcode.LL_PING_REQ)
+    elapsed = peripheral.radio.now_us - written_at
+    assert not peripheral.elapse(89_999 - elapsed)
+    peripheral.ut_rx_q_is_empty()
+    assert not peripheral.elapse(1)
+    peripheral.ut_rx(
+        hci.HCI_Authenticated_Payload_Timeout_Expired_Event,
+        connection_handle=peripheral.handle,
     )
 
 

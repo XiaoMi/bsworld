@@ -9,6 +9,7 @@ context. The LLCP coordinator tracks each context until that exchange completes.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from bscontroller.errors import ErrorCode
@@ -49,6 +50,7 @@ class FeatureExchangeProcedure:
         self._peer_pages: dict[int, bytes] = {}
         self._peer_max_page: int | None = None
         self._page_pending: int | None = None
+        self._completion: Callable[[int], None] | None = None
 
     @property
     def pending(self) -> bool:
@@ -71,6 +73,16 @@ class FeatureExchangeProcedure:
         """Start Feature Exchange or report the cached result (Core Vol 6, Part B,
         5.1.4).
         """
+        self._request(pages, None)
+
+    def discover(self, completion: Callable[[int], None]) -> None:
+        """Fetch the peer's page zero for another LL procedure."""
+        self._request(None, completion)
+
+    def _request(
+        self, pages: int | None, completion: Callable[[int], None] | None
+    ) -> None:
+        self._completion = completion
         self._pages_requested = pages
         self._page_pending = None
         opcode = (
@@ -79,7 +91,10 @@ class FeatureExchangeProcedure:
             else Opcode.LL_PERIPHERAL_FEATURE_REQ
         )
         self.context = ProcedureContext(
-            opcode, frozenset((Opcode.LL_FEATURE_RSP,)), self, host_initiated=True
+            opcode,
+            frozenset((Opcode.LL_FEATURE_RSP,)),
+            self,
+            host_initiated=completion is None,
         )
         if self.connection.peer_features is not None:
             self._continue()
@@ -131,7 +146,11 @@ class FeatureExchangeProcedure:
             return
         self.context.finish()
         self._page_pending = None
-        self.report(status, self._pages_requested)
+        completion, self._completion = self._completion, None
+        if completion is None:
+            self.report(status, self._pages_requested)
+        else:
+            completion(status)
 
     def report(self, status: int, pages: int | None) -> None:
         if pages is None:

@@ -8,7 +8,7 @@
 
 测试覆盖设备发现、广播、连接、定时、报文编码、跳频、安全和数据传输。选取的用例也覆盖隐私、基于决策的广播过滤（DBAF）、BIS 广播和同步接收。
 
-下表按测试规范章节列出 23 个文件中的 915 个协议用例，其中 HCI 175 个、LL 740 个。可按测试规范编号查找和运行用例。
+下表按测试规范章节列出 25 个文件中的 946 个协议用例，其中 HCI 185 个、LL 761 个。可按测试规范编号查找和运行用例。
 
 | 目录 | 来源章节 | 测试文件 | 选取用例数 |
 |---|---|---|---:|
@@ -18,13 +18,15 @@
 | `hci/` | 4.6 Controller Information | [controller_information_test.py](hci/controller_information_test.py) | 6 |
 | `hci/` | 4.7 Device Discovery | [device_discovery_test.py](hci/device_discovery_test.py) | 75 |
 | `hci/` | 4.8 Host Flow Control | [host_flow_control_test.py](hci/host_flow_control_test.py) | 1 |
-| `hci/` | 4.10 Controller Configuration | [controller_configuration_test.py](hci/controller_configuration_test.py) | 49 |
+| `hci/` | 4.10 Controller Configuration | [controller_configuration_test.py](hci/controller_configuration_test.py) | 57 |
+| `hci/` | 4.11 Controller Setup | [controller_setup_test.py](hci/controller_setup_test.py) | 2 |
 | `hci/` | 4.13 LE Connection Management | [connection_management_test.py](hci/connection_management_test.py) | 7 |
 | `hci/` | 4.14 LE Power Control | [power_control_test.py](hci/power_control_test.py) | 3 |
 | `hci/` | 4.15.2 Broadcast Isochronous Streams | [broadcast_isochronous_test.py](hci/broadcast_isochronous_test.py) | 17 |
 | `hci/` | 4.17 Event Versioning | [event_versioning_test.py](hci/event_versioning_test.py) | 6 |
 | `ll/` | 4.2 Device Discovery | [device_discovery_test.py](ll/device_discovery_test.py) | 176 |
 | `ll/` | 4.3 Connection | [connection_test.py](ll/connection_test.py) | 258 |
+| `ll/` | 4.3 Connection Subrating | [subrating_test.py](ll/subrating_test.py) | 21 |
 | `ll/` | 4.3.7 Periodic Advertising Sync Transfer | [sync_transfer_test.py](ll/sync_transfer_test.py) | 84 |
 | `ll/` | 4.4 Timing | [timing_test.py](ll/timing_test.py) | 29 |
 | `ll/` | 4.5 Encoding | [encoding_test.py](ll/encoding_test.py) | 7 |

@@ -5,7 +5,7 @@ English | [简体中文](README.zh-CN.md)
 | Directory | Coverage | Test environment |
 |---|---|---|
 | `unit/` | Controller algorithms, state ownership, scheduling, and FIFO, thread, and clock behavior, grouped by implementation module. | Python test environment. |
-| `qualification/hci/`, `qualification/ll/` | 915 selected HCI and Link Layer cases, grouped by specification chapter and exercised with independent testers. | Python test environment for HCI-only cases, plus BabbleSim for RF cases. |
+| `qualification/hci/`, `qualification/ll/` | HCI and Link Layer cases grouped by specification chapter and exercised with independent testers. | Python test environment for HCI-only cases, plus BabbleSim for RF cases. |
 
 See the [protocol test guide](qualification/PROTOCOL.md) for coverage by chapter, log locations, and how to interpret results.
 

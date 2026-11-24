@@ -44,7 +44,12 @@ def valid_channel_map(value: int) -> bool:
 
 
 def valid_timing(
-    interval_min: int, interval_max: int, latency: int, timeout: int
+    interval_min: int,
+    interval_max: int,
+    latency: int,
+    timeout: int,
+    *,
+    subrate: int = 1,
 ) -> bool:
     return (
         LL_CONN_INTERVAL_MIN <= interval_min <= interval_max <= LL_CONN_INTERVAL_MAX
@@ -55,6 +60,7 @@ def valid_timing(
         * (latency + 1)
         * interval_max
         * LL_CONN_INTERVAL_UNIT_US
+        * subrate
     )
 
 

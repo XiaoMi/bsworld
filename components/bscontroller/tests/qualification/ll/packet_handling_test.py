@@ -70,6 +70,7 @@ PEER_FEATURES = (
     | hci.LeFeatureMask.LE_DATA_PACKET_LENGTH_EXTENSION
     | hci.LeFeatureMask.PERIPHERAL_INITIATED_FEATURE_EXCHANGE
     | hci.LeFeatureMask.MINIMUM_NUMBER_OF_USED_CHANNELS_PROCEDURE
+    | hci.LeFeatureMask.CONNECTION_SUBRATING
 )
 # Source Correction: use a legal two-channel map instead of the common single bit.
 COMMON_CHANNEL_MAP = 0x03
@@ -109,6 +110,8 @@ SUPPORTED_CONTROLS = frozenset(
         Opcode.LL_POWER_CONTROL_REQ,
         Opcode.LL_POWER_CONTROL_RSP,
         Opcode.LL_POWER_CHANGE_IND,
+        Opcode.LL_SUBRATE_REQ,
+        Opcode.LL_SUBRATE_IND,
         Opcode.LL_PERIODIC_SYNC_WR_IND,
     }
 )
@@ -121,8 +124,6 @@ UNSUPPORTED_CONTROL_DATA_LENGTHS = {
     Opcode.LL_CIS_RSP: 8,
     Opcode.LL_CIS_IND: 15,
     Opcode.LL_CIS_TERMINATE_IND: 3,
-    Opcode.LL_SUBRATE_REQ: 10,
-    Opcode.LL_SUBRATE_IND: 10,
     Opcode.LL_CHANNEL_REPORTING_IND: 3,
     Opcode.LL_CHANNEL_STATUS_IND: 10,
     Opcode.LL_FEATURE_EXT_REQ: 26,
@@ -183,6 +184,8 @@ INVALID_LENGTH_CASES = {
     Opcode.LL_POWER_CONTROL_REQ: (struct.calcsize('<Bbb'), 'abc'),
     Opcode.LL_POWER_CONTROL_RSP: (struct.calcsize('<BbbB'), 'ad'),
     Opcode.LL_POWER_CHANGE_IND: (struct.calcsize('<BBbb'), 'ad'),
+    Opcode.LL_SUBRATE_REQ: (struct.calcsize('<5H'), 'abc'),
+    Opcode.LL_SUBRATE_IND: (struct.calcsize('<5H'), 'ad'),
     Opcode.LL_PERIODIC_SYNC_WR_IND: (PDU_CONTROL_PERIODIC_SYNC_WR_SIZE - 1, 'ad'),
 }
 # Section 4.7.3.3 requires six distinct invalid lengths per supported opcode.

@@ -54,6 +54,7 @@ from bscontroller.linklayer.phy import PhyProcedure
 from bscontroller.linklayer.power_control import PowerControl
 from bscontroller.linklayer.procedure import ProcedureContext, ProcedureResponseTimer
 from bscontroller.linklayer.state import Role
+from bscontroller.linklayer.subrating import Subrating
 from bscontroller.linklayer.timing import LL_INSTANT_PAST_THRESHOLD
 from bscontroller.linklayer.transfer import (
     PeriodicSyncIndication,
@@ -89,10 +90,12 @@ class ControlProcedures:
         self.pending: InstantUpdate | None = None
         self.transmitted = False
         self.acknowledged = False
+        self._awaiting_instant_ack_confirmation = False
         self.data_length = DataLengthProcedure(connection)
         self.features = FeatureExchangeProcedure(self)
         self.power = PowerControl(self)
         self.clock_accuracy = ClockAccuracyProcedure(self)
+        self.subrating = Subrating(self)
         # Includes a local indication queued but not yet transmitted during a collision.
         self.version_sent = False
         self.peer_version: tuple[int, int, int] | None = None
@@ -127,6 +130,7 @@ class ControlProcedures:
             self.data_length.context,
             self.power.context,
             self.clock_accuracy.context,
+            self.subrating.context,
         )
         return tuple(context for context in contexts if context is not None)
 
@@ -158,6 +162,7 @@ class ControlProcedures:
             or self.version_request
             or self.power.pending
             or self.clock_accuracy.pending
+            or self.subrating.pending
         )
 
     @property
@@ -171,6 +176,7 @@ class ControlProcedures:
                 self.version_deadline_us,
                 self.power.deadline_us,
                 self.clock_accuracy.deadline_us,
+                self.subrating.deadline_us,
             )
             if deadline
         ]
@@ -236,8 +242,42 @@ class ControlProcedures:
         """
         return (
             self.connection.event_counter
-            + LL_INSTANT_MIN_LISTENING_EVENTS * (self.connection.parameters.latency + 1)
+            + LL_INSTANT_MIN_LISTENING_EVENTS
+            * self.subrating.schedule.factor
+            * (self.connection.parameters.latency + 1)
         ) & LL_EVENT_COUNTER_MASK
+
+    def next_instant_event(self) -> int | None:
+        """Next checkpoint for an Instant or its required radio events."""
+        update = self.pending
+        if update is None or (update.local and not self.transmitted):
+            return None
+        distance = (
+            update.instant - self.connection.event_counter
+        ) & LL_EVENT_COUNTER_MASK
+        if distance >= LL_INSTANT_PAST_THRESHOLD:
+            return None
+        # Vol 6, Part B, 5.5.1: listen at every event until the peer confirms
+        # our acknowledgment or the Instant is reached.
+        if self._awaiting_instant_ack_confirmation:
+            return self.connection.event_index
+        return (
+            self.connection.event_index
+            + distance
+            - bool(distance and update.parameters)
+        )
+
+    @property
+    def instant_forces_exchange(self) -> bool:
+        return self._awaiting_instant_ack_confirmation or (
+            self.pending is not None
+            and self.pending.parameters is not None
+            and self.next_instant_event() == self.connection.event_index
+        )
+
+    def confirm_instant_acknowledgment(self) -> None:
+        """A valid new Central PDU confirms its previous PDU was acknowledged."""
+        self._awaiting_instant_ack_confirmation = False
 
     def accept_instant(self, update: InstantUpdate) -> None:
         """Peripheral acceptance of an Instant; a past Instant loses the connection
@@ -252,6 +292,7 @@ class ControlProcedures:
             self.connection.complete(ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR)
         else:
             self.pending = update
+            self._awaiting_instant_ack_confirmation = bool(distance)
             if distance == 0:
                 self.apply(received_at_instant=True)
 
@@ -414,6 +455,7 @@ class ControlProcedures:
         return payload
 
     def acknowledge(self, payload: bytes) -> None:
+        self.subrating.acknowledged(payload)
         update = self.pending
         if (
             update
@@ -430,6 +472,7 @@ class ControlProcedures:
             self.acknowledged = True
 
     def sent(self, payload: bytes) -> None:
+        self.subrating.sent(payload)
         if payload[0] == Opcode.LL_PHY_UPDATE_IND:
             self.phy.indication_sent(payload)
 
@@ -477,6 +520,8 @@ class ControlProcedures:
         if self.data_length.control(payload) or self.features.control(payload):
             return True
         if self.power.control(payload) or self.clock_accuracy.control(payload):
+            return True
+        if self.subrating.control(payload):
             return True
         opcode = payload[0]
         if (
@@ -604,6 +649,7 @@ class ControlProcedures:
         # Release the procedure slot before callbacks can start another procedure
         # against the newly committed parameters.
         self.pending = None
+        self._awaiting_instant_ack_confirmation = False
         if update.central_tx_phy or update.peripheral_tx_phy:
             if self.phy.context is not None:
                 self.response_timer.stop(self.phy.context)
@@ -625,6 +671,8 @@ class ControlProcedures:
             )
             self.connection_parameters.finish()
             connection.parameters = update.parameters
+            if old.interval != update.parameters.interval:
+                self.subrating.reset_schedule()
             if not received_at_instant:
                 # Reception at the Instant already provides the new anchor; applying the
                 # offset again would shift it twice (Vol 6, Part B, 5.1.1).
@@ -673,6 +721,7 @@ class ControlProcedures:
                 self.deadline_us,
                 self.power.deadline_us,
                 self.clock_accuracy.deadline_us,
+                self.subrating.deadline_us,
             )
         ):
             self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
