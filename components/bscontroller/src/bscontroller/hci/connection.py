@@ -28,6 +28,8 @@ from bscontroller.hci import (
 )
 from bscontroller.hci.capabilities import (
     HCI_AUTHENTICATED_PAYLOAD_TIMEOUT_UNIT_US,
+    HCI_AUTOMATIC_FLUSH_TIMEOUT_MAX,
+    HCI_AUTOMATIC_FLUSH_TIMEOUT_UNIT_US,
     HCI_RSSI_NOT_AVAILABLE,
 )
 from bscontroller.hci.context import (
@@ -43,6 +45,11 @@ from bscontroller.linklayer import (
     LL_ENCRYPTION_RANDOM_SIZE,
 )
 from bscontroller.linklayer.api import InitiatingConfig, ScanWindowConfig
+from bscontroller.linklayer.connection_rate import (
+    MAX_RATE_INTERVAL,
+    MIN_RATE_INTERVAL,
+    ConnectionRateParameters,
+)
 from bscontroller.linklayer.data_length import valid_data_length
 from bscontroller.linklayer.filtering import (
     LEGACY_INITIATOR_FILTER_POLICIES,
@@ -392,6 +399,9 @@ class LeConnectionCommands(LeControllerContext):
             self.ll.set_host_feature(command.bit_number, command.bit_value)
         )
 
+    def on_hci_le_set_host_feature_v2_command(self, command):
+        return self.on_hci_le_set_host_feature_command(command)
+
     def on_hci_read_remote_version_information_command(self, command):
         self._run_ll_request(
             command, self.ll.prepare_version(command.connection_handle)
@@ -434,6 +444,41 @@ class LeConnectionCommands(LeControllerContext):
                 command.continuation_number,
                 command.supervision_timeout,
             ),
+        )
+
+    @staticmethod
+    def _connection_rate_parameters(command):
+        return ConnectionRateParameters(
+            command.connection_interval_min,
+            command.connection_interval_max,
+            command.subrate_min,
+            command.subrate_max,
+            command.max_latency,
+            command.continuation_number,
+            command.supervision_timeout,
+            command.min_ce_length,
+            command.max_ce_length,
+        )
+
+    def on_hci_le_connection_rate_request_command(self, command):
+        """Request new connection timing (Core Vol 4, Part E, 7.8.154)."""
+        self._run_ll_request(
+            command,
+            self.ll.prepare_connection_rate(
+                command.connection_handle, self._connection_rate_parameters(command)
+            ),
+        )
+
+    def on_hci_le_set_default_rate_parameters_command(self, command):
+        """Set rates for future Central ACLs (Core Vol 4, Part E, 7.8.155)."""
+        return hci.HCI_StatusReturnParameters(
+            self.ll.set_default_rate(self._connection_rate_parameters(command))
+        )
+
+    def on_hci_le_read_minimum_supported_connection_interval_command(self, command):
+        """Report intervals in 125 µs units (Core Vol 4, Part E, 7.8.156)."""
+        return hci.HCI_LE_Read_Minimum_Supported_Connection_Interval_ReturnParameters(
+            SUCCESS, MIN_RATE_INTERVAL, (MIN_RATE_INTERVAL,), (MAX_RATE_INTERVAL,), (1,)
         )
 
     def on_hci_le_frame_space_update_command(self, command):
@@ -581,6 +626,28 @@ class LeConnectionCommands(LeControllerContext):
             packet.connection_handle,
             packet.pb_flag == hci.HCI_ACL_PB_CONTINUATION,
             packet.data,
+            flushable=packet.pb_flag == hci.HCI_ACL_PB_FIRST_FLUSHABLE,
+        )
+
+    def on_hci_read_automatic_flush_timeout_command(self, command):
+        status, timeout_us = self.ll.acl_flush_timeout(command.connection_handle)
+        return hci.HCI_Read_Automatic_Flush_Timeout_ReturnParameters(
+            status,
+            command.connection_handle,
+            timeout_us // HCI_AUTOMATIC_FLUSH_TIMEOUT_UNIT_US,
+        )
+
+    def on_hci_write_automatic_flush_timeout_command(self, command):
+        status = (
+            self.ll.set_acl_flush_timeout(
+                command.connection_handle,
+                command.flush_timeout * HCI_AUTOMATIC_FLUSH_TIMEOUT_UNIT_US,
+            )
+            if command.flush_timeout <= HCI_AUTOMATIC_FLUSH_TIMEOUT_MAX
+            else INVALID
+        )
+        return hci.HCI_StatusAndConnectionHandleReturnParameters(
+            status, command.connection_handle
         )
 
     def on_hci_le_set_data_length_command(self, command):

@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
-    LL_CONN_INTERVAL_UNIT_US,
     LL_RESPONSE_TIMEOUT_US,
     PDU_CONTROL_OPCODE_SIZE,
     PDU_CONTROL_REJECT_EXT_SIZE,
@@ -121,7 +120,7 @@ class DataLengthProcedure:
             time = max(PDU_DATA_PAYLOAD_TIME_CODED_MIN_US, time)
         return octets, time
 
-    def _interval_required_us(self, rx_phy: Phy, spacing_us: int) -> int:
+    def interval_required_us(self, rx_phy: Phy, spacing_us: int) -> int:
         octets, time = self._receive_limits(rx_phy)
         return spacing_us + min(
             time,
@@ -131,7 +130,7 @@ class DataLengthProcedure:
     def minimum_interval_us(self, tx_phy: Phy, rx_phy: Phy, spacing_us: int) -> int:
         """connIntervalUncodedMin or connIntervalCodedMin (Core 6, Part B, 4.5.10)."""
         limiting_phy = Phy.LE_CODED if Phy.LE_CODED in (tx_phy, rx_phy) else tx_phy
-        return self._interval_required_us(rx_phy, spacing_us) + initial_time_us(
+        return self.interval_required_us(rx_phy, spacing_us) + initial_time_us(
             limiting_phy
         )
 
@@ -143,9 +142,7 @@ class DataLengthProcedure:
         tx_phy = connection.tx_phy if tx_phy is None else tx_phy
         rx_phy = connection.rx_phy if rx_phy is None else rx_phy
         interval_us = (
-            connection.parameters.interval * LL_CONN_INTERVAL_UNIT_US
-            if interval_us is None
-            else interval_us
+            connection.parameters.interval_us if interval_us is None else interval_us
         )
         rx_octets, rx_time = self._receive_limits(rx_phy)
         # Match each sender maximum against the opposite endpoint's receiver
@@ -154,7 +151,7 @@ class DataLengthProcedure:
         tx_time = min(self.local.tx_time, self.remote.rx_time)
         if tx_phy == Phy.LE_CODED:
             spacing = self.frame_space.interval_overhead_us(tx_phy, rx_phy)
-            required = self._interval_required_us(rx_phy, spacing)
+            required = self.interval_required_us(rx_phy, spacing)
             tx_time = max(
                 PDU_DATA_PAYLOAD_TIME_CODED_MIN_US, min(tx_time, interval_us - required)
             )

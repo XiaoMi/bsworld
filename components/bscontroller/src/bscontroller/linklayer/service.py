@@ -50,6 +50,10 @@ from bscontroller.linklayer.api import (
     connection_snapshot,
     synchronization_snapshot,
 )
+from bscontroller.linklayer.connection_rate import (
+    MIN_RATE_INTERVAL,
+    ConnectionRateParameters,
+)
 from bscontroller.linklayer.discovery import (
     Advertising,
     Initiating,
@@ -162,18 +166,26 @@ class AdvertisingService:
         if current is None:
             self.link.roles.advertising.publish(-1, candidate)
         else:
-            # Data commands may run during a radio await. Keep the context held
-            # by that event executor; only LL applies the decoded configuration.
-            for field in fields(config):
-                setattr(current, field.name, getattr(candidate, field.name))
-            current.identity_address = candidate.identity_address
-            current.identity_target = candidate.identity_target
+            self._apply_configuration(current, candidate)
 
-    def configuration_status(self, handle: int, incompatible_periodic: bool) -> int:
+    @staticmethod
+    def _apply_configuration(current: Advertising, candidate: Advertising) -> None:
+        # A radio operation may still hold the live context when HCI updates it.
+        for field in fields(AdvertisingConfig):
+            setattr(current, field.name, getattr(candidate, field.name))
+        current.identity_address = candidate.identity_address
+        current.identity_target = candidate.identity_target
+
+    def configuration_status(
+        self, handle: int, secondary_phy: int, *, incompatible_periodic: bool
+    ) -> int:
         item = self.link.advertisers.get(handle)
         if item and item.periodic_enabled and incompatible_periodic:
             return INVALID
-        if item and (item.enabled or item.periodic_enabled):
+        if item and (
+            item.enabled
+            or (item.periodic_enabled and secondary_phy != item.secondary_phy)
+        ):
             return DISALLOWED
         if (
             item is None
@@ -185,13 +197,45 @@ class AdvertisingService:
     def configure(self, handle: int, config: AdvertisingConfig) -> int:
         item = self._candidate(handle, config)
         status = self.configuration_status(
-            handle, not item.extended or bool(item.mode) or item.anonymous
+            handle,
+            item.secondary_phy,
+            incompatible_periodic=not item.extended
+            or bool(item.mode)
+            or item.anonymous,
         )
         if status == SUCCESS:
             status = self.data_status(item)
-        if status == SUCCESS:
+        if status != SUCCESS:
+            return status
+        if item.periodic_enabled:
+            current = self.link.advertisers[handle]
+            if (
+                item.secondary_coding != current.secondary_coding
+                and not self._active_train_fits(item)
+            ):
+                return DISALLOWED
+            self._apply_configuration(current, item)
+        else:
             self.link.roles.advertising.publish(handle, item)
-        return status
+        return SUCCESS
+
+    @staticmethod
+    def _active_train_fits(item: Advertising) -> bool:
+        """Check the new coding against the train's fixed interval and slots."""
+        if required_periodic_interval(item) > item.periodic_interval:
+            return False
+        if item.pawr is None:
+            return True
+        state = item.pawr_state
+        assert state is not None
+        data = max((entry.data for entry in state.data.values()), key=len, default=b'')
+        # The subevent executor can omit an ACAD update to preserve Host data.
+        return fits(
+            replace(subevent_pdu(item, data), acad=b''),
+            item.secondary_phy,
+            indication_limit_us(item.pawr, item.pawr_response_slots),
+            coding=item.secondary_coding.factor(check_capacity=True),
+        )
 
     @staticmethod
     def data_status(item: Advertising) -> int:
@@ -218,7 +262,7 @@ class AdvertisingService:
             item.extended
             and item.mode == AdvertisingMode.CONNECTABLE
             and len(item.data) > auxiliary_pdu(item).data_capacity()
-        ) or advertising_time_us(item) > item.interval_max_us:
+        ) or advertising_time_us(item, check_capacity=True) > item.interval_max_us:
             return TOO_LONG
         return SUCCESS
 
@@ -279,7 +323,7 @@ class AdvertisingService:
                 and item.periodic_interval
                 and required_periodic_interval(updated) > item.periodic_interval_limit
             )
-            or advertising_time_us(updated)
+            or advertising_time_us(updated, check_capacity=True)
             > (item.interval_us if item.enabled else item.interval_max_us)
         ):
             return TOO_LONG
@@ -345,7 +389,10 @@ class AdvertisingService:
                     and not item.scan_response
                 ):
                     return DISALLOWED
-                if advertising_time_us(item) > item.interval_max_us:
+                if (
+                    advertising_time_us(item, check_capacity=True)
+                    > item.interval_max_us
+                ):
                     return TOO_LONG
         selected = sets or tuple((handle, 0, 0) for handle in self.link.advertisers)
         for handle, duration, max_events in selected:
@@ -491,7 +538,12 @@ class AdvertisingService:
             if instance < current:
                 return ErrorCode.TOO_LATE_ERROR
             pdu = replace(subevent_pdu(item, entry.data), acad=b'')
-            if not fits(pdu, item.secondary_phy, limit):
+            if not fits(
+                pdu,
+                item.secondary_phy,
+                limit,
+                coding=item.secondary_coding.factor(check_capacity=True),
+            ):
                 return TOO_LONG
             instances.append((instance, entry))
         state.data.update(instances)
@@ -569,21 +621,26 @@ class LinkLayerService:
 
     def set_host_feature(self, bit: int, value: int) -> int:
         """Set a Host-controlled bit (Core Vol 4, Part E, 7.8.115)."""
-        host_bits = (
-            LeFeature.CONNECTED_ISOCHRONOUS_STREAM,
-            LeFeature.CONNECTION_SUBRATING_HOST_SUPPORT,
-            LeFeature.ADVERTISING_CODING_SELECTION_HOST_SUPPORT,
-            LeFeature.CHANNEL_SOUNDING_HOST_SUPPORT,
-            LeFeature.SHORTER_CONNECTION_INTERVALS_HOST_SUPPORT,
-        )
+        controller_features = {
+            LeFeature.CONNECTED_ISOCHRONOUS_STREAM: (
+                LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_CENTRAL
+                | LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_PERIPHERAL
+            ),
+            LeFeature.CONNECTION_SUBRATING_HOST_SUPPORT: (
+                LeFeatureMask.CONNECTION_SUBRATING
+            ),
+            LeFeature.ADVERTISING_CODING_SELECTION_HOST_SUPPORT: (
+                LeFeatureMask.ADVERTISING_CODING_SELECTION
+            ),
+            LeFeature.CHANNEL_SOUNDING_HOST_SUPPORT: LeFeatureMask.CHANNEL_SOUNDING,
+            LeFeature.SHORTER_CONNECTION_INTERVALS_HOST_SUPPORT: (
+                LeFeatureMask.SHORTER_CONNECTION_INTERVALS
+            ),
+        }
         if value not in (0, 1):
             return INVALID
-        if bit not in host_bits or (
-            value
-            and (
-                bit != LeFeature.CONNECTION_SUBRATING_HOST_SUPPORT
-                or not self.features & LeFeatureMask.CONNECTION_SUBRATING
-            )
+        if bit not in controller_features or (
+            value and not self.features & controller_features[bit]
         ):
             return ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR
         if self.link.connections:
@@ -1230,10 +1287,26 @@ class LinkLayerService:
             return PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
         request = SubrateRequest(minimum, maximum, latency, continuation, timeout)
         if not request.valid_host_parameters or not request.fits_connection(
-            connection.parameters.interval
+            connection.parameters.interval_us
         ):
             return PreparedProcedure(INVALID)
         return connection.llcp.prepare_subrate(request)
+
+    def set_default_rate(self, parameters: ConnectionRateParameters) -> int:
+        if not parameters.valid:
+            return INVALID
+        if parameters.connection_interval_max < MIN_RATE_INTERVAL:
+            return ErrorCode.UNSUPPORTED_LMP_OR_LL_PARAMETER_VALUE_ERROR
+        self.link.default_rate = parameters
+        return SUCCESS
+
+    def prepare_connection_rate(
+        self, handle: int, parameters: ConnectionRateParameters
+    ) -> PreparedProcedure:
+        connection = self._connection(handle)
+        if connection is None or not connection.established:
+            return PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
+        return connection.llcp.prepare_connection_rate(parameters)
 
     def prepare_frame_space(
         self, handle: int, minimum: int, maximum: int, phys: int, spacing: int
@@ -1364,7 +1437,22 @@ class LinkLayerService:
         connection.terminate(reason)
         return SUCCESS
 
-    def send_acl(self, handle: int, continuation: bool, data: bytes) -> None:
+    def acl_flush_timeout(self, handle: int) -> tuple[int, int]:
+        connection = self._connection(handle)
+        if connection is None:
+            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR, 0
+        return SUCCESS, connection.event.acl_flush_timeout_us
+
+    def set_acl_flush_timeout(self, handle: int, timeout_us: int) -> int:
+        connection = self._connection(handle)
+        if connection is None:
+            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+        connection.event.acl_flush_timeout_us = timeout_us
+        return SUCCESS
+
+    def send_acl(
+        self, handle: int, continuation: bool, data: bytes, *, flushable: bool = False
+    ) -> None:
         connection = self._connection(handle)
         if connection is not None:
-            connection.enqueue_acl(continuation, data)
+            connection.enqueue_acl(continuation, data, flushable=flushable)

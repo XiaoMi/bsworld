@@ -6,6 +6,7 @@
 
 import struct
 from dataclasses import dataclass, field
+from enum import IntEnum
 
 from bscontroller.address import Address, AddressType
 from bscontroller.linklayer import (
@@ -71,7 +72,23 @@ from bscontroller.linklayer import (
     AdvertisingPduType,
 )
 from bscontroller.linklayer.parameters import valid_channel_map
-from bscontroller.radio.base import Phy
+from bscontroller.radio.base import PHY_CODED_S2_FACTOR, PHY_CODED_S8_FACTOR, Phy
+
+
+class AdvertisingCoding(IntEnum):
+    """Host LE Coded advertising preference (Core Vol 4, Part E, 7.8.53)."""
+
+    NO_PREFERENCE = 0
+    PREFER_S2 = 1
+    PREFER_S8 = 2
+    REQUIRE_S2 = 3
+    REQUIRE_S8 = 4
+
+    def factor(self, *, check_capacity: bool = False) -> int:
+        # HCI data-length admission assumes S=8 unless S=2 is required.
+        if self == self.REQUIRE_S2 or (self == self.PREFER_S2 and not check_capacity):
+            return PHY_CODED_S2_FACTOR
+        return PHY_CODED_S8_FACTOR
 
 
 def advertising_request_peer(

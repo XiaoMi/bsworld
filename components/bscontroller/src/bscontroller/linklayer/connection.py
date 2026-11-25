@@ -117,7 +117,7 @@ class Connection:
         self.link.trace(
             f"LL CREATED role={role} aa={parameters.access_address:08x} "
             f"anchor={self.anchor_us} "
-            f"interval={parameters.interval * LL_CONN_INTERVAL_UNIT_US}"
+            f"interval={parameters.interval_us}"
         )
 
     @property
@@ -138,8 +138,10 @@ class Connection:
     def listener(self) -> ConnectionListener:
         return self.link.listener
 
-    def enqueue_acl(self, continuation: bool, payload: bytes) -> None:
-        return self.event.enqueue_acl(continuation, payload)
+    def enqueue_acl(
+        self, continuation: bool, payload: bytes, *, flushable: bool = False
+    ) -> None:
+        self.event.enqueue_acl(continuation, payload, flushable=flushable)
 
     def terminate(
         self,
@@ -266,7 +268,7 @@ class Connection:
     @property
     def event_interval_fixed_us(self) -> int:
         """Return the event period in millionths of a microsecond."""
-        interval = self.parameters.interval * LL_CONN_INTERVAL_UNIT_US
+        interval = self.parameters.interval_us
         rate = PHY_TIME_UNITS_PER_SECOND
         if (
             self.role == Role.CENTRAL
@@ -290,9 +292,12 @@ class Connection:
 
     def event_guard_for_us(self, opcode: int | None = None) -> int:
         central_phy = self.tx_phy if self.role == Role.CENTRAL else self.rx_phy
+        spacing = self.controls.frame_space.event_spacing_us(central_phy, opcode)
+        if self.parameters.rate_interval_us is not None:
+            return spacing
         return max(
             LL_CONN_EVENT_GUARD_US,
-            self.controls.frame_space.event_spacing_us(central_phy, opcode),
+            spacing,
         )
 
     @property
@@ -311,8 +316,7 @@ class Connection:
     @property
     def listening_interval_us(self) -> int:
         return (
-            self.parameters.interval
-            * LL_CONN_INTERVAL_UNIT_US
+            self.parameters.interval_us
             * self.controls.subrating.schedule.factor
             * (self.parameters.latency + 1)
         )
@@ -371,9 +375,7 @@ class Connection:
         timeout = (
             self.parameters.timeout * LL_SUPERVISION_TIMEOUT_UNIT_US
             if self.established
-            else LL_CONN_ESTABLISHMENT_EVENTS
-            * self.parameters.interval
-            * LL_CONN_INTERVAL_UNIT_US
+            else LL_CONN_ESTABLISHMENT_EVENTS * self.parameters.interval_us
         )
         return max(self.last_rx_us, self.supervision_restart_us) + timeout
 
@@ -389,6 +391,7 @@ class Connection:
     def check_timeout(self) -> bool:
         if self.closed or self.llcp.check_timeout():
             return True
+        self.expire_acl()
         if (
             self.termination_deadline_us
             and self.radio.now_us >= self.termination_deadline_us
@@ -405,6 +408,13 @@ class Connection:
     @property
     def next_operation_us(self) -> int:
         return min(self.event_start_us, self.next_deadline_us)
+
+    @property
+    def next_acl_flush_us(self) -> int | None:
+        return self.event.next_flush_us
+
+    def expire_acl(self) -> None:
+        self.event.expire_acl()
 
     @property
     def event_start_us(self) -> int:

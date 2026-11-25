@@ -115,6 +115,8 @@ SUPPORTED_CONTROLS = frozenset(
         Opcode.LL_PERIODIC_SYNC_WR_IND,
         Opcode.LL_FRAME_SPACE_REQ,
         Opcode.LL_FRAME_SPACE_RSP,
+        Opcode.LL_CONNECTION_RATE_REQ,
+        Opcode.LL_CONNECTION_RATE_IND,
     }
 )
 # Core 6.3, Vol 6 Part B, 2.4.2.25-58: defined CtrData, capped at 26 octets
@@ -145,8 +147,6 @@ UNSUPPORTED_CONTROL_DATA_LENGTHS = {
     Opcode.LL_CS_SEC_REQ: 20,
     Opcode.LL_CS_TERMINATE_RSP: 4,
     Opcode.LL_OTA_UTP_IND: 26,
-    Opcode.LL_CONNECTION_RATE_REQ: 26,
-    Opcode.LL_CONNECTION_RATE_IND: 14,
 }
 
 # LL.TS.p28 Table 4.7-4: valid CtrData size and permitted Step 6 alternatives.
@@ -189,6 +189,8 @@ INVALID_LENGTH_CASES = {
     Opcode.LL_PERIODIC_SYNC_WR_IND: (PDU_CONTROL_PERIODIC_SYNC_WR_SIZE - 1, 'ad'),
     Opcode.LL_FRAME_SPACE_REQ: (struct.calcsize('<HHBH'), 'abc'),
     Opcode.LL_FRAME_SPACE_RSP: (struct.calcsize('<HBH'), 'ad'),
+    Opcode.LL_CONNECTION_RATE_REQ: (struct.calcsize('<13H'), 'abc'),
+    Opcode.LL_CONNECTION_RATE_IND: (struct.calcsize('<7H'), 'ad'),
 }
 # Section 4.7.3.3 requires six distinct invalid lengths per supported opcode.
 INVALID_LENGTH_ROUNDS = 6
@@ -760,6 +762,9 @@ def _check_role_rejection(payload, rejected_opcode):
 
 def _forbidden_controls(link):
     """Independent role matrix for the DUT's implemented control-PDU features."""
+    parameters = link.parameters
+    # Connection Rate fields use 125 µs, ten times the CONNECT_IND count.
+    interval = parameters.interval * 10
     if not link.central:
         return (
             (
@@ -773,8 +778,26 @@ def _forbidden_controls(link):
                 Opcode.LL_MIN_USED_CHANNELS_IND,
                 bytes([hci.PhyBit.LE_1M, LL_DATA_CHANNEL_COUNT]),
             ),
+            (
+                Opcode.LL_CONNECTION_RATE_REQ,
+                struct.pack(
+                    '<13H',
+                    interval,
+                    interval,
+                    1,
+                    1,
+                    0,
+                    0,
+                    parameters.timeout,
+                    0,
+                    link.counter,
+                    0xFFFF,
+                    0xFFFF,
+                    0xFFFF,
+                    0xFFFF,
+                ),
+            ),
         )
-    parameters = link.parameters
     instant = link.counter + LL_INSTANT_MIN_LISTENING_EVENTS & LL_EVENT_COUNTER_MASK
     return (
         (
@@ -801,6 +824,10 @@ def _forbidden_controls(link):
             Opcode.LL_PHY_UPDATE_IND,
             struct.pack('<BBH', hci.PhyBit.LE_1M, hci.PhyBit.LE_1M, instant),
         ),
+        (
+            Opcode.LL_CONNECTION_RATE_IND,
+            struct.pack('<7H', 0, interval, instant, 1, 0, 0, parameters.timeout),
+        ),
     )
 
 
@@ -825,10 +852,10 @@ async def control_pdus_not_permitted_in_the_current_role(tester, *, central):
            role according to the role mapping. If its CtrData exceeds 26 octets,
            truncate CtrData alone to 26 octets; do not count the Opcode octet.
            Central IUT: CONNECTION_UPDATE_IND, CHANNEL_MAP_IND, ENC_REQ,
-           FEATURE_REQ, PAUSE_ENC_REQ and PHY_UPDATE_IND.
+           FEATURE_REQ, PAUSE_ENC_REQ, PHY_UPDATE_IND and CONNECTION_RATE_IND.
            Peripheral IUT: ENC_RSP, START_ENC_REQ, PERIPHERAL_FEATURE_REQ and
-           PHY_RSP and MIN_USED_CHANNELS_IND. Optional features outside this
-           Controller's supported set are not part of this opcode list.
+           PHY_RSP, MIN_USED_CHANNELS_IND and CONNECTION_RATE_REQ. Optional
+           features outside this Controller's supported set are excluded.
         2. Receive DATA from the IUT (possibly empty), then send the selected
            supported but sender-role-forbidden control PDU. Maintain the DATA
            acknowledgement scheme while observing the response.

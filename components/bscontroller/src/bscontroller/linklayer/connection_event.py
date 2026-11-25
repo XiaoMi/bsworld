@@ -46,11 +46,20 @@ if TYPE_CHECKING:
     from bscontroller.linklayer.connection import Connection
 
 
+@dataclass(eq=False)
+class AclFlush:
+    """One lifetime shared by all fragments of a flushable L2CAP PDU."""
+
+    deadline_us: int
+    discarded: bool = False
+
+
 @dataclass(frozen=True)
 class Outbound:
     llid: int
     payload: bytes
     host_packet: bool = False
+    flush: AclFlush | None = None
 
     @property
     def opcode(self) -> int | None:
@@ -80,10 +89,26 @@ class ConnectionEvent:
         self.pending_wire: bytes | None = None
         self.queue: deque[Outbound] = deque()
         self.tx_start_pending = False
+        self.acl_flush_timeout_us = 0
+        self.host_flush: AclFlush | None = None
+        self.flush_timers: set[AclFlush] = set()
         self.retries = 0
 
-    def enqueue_acl(self, continuation: bool, payload: bytes) -> None:
-        """Queue Host ACL data; LLID follows Core Vol 6, Part B, 2.4.1."""
+    def enqueue_acl(
+        self, continuation: bool, payload: bytes, *, flushable: bool = False
+    ) -> None:
+        """Preserve Host L2CAP boundaries (Core Vol 6, Part B, 4.5.17.1)."""
+        self.expire_acl()
+        if not continuation:
+            self.host_flush = None
+            if flushable and self.acl_flush_timeout_us:
+                self.host_flush = AclFlush(
+                    self.connection.radio.now_us + self.acl_flush_timeout_us
+                )
+                self.flush_timers.add(self.host_flush)
+        if self.host_flush is not None and self.host_flush.discarded:
+            self.connection.listener.on_acl_completed(self.connection)
+            return
         if not payload:
             # An empty HCI start retains its boundary, never LLID=2/Length=0 on air.
             self.tx_start_pending |= not continuation
@@ -92,8 +117,38 @@ class ConnectionEvent:
         continuation = continuation and not self.tx_start_pending
         self.tx_start_pending = False
         self.queue.append(
-            Outbound(LlId.CONTINUATION if continuation else LlId.START, payload, True)
+            Outbound(
+                LlId.CONTINUATION if continuation else LlId.START,
+                payload,
+                True,
+                self.host_flush,
+            )
         )
+
+    @property
+    def next_flush_us(self) -> int | None:
+        return min((flush.deadline_us for flush in self.flush_timers), default=None)
+
+    def expire_acl(self) -> None:
+        if not self.flush_timers:
+            return
+        now = self.connection.radio.now_us
+        expired = {flush for flush in self.flush_timers if flush.deadline_us <= now}
+        if not expired:
+            return
+        self.flush_timers.difference_update(expired)
+        for flush in expired:
+            flush.discarded = True
+        retained = deque()
+        completed = 0
+        for item in self.queue:
+            if item.flush in expired:
+                completed += item.host_packet
+            else:
+                retained.append(item)
+        self.queue = retained
+        for _ in range(completed):
+            self.connection.listener.on_acl_completed(self.connection)
 
     def enqueue_control(self, payload: bytes, *, priority: bool = False) -> None:
         item = Outbound(LlId.CONTROL, payload)
@@ -177,13 +232,21 @@ class ConnectionEvent:
             )
         return True
 
-    def _next_outbound(self) -> Outbound:
+    def _sendable(self, item: Outbound, start_us: int) -> bool:
+        flush = item.flush
+        if (
+            flush is not None
+            and flush in self.flush_timers
+            and flush.deadline_us <= start_us
+        ):
+            return False
+        return self.control.can_send(item.llid, item.payload)
+
+    def _next_outbound(self, start_us: int | None = None) -> Outbound:
+        if start_us is None:
+            start_us = self.connection.radio.now_us
         return next(
-            (
-                item
-                for item in self.queue
-                if self.control.can_send(item.llid, item.payload)
-            ),
+            (item for item in self.queue if self._sendable(item, start_us)),
             EMPTY_PDU,
         )
 
@@ -208,7 +271,7 @@ class ConnectionEvent:
         return self.connection.rx_phy.airtime_us(PDU_HEADER_SIZE + length)
 
     async def send(self, channel: int, start_us: int) -> tuple[bool, int]:
-        item = self.pending or self._next_outbound()
+        item = self.pending or self._next_outbound(start_us)
         return await self._transmit(
             channel, Transmission(item, self._payload_length(item), start_us)
         )
@@ -227,14 +290,17 @@ class ConnectionEvent:
             self.pending = transmission.outbound
             if self.pending in self.queue:
                 self.queue.remove(self.pending)
+            # The first TX retains this L2CAP PDU and its retries permanently.
+            if self.pending.flush is not None:
+                self.flush_timers.discard(self.pending.flush)
             limit = transmission.length
             if len(self.pending.payload) > limit:
                 # Return the HCI completion credit on the final LL fragment
                 # (Core Vol 4, Part E, 7.7.19).
                 packet = self.pending
                 self.queue.appendleft(
-                    Outbound(
-                        LlId.CONTINUATION, packet.payload[limit:], packet.host_packet
+                    replace(
+                        packet, llid=LlId.CONTINUATION, payload=packet.payload[limit:]
                     )
                 )
                 self.pending = replace(
@@ -250,9 +316,7 @@ class ConnectionEvent:
             item = Outbound(LlId.CONTROL, self.control.prepare(item.payload))
             self.pending = item
         # Paused Host data must not keep an otherwise idle event open.
-        more = any(
-            self.control.can_send(entry.llid, entry.payload) for entry in self.queue
-        )
+        more = any(self._sendable(entry, transmission.start_us) for entry in self.queue)
         header = (
             item.llid
             | (PDU_DATA_NESN_MASK if self.rx_nesn else 0)
@@ -286,6 +350,7 @@ class ConnectionEvent:
             length=len(self.pending_wire),
         )
         self.sent_pending = True
+        self.expire_acl()
         return bool(header & PDU_DATA_MD_MASK), end_us
 
     async def receive(
@@ -336,7 +401,7 @@ class ConnectionEvent:
 
     def first_exchange_us(self, *, max_rx: bool = True) -> int:
         """Duration of Central TX and Peripheral TX at the anchor (Core 4.5.1)."""
-        item = self.pending or self._next_outbound()
+        item = self.pending or self._next_outbound(self.connection.anchor_us)
         space_us = (
             self._rx_spacing_us(item, max_rx)
             if self.connection.role == Role.CENTRAL
@@ -421,7 +486,12 @@ class ConnectionEvent:
     async def _central_exchange(self, channel: int, radio_until_us: int | None) -> None:
         previous_end_us = None
         while not self.connection.closed:
-            item = self.pending or self._next_outbound()
+            acl_start_us = (
+                self.connection.anchor_us
+                if previous_end_us is None
+                else previous_end_us + self.control.tx_spacing_us(None)
+            )
+            item = self.pending or self._next_outbound(acl_start_us)
             transmission = self._plan_transmission(
                 channel, item, radio_until_us, previous_end_us=previous_end_us
             )
@@ -475,7 +545,9 @@ class ConnectionEvent:
             crc_errors = 0 if packet.valid_crc else crc_errors + 1
             if crc_errors == LL_CONN_CRC_ERROR_LIMIT:
                 break
-            item = self.pending or self._next_outbound()
+            item = self.pending or self._next_outbound(
+                packet.end_us + self.control.tx_spacing_us(None)
+            )
             transmission = self._plan_transmission(
                 channel, item, radio_until_us, previous_end_us=packet.end_us
             )
@@ -519,7 +591,7 @@ class ConnectionEvent:
             target_us < self.connection.event_start_us
             or self.connection.event_start_us >= deadline
         ):
-            await self.connection.radio.advance_to_us(min(target_us, deadline))
+            await self.connection.link.advance_idle_to_us(min(target_us, deadline))
             self.connection.check_timeout()
             return self.connection.radio.now_us
         exchange = self.control.event_prepare()

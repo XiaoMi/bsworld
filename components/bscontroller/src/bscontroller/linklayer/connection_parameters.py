@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
+    LL_CONN_INTERVAL_UNIT_US,
     LL_CONN_PREFERRED_PERIODICITY_MIN,
     LL_CONN_WINDOW_SIZE_MAX,
     LL_CONN_WINDOW_SIZE_MIN,
@@ -105,6 +106,12 @@ class ConnectionParametersProcedure:
         )
 
     @property
+    def request_pending(self) -> bool:
+        return self.parameter_request or bool(
+            self.remote_context and self.remote_context.active
+        )
+
+    @property
     def requested_parameters(self) -> tuple[int, int, int, int] | None:
         context = self.local_context
         return (
@@ -161,9 +168,11 @@ class ConnectionParametersProcedure:
         notify: bool = True,
     ) -> None:
         """Central sends LL_CONNECTION_UPDATE_IND (Core Vol 6, Part B, 5.1.1)."""
-        if interval == self.connection.parameters.interval:
+        old_interval_us = self.connection.parameters.interval_us
+        interval_us = interval * LL_CONN_INTERVAL_UNIT_US
+        if interval_us == old_interval_us:
             factor = self.owner.subrating.schedule.factor
-            latency = min(latency, maximum_latency(interval, factor, timeout))
+            latency = min(latency, maximum_latency(interval_us, factor, timeout))
             if latency < 0:
                 reason = ErrorCode.UNACCEPTABLE_CONNECTION_PARAMETERS_ERROR
                 if self.remote_context is not None and self.remote_context.active:
@@ -174,9 +183,14 @@ class ConnectionParametersProcedure:
                     self.owner.listener.on_connection_updated(self.connection, reason)
                 return
         instant = self.owner.instant()
+        if old_interval_us % LL_CONN_INTERVAL_UNIT_US:
+            reference = None
         offset = (
             anchor_offset(
-                reference, instant, self.connection.parameters.interval, interval
+                reference,
+                instant,
+                old_interval_us // LL_CONN_INTERVAL_UNIT_US,
+                interval,
             )
             if reference
             else 0
@@ -188,6 +202,7 @@ class ConnectionParametersProcedure:
             interval=interval,
             latency=latency,
             timeout=timeout,
+            rate_interval_us=None,
         )
         context = self.local_context
         if context is None or not context.active:
@@ -348,7 +363,8 @@ class ConnectionParametersProcedure:
         )
         parameters = self.connection.parameters
         if (
-            minimum == maximum == parameters.interval
+            minimum == maximum
+            and minimum * LL_CONN_INTERVAL_UNIT_US == parameters.interval_us
             and latency == parameters.latency
             and timeout == parameters.timeout
         ):
@@ -375,10 +391,13 @@ class ConnectionParametersProcedure:
                 not valid_timing(interval, interval, latency, timeout)
                 or not self.owner.frame_space.fits_interval(interval)
                 or (
-                    interval == connection.parameters.interval
+                    interval * LL_CONN_INTERVAL_UNIT_US
+                    == connection.parameters.interval_us
                     and latency
                     > maximum_latency(
-                        interval, self.owner.subrating.schedule.factor, timeout
+                        interval * LL_CONN_INTERVAL_UNIT_US,
+                        self.owner.subrating.schedule.factor,
+                        timeout,
                     )
                 )
                 or not LL_CONN_WINDOW_SIZE_MIN
@@ -400,6 +419,7 @@ class ConnectionParametersProcedure:
                             interval=interval,
                             latency=latency,
                             timeout=timeout,
+                            rate_interval_us=None,
                         ),
                     )
                 )
@@ -421,7 +441,11 @@ class ConnectionParametersProcedure:
                 elif self.parameter_request:
                     self.reject_parameters(reason)
             elif opcode == Opcode.LL_CONNECTION_PARAM_REQ:
-                if (
+                if connection.role == Role.CENTRAL and self.owner.rate.instant_pending:
+                    self.owner.reject(
+                        opcode, ErrorCode.DIFFERENT_TRANSACTION_COLLISION_ERROR
+                    )
+                elif (
                     connection.role == Role.PERIPHERAL
                     and (self.parameter_request or self.owner.phy.phy_request_local)
                     and not (

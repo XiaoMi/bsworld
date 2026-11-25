@@ -21,8 +21,11 @@ import pytest
 
 from bscontroller.hci import HCI_LE_SCAN_INTERVAL_UNIT_US
 from bscontroller.linklayer import LL_IFS_US
+from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.parameters import Parameters
+from bscontroller.linklayer.state import Role
 from tests.unit.linklayer.air.harness import (
+    CONNECT_PARAMETERS,
     IUT_ADDRESS,
     OTHER,
     PEER,
@@ -42,6 +45,7 @@ ReportType = hci.HCI_LE_Advertising_Report_Event.EventType
 WINDOW = 16  # 10 ms
 WINDOW_US = WINDOW * HCI_LE_SCAN_INTERVAL_UNIT_US
 CONNECTED = hci.HCI_LE_Enhanced_Connection_Complete_Event
+FLUSH_TIMEOUT_US = 625  # One HCI automatic flush timeout slot.
 
 
 def scan(iut, *, active=False, policy=0, duplicates=0, interval=WINDOW, window=WINDOW):
@@ -105,6 +109,65 @@ def test_passive_reports_undirected(iut, pdu, report_type):
     )
     iut.ut_rx_q_is_empty()
     # Passive scanning never transmits.
+    iut.lt_rx_q_is_empty()
+
+
+def queue_flushable_acl(iut):
+    connection = Connection(
+        iut.link, CONNECT_PARAMETERS, OTHER, Role.CENTRAL, iut.now_us
+    )
+    iut.link.connections[connection.handle] = connection
+    connection.establish()
+    iut.ut_rx(CONNECTED)
+    iut.ut_rx(hci.HCI_LE_Channel_Selection_Algorithm_Event)
+    iut.ut(hci.HCI_Write_Automatic_Flush_Timeout_Command(connection.handle, 1))
+    data = b'\x01\x00\x04\x00\x1e'
+    iut.controller.on_packet(
+        bytes(
+            hci.HCI_AclDataPacket(
+                connection.handle, hci.HCI_ACL_PB_FIRST_FLUSHABLE, 0, len(data), data
+            )
+        )
+    )
+    return connection
+
+
+def test_acl_flush_expiry_does_not_interrupt_passive_scanning(iut):
+    """Catch a broadcast whose access address spans the software deadline."""
+    scan(iut)
+    connection = queue_flushable_acl(iut)
+    iut.lt_tx(adv_nonconn_ind(), channel=37, at=FLUSH_TIMEOUT_US - 25)
+
+    iut.run(FLUSH_TIMEOUT_US + 200)
+
+    iut.ut_rx_report(event_type=ReportType.ADV_NONCONN_IND, address=PEER)
+    (completed,) = iut.events
+    assert isinstance(completed, hci.HCI_Number_Of_Completed_Packets_Event)
+    assert completed.connection_handles == [connection.handle]
+    assert completed.num_completed_packets == [1]
+    iut.lt_rx_q_is_empty()
+
+
+@pytest.mark.parametrize('scanning', [False, True], ids=['idle', 'scan-gap'])
+def test_idle_phy_releases_acl_credit_at_flush_deadline(iut, scanning):
+    if scanning:
+        scan(iut, window=4)
+    # A 2.5-ms scan window has closed when the ACL packet is queued.
+    iut.run(3000)
+    connection = queue_flushable_acl(iut)
+    deadline = iut.now_us + FLUSH_TIMEOUT_US
+    completed_at = []
+
+    def record_completion(packet):
+        assert isinstance(packet, hci.HCI_Number_Of_Completed_Packets_Event)
+        assert packet.connection_handles == [connection.handle]
+        assert packet.num_completed_packets == [1]
+        completed_at.append(iut.now_us)
+
+    iut.controller.send_hci_packet = record_completion
+    iut.run(FLUSH_TIMEOUT_US + 100)
+
+    assert completed_at == [deadline]
     iut.lt_rx_q_is_empty()
 
 

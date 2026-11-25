@@ -44,6 +44,12 @@ from bscontroller.linklayer.connection_parameters import (
     ConnectionParametersProcedure,
     anchor_offset,
 )
+from bscontroller.linklayer.connection_rate import (
+    INDICATION as RATE_INDICATION,
+)
+from bscontroller.linklayer.connection_rate import (
+    ConnectionRateProcedure,
+)
 from bscontroller.linklayer.data_length import DataLengthProcedure
 from bscontroller.linklayer.data_path import TransmissionConstraints
 from bscontroller.linklayer.feature_exchange import FeatureExchangeProcedure
@@ -98,6 +104,7 @@ class ControlProcedures:
         self.power = PowerControl(self)
         self.clock_accuracy = ClockAccuracyProcedure(self)
         self.subrating = Subrating(self)
+        self.rate = ConnectionRateProcedure(self)
         # Includes a local indication queued but not yet transmitted during a collision.
         self.version_sent = False
         self.peer_version: tuple[int, int, int] | None = None
@@ -134,6 +141,7 @@ class ControlProcedures:
             self.clock_accuracy.context,
             self.subrating.context,
             self.frame_space.context,
+            self.rate.context,
         )
         return tuple(context for context in contexts if context is not None)
 
@@ -167,6 +175,7 @@ class ControlProcedures:
             or self.clock_accuracy.pending
             or self.subrating.pending
             or self.frame_space.busy
+            or self.rate.pending
         )
 
     @property
@@ -182,6 +191,7 @@ class ControlProcedures:
                 self.clock_accuracy.deadline_us,
                 self.subrating.deadline_us,
                 self.frame_space.deadline_us,
+                self.rate.deadline_us,
             )
             if deadline
         ]
@@ -195,14 +205,18 @@ class ControlProcedures:
     def link_timings(self) -> tuple[tuple[Phy, Phy, int], ...]:
         """Return the current timing and any timing scheduled at an Instant."""
         connection, update = self.connection, self.pending
-        current = connection.tx_phy, connection.rx_phy, connection.parameters.interval
+        current = (
+            connection.tx_phy,
+            connection.rx_phy,
+            connection.parameters.interval_us,
+        )
         if update is None:
             return (current,)
         tx, rx = self._instant_phys(update)
         pending = (
             Phy(tx or connection.tx_phy),
             Phy(rx or connection.rx_phy),
-            (update.parameters or connection.parameters).interval,
+            update.interval_us or current[2],
         )
         return (current,) if pending == current else (current, pending)
 
@@ -216,15 +230,17 @@ class ControlProcedures:
         connection, controls = self.connection, self
         tx_phys = {connection.tx_phy}
         rx_phy = connection.rx_phy
-        interval = connection.parameters.interval
+        interval_us = connection.parameters.interval_us
         if controls.connection_parameters.requested_interval_min:
-            interval = min(
-                interval, controls.connection_parameters.requested_interval_min
+            interval_us = min(
+                interval_us,
+                controls.connection_parameters.requested_interval_min
+                * LL_CONN_INTERVAL_UNIT_US,
             )
         if controls.pending:
             update = controls.pending
-            if update.parameters:
-                interval = min(interval, update.parameters.interval)
+            if update.interval_us is not None:
+                interval_us = min(interval_us, update.interval_us)
             tx, rx = self._instant_phys(update)
             # PHY packet-time restrictions start at the local control transmission.
             if update.local and not controls.transmitted:
@@ -244,9 +260,7 @@ class ControlProcedures:
             tx_phys.update(
                 phy for phy in Phy if controls.phy.tx_phys & (1 << (phy - 1))
             )
-        return TransmissionConstraints(
-            frozenset(tx_phys), rx_phy, interval * LL_CONN_INTERVAL_UNIT_US
-        )
+        return TransmissionConstraints(frozenset(tx_phys), rx_phy, interval_us)
 
     def enqueue(self, payload: bytes, *, priority: bool = False) -> None:
         # Core Vol 6, Part B, 5.2: each queued procedure PDU restarts a running T_PRT.
@@ -286,14 +300,14 @@ class ControlProcedures:
         return (
             self.connection.event_index
             + distance
-            - bool(distance and update.parameters)
+            - bool(distance and update.changes_timing)
         )
 
     @property
     def instant_forces_exchange(self) -> bool:
         return self._awaiting_instant_ack_confirmation or (
             self.pending is not None
-            and self.pending.parameters is not None
+            and self.pending.changes_timing
             and self.next_instant_event() == self.connection.event_index
         )
 
@@ -444,6 +458,7 @@ class ControlProcedures:
             and payload[0]
             in (
                 Opcode.LL_CONNECTION_UPDATE_IND,
+                Opcode.LL_CONNECTION_RATE_IND,
                 Opcode.LL_CHANNEL_MAP_IND,
                 Opcode.LL_PHY_UPDATE_IND,
             )
@@ -451,13 +466,18 @@ class ControlProcedures:
             # A queued ACL retransmission can delay the first control transmission.
             # Reserve six listening events from actual transmission, not HCI input.
             instant = self.instant()
+            if update.rate is not None and payload[0] == Opcode.LL_CONNECTION_RATE_IND:
+                self.pending = self.rate.prepare(update, instant)
+                self.transmitted = True
+                return self.pending.rate.encode(instant)
             if update.parameters is not None and update.anchor_reference is not None:
                 parameters = replace(
                     update.parameters,
                     window_offset=anchor_offset(
                         update.anchor_reference,
                         instant,
-                        self.connection.parameters.interval,
+                        self.connection.parameters.interval_us
+                        // LL_CONN_INTERVAL_UNIT_US,
                         update.parameters.interval,
                     ),
                 )
@@ -479,7 +499,15 @@ class ControlProcedures:
 
     def acknowledge(self, payload: bytes) -> None:
         self.subrating.acknowledged(payload)
+        self.rate.acknowledge(payload)
         update = self.pending
+        if update is not None and update.local and update.rate is not None:
+            if (
+                payload[0] == Opcode.LL_CONNECTION_RATE_IND
+                and RATE_INDICATION.unpack_from(payload, 1)[2] == update.instant
+            ):
+                self.acknowledged = True
+            return
         if (
             update
             and update.local
@@ -496,6 +524,7 @@ class ControlProcedures:
 
     def sent(self, payload: bytes) -> None:
         self.subrating.sent(payload)
+        self.rate.sent(payload)
         self.frame_space.sent(payload)
         if payload[0] == Opcode.LL_PHY_UPDATE_IND:
             self.phy.indication_sent(payload)
@@ -546,6 +575,8 @@ class ControlProcedures:
         if self.power.control(payload) or self.clock_accuracy.control(payload):
             return True
         if self.subrating.control(payload):
+            return True
+        if self.rate.control(payload):
             return True
         if self.frame_space.control(payload):
             return True
@@ -687,9 +718,9 @@ class ControlProcedures:
                 else (
                     self.connection_parameters.parameter_request
                     or self.connection_parameters.requested_interval_min
-                    or (old.interval, old.latency, old.timeout)
+                    or (old.interval_us, old.latency, old.timeout)
                     != (
-                        update.parameters.interval,
+                        update.parameters.interval_us,
                         update.parameters.latency,
                         update.parameters.timeout,
                     )
@@ -697,7 +728,7 @@ class ControlProcedures:
             )
             self.connection_parameters.finish()
             connection.parameters = update.parameters
-            if old.interval != update.parameters.interval:
+            if old.interval_us != update.parameters.interval_us:
                 self.subrating.reset_schedule()
             if not received_at_instant:
                 # Reception at the Instant already provides the new anchor; applying the
@@ -709,6 +740,8 @@ class ControlProcedures:
             connection.supervision_restart_us = connection.anchor_us
             if notify:
                 self.listener.on_connection_updated(connection, ErrorCode.SUCCESS)
+        if update.rate is not None:
+            self.rate.apply(update.rate, received_at_instant=received_at_instant)
         if update.channel_map is not None:
             connection.parameters = replace(
                 connection.parameters, channel_map=update.channel_map
@@ -745,6 +778,7 @@ class ControlProcedures:
                 self.clock_accuracy.deadline_us,
                 self.subrating.deadline_us,
                 self.frame_space.deadline_us,
+                self.rate.deadline_us,
             )
         ):
             self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)

@@ -51,6 +51,16 @@ class NotificationSink(IsoListener, Protocol):
     def on_connection_updated(
         self, connection: ConnectionSnapshot, status: int
     ) -> None: ...
+    def on_connection_rate_changed(
+        self,
+        connection: ConnectionSnapshot,
+        status: int,
+        interval: int,
+        factor: int,
+        latency: int,
+        continuation: int,
+        timeout: int,
+    ) -> None: ...
     def on_phy_updated(self, connection: ConnectionSnapshot, status: int) -> None: ...
     def on_frame_space_updated(
         self,
@@ -206,6 +216,26 @@ class NotificationAdapter:
 
     def on_connection_updated(self, connection: Connection, status: int) -> None:
         self.sink.on_connection_updated(connection_snapshot(connection), status)
+
+    def on_connection_rate_changed(
+        self,
+        connection: Connection,
+        status: int,
+        interval: int,
+        factor: int,
+        latency: int,
+        continuation: int,
+        timeout: int,
+    ) -> None:
+        self.sink.on_connection_rate_changed(
+            connection_snapshot(connection),
+            status,
+            interval,
+            factor,
+            latency,
+            continuation,
+            timeout,
+        )
 
     def on_phy_updated(self, connection: Connection, status: int) -> None:
         self.sink.on_phy_updated(connection_snapshot(connection), status)

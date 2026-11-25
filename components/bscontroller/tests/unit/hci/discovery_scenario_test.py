@@ -25,7 +25,7 @@ from bscontroller.linklayer.state import (
     AdvertisingReport,
     DataStatus,
 )
-from bscontroller.radio.base import Phy
+from bscontroller.radio.base import PHY_CODED_S2_FACTOR, PHY_CODED_S8_FACTOR, Phy
 from tests.unit.hci.harness import IUT_ADDRESS, PEERS, ErrorCode
 from tests.unit.helpers import PEER_ADDRESS, create_sync, extended_parameters
 
@@ -74,6 +74,50 @@ def test_extended_set_record_is_published_with_parameters(host):
     assert record.parameters.advertising_handle == 3
     assert record.address == IUT_ADDRESS and record.random_address is None
     assert not record.enabled and record.data == b''
+
+
+def test_extended_advertising_v2_codes_are_independent_and_v1_restores_defaults(host):
+    """LE Coded choices belong to each advertising channel (Vol 4, E, 7.8.53)."""
+    coded = dict(
+        primary_advertising_phy=Phy.LE_CODED, secondary_advertising_phy=Phy.LE_CODED
+    )
+    host.cmd(extended_parameters(coding_options=(3, 4), **coded))
+    item = host.link.advertisers[0]
+    assert item.primary_coding.factor() == PHY_CODED_S2_FACTOR
+    assert item.secondary_coding.factor() == PHY_CODED_S8_FACTOR
+    host.cmd(extended_parameters(**coded))
+    item = host.link.advertisers[0]
+    assert (
+        item.primary_coding.factor()
+        == item.secondary_coding.factor()
+        == PHY_CODED_S8_FACTOR
+    )
+    host.cmd(extended_parameters(coding_options=(0xFF, 0xFF)))
+    assert host.link.advertisers[0].primary_phy == Phy.LE_1M
+    host.cmd(
+        extended_parameters(coding_options=(0xFF, 0), **coded),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    assert host.link.advertisers[0].primary_phy == Phy.LE_1M
+
+
+@pytest.mark.parametrize(
+    'option,status',
+    [(1, ErrorCode.PACKET_TOO_LONG_ERROR), (3, ErrorCode.SUCCESS)],
+)
+def test_coded_advertising_data_budget_assumes_s8_unless_s2_is_required(
+    host, option, status
+):
+    """The same S=2 transmission can have distinct Host capacity budgets (7.8.54)."""
+    host.cmd(
+        extended_parameters(
+            primary_advertising_phy=Phy.LE_CODED,
+            secondary_advertising_phy=Phy.LE_CODED,
+            coding_options=(option, option),
+        )
+    )
+    host.cmd(data(0, Operation.FIRST_FRAGMENT, bytes(200)))
+    host.cmd(data(0, Operation.LAST_FRAGMENT, bytes(200)), status)
 
 
 def test_record_views_follow_ll_payloads_and_are_immutable(host):
@@ -979,6 +1023,136 @@ def test_periodic_enable_requires_compatible_set(host):
     )
 
 
+def test_periodic_only_advertising_changes_coding_at_the_next_anchor(host):
+    """A same-PHY coding change preserves the running train (Vol 4, E, 7.8.53)."""
+    host.cmd(
+        extended_parameters(
+            secondary_advertising_phy=Phy.LE_CODED, coding_options=(0, 3)
+        )
+    )
+    host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Parameters_Command(0, 80, 80, 0))
+    host.cmd(periodic_data(0, Operation.COMPLETE_DATA, b'periodic data'))
+    host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(3, 0))
+    item = host.link.advertisers[0]
+    assert item.periodic_enabled and not item.enabled
+    host.loop.run_until_complete(host.link.advance_to_us(item.periodic_next_us))
+    (first,) = host.radio.sent
+    assert first.end_us - first.start_us == Phy.LE_CODED.airtime_us(
+        len(first.pdu), PHY_CODED_S2_FACTOR
+    )
+    anchor = item.periodic_next_us
+    identity = (item.periodic_aa, item.periodic_crc, item.periodic_did)
+
+    host.cmd(
+        extended_parameters(
+            secondary_advertising_phy=Phy.LE_CODED, coding_options=(0, 4)
+        )
+    )
+
+    assert host.link.advertisers[0] is item
+    assert (item.periodic_aa, item.periodic_crc, item.periodic_did) == identity
+    assert (item.periodic_next_us, item.periodic_counter, item.periodic_adi) == (
+        anchor,
+        1,
+        True,
+    )
+    host.loop.run_until_complete(host.link.advance_to_us(anchor))
+    _, second = host.radio.sent
+    assert second.pdu == first.pdu and second.access_address == first.access_address
+    assert (
+        second.start_us == anchor == first.start_us + 80 * LL_PERIODIC_INTERVAL_UNIT_US
+    )
+    assert second.end_us - second.start_us == Phy.LE_CODED.airtime_us(
+        len(second.pdu), PHY_CODED_S8_FACTOR
+    )
+
+
+@pytest.mark.parametrize(
+    'enable_extended,changes,status',
+    [
+        (
+            False,
+            {'secondary_advertising_phy': Phy.LE_1M},
+            ErrorCode.COMMAND_DISALLOWED_ERROR,
+        ),
+        (
+            False,
+            {'advertising_event_properties': Properties.CONNECTABLE_ADVERTISING},
+            ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+        ),
+        (True, {}, ErrorCode.COMMAND_DISALLOWED_ERROR),
+    ],
+    ids=['different-secondary-phy', 'connectable', 'extended-enabled'],
+)
+def test_periodic_coding_reconfiguration_retains_core_restrictions(
+    host, enable_extended, changes, status
+):
+    """Admit compatible reconfiguration only (Vol 4, Part E, 7.8.53)."""
+    coded = {'secondary_advertising_phy': Phy.LE_CODED}
+    command = extended_parameters(coding_options=(0, 3), **coded)
+    host.cmd(command)
+    host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Parameters_Command(0, 80, 80, 0))
+    host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 0))
+    if enable_extended:
+        host.cmd(hci.HCI_LE_Set_Extended_Advertising_Enable_Command(1, [0], [0], [0]))
+
+    host.cmd(extended_parameters(coding_options=(0, 4), **(coded | changes)), status)
+
+    assert host.controller.advertising_sets[0].parameters == command
+
+
+def test_periodic_only_coding_change_respects_the_live_interval(host):
+    """Reject an S=8 request if the active S=2 train would overrun its interval."""
+    coded = {'secondary_advertising_phy': Phy.LE_CODED}
+    host.cmd(extended_parameters(coding_options=(0, 3), **coded))
+    host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Parameters_Command(0, 6, 6, 0))
+    payload = bytes(160)
+    host.cmd(periodic_data(0, Operation.COMPLETE_DATA, payload))
+    host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 0))
+    item = host.link.advertisers[0]
+    anchor = item.periodic_next_us
+
+    host.cmd(
+        extended_parameters(coding_options=(0, 4), **coded),
+        ErrorCode.COMMAND_DISALLOWED_ERROR,
+    )
+
+    assert host.link.advertisers[0] is item
+    assert (item.periodic_next_us, item.periodic_interval) == (anchor, 6)
+    assert item.periodic_data == payload
+    assert item.secondary_coding.factor() == PHY_CODED_S2_FACTOR
+
+
+def test_pawr_coding_change_keeps_data_before_the_reserved_response_slots(host):
+    """Avoid publishing a coding that pushes queued PAwR data past its slots."""
+    coded = {'secondary_advertising_phy': Phy.LE_CODED}
+    host.cmd(extended_parameters(coding_options=(0, 3), **coded))
+    host.cmd(
+        hci.HCI_LE_Set_Periodic_Advertising_Parameters_V2_Command(
+            0, 80, 80, 0, 2, 16, 2, 10, 2
+        )
+    )
+    host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 0))
+    host.in_loop(host.link.roles.advertising.prepare)
+    item = host.link.advertisers[0]
+    assert item.pawr_state is not None
+    payload = bytes(90)
+    host.cmd(
+        hci.HCI_LE_Set_Periodic_Advertising_Subevent_Data_Command(
+            0, [0], [0], [1], [payload]
+        )
+    )
+
+    host.cmd(
+        extended_parameters(coding_options=(0, 4), **coded),
+        ErrorCode.COMMAND_DISALLOWED_ERROR,
+    )
+
+    assert host.link.advertisers[0] is item
+    assert item.pawr_state.data[0].data == payload
+    assert item.secondary_coding.factor() == PHY_CODED_S2_FACTOR
+
+
 def test_periodic_enable_includes_adi_on_request(host):
     """Enable bit 1 selects the ADI field; disabling ignores it.
 
@@ -1287,7 +1461,12 @@ def report(host, data=b'data', properties=LEGACY, status=DataStatus.COMPLETE, **
         PEER_ADDRESS,
         data,
         kw.pop('rssi', -45.4),
-        AdvertisingReport(properties, status),
+        AdvertisingReport(
+            properties,
+            status,
+            primary_coding=kw.pop('primary_coding', 0),
+            secondary_coding=kw.pop('secondary_coding', 0),
+        ),
         kw.pop('sid', None),
         kw.pop('interval', 0),
         kw.pop('tx_power', None),
@@ -1329,6 +1508,23 @@ def test_extended_report_applies_rx_path_compensation(host):
     report(host, rssi=-45, tx_power=-3)
     (entry,) = host.ut_rx(hci.HCI_LE_Extended_Advertising_Report_Event).reports
     assert (entry.rssi, entry.tx_power) == (-40, -3)
+
+
+@pytest.mark.parametrize('support,expected', [(False, 0x03), (True, 0x04)])
+def test_coded_report_exposes_s2_only_with_host_support(host, support, expected):
+    """Advertising report PHY values depend on Host bit 41 (7.7.65.13)."""
+    host.cmd(hci.HCI_LE_Set_Host_Feature_Command(41, support))
+    enable_scan(host, extended=True)
+    report(
+        host,
+        properties=AdvertisingProperties(0),
+        primary_coding=PHY_CODED_S2_FACTOR,
+        secondary_coding=PHY_CODED_S8_FACTOR,
+        primary_phy=Phy.LE_CODED,
+        secondary_phy=Phy.LE_CODED,
+    )
+    (entry,) = host.ut_rx(hci.HCI_LE_Extended_Advertising_Report_Event).reports
+    assert (entry.primary_phy, entry.secondary_phy) == (expected, 0x03)
 
 
 @pytest.mark.parametrize(

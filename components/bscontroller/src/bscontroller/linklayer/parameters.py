@@ -76,6 +76,12 @@ class Parameters:
     channel_map: int
     hop: int
     sca: int = 0
+    rate_interval_us: int | None = None
+
+    @property
+    def interval_us(self) -> int:
+        """Active interval; the CONNECT_IND fields retain their legacy units."""
+        return self.rate_interval_us or self.interval * LL_CONN_INTERVAL_UNIT_US
 
     @classmethod
     def decode(cls, data: bytes) -> Parameters:

@@ -82,7 +82,7 @@ from bscontroller.linklayer.state import (
     Role,
 )
 from bscontroller.linklayer.timing import window_widening
-from bscontroller.radio.base import RADIO_SWITCH_TIME_US, Phy
+from bscontroller.radio.base import PHY_CODED_S8_FACTOR, RADIO_SWITCH_TIME_US, Phy
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.discovery import Advertising, Initiating, PeriodicSync
@@ -95,13 +95,20 @@ if TYPE_CHECKING:
 RADIO_AUX_OFFSET_DEFAULT_US = 600
 
 
-def auxiliary_offset(pdu: bytes, phy: Phy) -> int:
+def auxiliary_offset(pdu: bytes, phy: Phy, coding: int) -> int:
     return align_offset_us(
-        max(RADIO_AUX_OFFSET_DEFAULT_US, phy.airtime_us(len(pdu)) + LL_MAFS_US)
+        max(RADIO_AUX_OFFSET_DEFAULT_US, phy.airtime_us(len(pdu), coding) + LL_MAFS_US)
     )
 
 
-def fragments(first: ExtendedPdu, data: bytes | bytearray, channel: int, phy: Phy):
+def fragments(
+    first: ExtendedPdu,
+    data: bytes | bytearray,
+    channel: int,
+    phy: Phy,
+    *,
+    coding: int = PHY_CODED_S8_FACTOR,
+):
     """Split data around the first PDU's fields and each continuation's AuxPtr.
 
     Derive pointer offsets from the encoded packet size and PHY airtime.
@@ -136,7 +143,7 @@ def fragments(first: ExtendedPdu, data: bytes | bytearray, channel: int, phy: Ph
                 pdu, aux_ptr=AuxPtr(channel, RADIO_AUX_OFFSET_DEFAULT_US, phy)
             ).encode()
             pdu = replace(
-                pdu, aux_ptr=AuxPtr(channel, auxiliary_offset(probe, phy), phy)
+                pdu, aux_ptr=AuxPtr(channel, auxiliary_offset(probe, phy, coding), phy)
             )
         result.append(pdu)
         if not remaining:
@@ -180,9 +187,9 @@ def channel_map_acad(item: Advertising) -> bytes:
     return bytes([len(value) + 1, AD_TYPE_CHANNEL_MAP_UPDATE_INDICATION]) + value
 
 
-def chain_time_us(packets, phy: Phy) -> int:
+def chain_time_us(packets, phy: Phy, coding: int) -> int:
     return sum(packet.aux_ptr.offset_us for packet in packets[:-1]) + phy.airtime_us(
-        len(packets[-1].encode())
+        len(packets[-1].encode()), coding
     )
 
 
@@ -263,21 +270,26 @@ def subevent_pdu(item: Advertising, data: bytes = b'') -> ExtendedPdu:
     )
 
 
-def periodic_time_us(item: Advertising) -> int:
+def periodic_time_us(item: Advertising, *, check_capacity: bool = False) -> int:
     """One periodic event's AUX_SYNC_IND chain, or an empty AUX_SYNC_SUBEVENT_IND:
     a PAwR train ignores periodic advertising data.
     """
+    phy = item.secondary_phy
+    coding = item.secondary_coding.factor(check_capacity=check_capacity)
     if item.pawr is not None:
-        return item.secondary_phy.airtime_us(len(subevent_pdu(item).encode()))
+        return phy.airtime_us(len(subevent_pdu(item).encode()), coding)
     return chain_time_us(
-        fragments(periodic_pdu(item), item.periodic_data, 0, item.secondary_phy),
-        item.secondary_phy,
+        fragments(periodic_pdu(item), item.periodic_data, 0, phy, coding=coding),
+        phy,
+        coding,
     )
 
 
 def required_periodic_interval(item: Advertising) -> int:
     """Smallest 1.25-ms interval that leaves T_MAFS after this PA event."""
-    return (periodic_time_us(item) + LL_MAFS_US) // LL_PERIODIC_INTERVAL_UNIT_US + 1
+    return (
+        periodic_time_us(item, check_capacity=True) + LL_MAFS_US
+    ) // LL_PERIODIC_INTERVAL_UNIT_US + 1
 
 
 def primary_pdu(item: Advertising, pointer: AuxPtr) -> ExtendedPdu:
@@ -305,24 +317,26 @@ def primary_pdu(item: Advertising, pointer: AuxPtr) -> ExtendedPdu:
     )
 
 
-def primary_offset_us(item: Advertising) -> int:
+def primary_offset_us(item: Advertising, *, check_capacity: bool = False) -> int:
     """AuxPtr offset from the first ADV_EXT_IND to the shared AUX_ADV_IND, at least
     T_MAFS (Core Vol 6, Part B, 4.1.2, 4.4.2.2.2).
     """
     primary = primary_pdu(
         item, AuxPtr(0, RADIO_AUX_OFFSET_DEFAULT_US, item.secondary_phy)
     ).encode()
+    coding = item.primary_coding.factor(check_capacity=check_capacity)
     return align_offset_us(
         max(
             RADIO_AUX_OFFSET_DEFAULT_US,
-            item.channel_map.bit_count() * item.primary_phy.airtime_us(len(primary))
+            item.channel_map.bit_count()
+            * item.primary_phy.airtime_us(len(primary), coding)
             + (item.channel_map.bit_count() - 1) * RADIO_SWITCH_TIME_US
             + LL_MAFS_US,
         )
     )
 
 
-def advertising_time_us(item: Advertising) -> int:
+def advertising_time_us(item: Advertising, *, check_capacity: bool = False) -> int:
     """Air time of one extended advertising event, including any request/response
     exchange (Core Vol 6, Part B, 4.4.2.2.2).
     """
@@ -342,8 +356,9 @@ def advertising_time_us(item: Advertising) -> int:
     )
     data = b'' if item.mode == AdvertisingMode.SCANNABLE else item.data
     phy = item.secondary_phy
-    duration = primary_offset_us(item) + chain_time_us(
-        fragments(auxiliary_pdu(item, sync), data, 0, phy), phy
+    coding = item.secondary_coding.factor(check_capacity=check_capacity)
+    duration = primary_offset_us(item, check_capacity=check_capacity) + chain_time_us(
+        fragments(auxiliary_pdu(item, sync), data, 0, phy, coding=coding), phy, coding
     )
     if item.mode == AdvertisingMode.SCANNABLE:
         # Budget a possible request and the full response chain up front, so the
@@ -352,13 +367,17 @@ def advertising_time_us(item: Advertising) -> int:
         duration += (
             2 * LL_IFS_US
             + phy.airtime_us(PDU_ADV_SCAN_REQ_SIZE)
-            + chain_time_us(fragments(response, item.scan_response, 0, phy), phy)
+            + chain_time_us(
+                fragments(response, item.scan_response, 0, phy, coding=coding),
+                phy,
+                coding,
+            )
         )
     elif item.mode == AdvertisingMode.CONNECTABLE:
         duration += (
             2 * LL_IFS_US
             + phy.airtime_us(PDU_ADV_CONNECT_SIZE)
-            + phy.airtime_us(PDU_ADV_AUX_CONNECT_RSP_SIZE)
+            + phy.airtime_us(PDU_ADV_AUX_CONNECT_RSP_SIZE, coding)
         )
     return duration
 
@@ -367,10 +386,19 @@ class ExtendedProcedures:
     def __init__(self, link: RadioLink):
         self.link = link
 
-    async def transmit_chain(self, channel, first, data, start, phy, **parameters):
-        for pdu in fragments(self.link.with_radiative_power(first), data, channel, phy):
+    async def transmit_chain(
+        self, channel, first, data, start, phy, *, coding, **parameters
+    ):
+        for pdu in fragments(
+            self.link.with_radiative_power(first), data, channel, phy, coding=coding
+        ):
             await self.link._transmit(
-                channel, pdu.encode(), start_us=start, phy=phy, **parameters
+                channel,
+                pdu.encode(),
+                start_us=start,
+                phy=phy,
+                coding=coding,
+                **parameters,
             )
             if pdu.aux_ptr:
                 start += pdu.aux_ptr.offset_us
@@ -522,6 +550,7 @@ class ExtendedProcedures:
                 link.with_radiative_power(primary).encode(),
                 start_us=start,
                 phy=item.primary_phy,
+                coding=item.primary_coding.factor(),
                 power_dbm=item.tx_power_dbm,
             )
         await self.transmit_chain(
@@ -530,6 +559,7 @@ class ExtendedProcedures:
             b'' if item.mode == AdvertisingMode.SCANNABLE else item.data,
             aux_start,
             item.secondary_phy,
+            coding=item.secondary_coding.factor(),
             power_dbm=item.tx_power_dbm,
         )
         if item.mode:
@@ -575,6 +605,7 @@ class ExtendedProcedures:
                 item.scan_response,
                 packet.end_us + LL_IFS_US,
                 item.secondary_phy,
+                coding=item.secondary_coding.factor(),
                 power_dbm=item.tx_power_dbm,
             )
         elif (
@@ -608,6 +639,7 @@ class ExtendedProcedures:
                 response.encode(),
                 start_us=packet.end_us + LL_IFS_US,
                 phy=item.secondary_phy,
+                coding=item.secondary_coding.factor(),
                 power_dbm=item.tx_power_dbm,
             )
             link.roles.connections.accepted(
@@ -821,7 +853,12 @@ class ExtendedProcedures:
             identity,
             data,
             received.rssi,
-            AdvertisingReport(AdvertisingProperties(flags), status),
+            AdvertisingReport(
+                AdvertisingProperties(flags),
+                status,
+                primary_coding=packet.coding,
+                secondary_coding=received.coding if channel is not None else 0,
+            ),
             sid,
             info.interval if info else 0,
             tx_power,
@@ -873,6 +910,8 @@ class ExtendedProcedures:
                             AdvertisingProperties(flags)
                             | AdvertisingProperties.SCAN_RESPONSE,
                             status,
+                            primary_coding=packet.coding,
+                            secondary_coding=response.coding,
                         ),
                         sid,
                         0,
@@ -990,6 +1029,7 @@ class ExtendedProcedures:
         """
         link = self.link
         peer, phy = initiating.peer, item.secondary_phy
+        coding = item.secondary_coding.factor()
         initiating.address, generated = link.privacy.select_local_address(
             initiating.own_address_type,
             initiating.identity_address or initiating.address,
@@ -1001,7 +1041,7 @@ class ExtendedProcedures:
             if phy == Phy.LE_CODED
             else LL_CONN_AUX_WINDOW_DELAY_UNCODED_US
         )
-        request_end = start_us + phy.airtime_us(PDU_ADV_CONNECT_SIZE)
+        request_end = start_us + phy.airtime_us(PDU_ADV_CONNECT_SIZE, coding)
         parameters = link.connection_parameters(
             (initiating.phy_parameters or {}).get(phy, initiating.parameters),
             request_end,
@@ -1030,6 +1070,7 @@ class ExtendedProcedures:
                 connect_request(initiating.address, peer, parameters),
                 start_us=start_us,
                 phy=phy,
+                coding=coding,
                 power_dbm=item.tx_power_dbm,
                 **train,
             )

@@ -188,6 +188,17 @@ async def exchange_features(link, features):
     await link.exchange()
 
 
+async def exchange_feature_page(link, bits, *, page=1, maximum=1):
+    """Have the Lower Tester provide an extended feature page to the IUT."""
+    request = bytes((Opcode.LL_FEATURE_EXT_REQ, maximum, page)) + bits.to_bytes(
+        24, 'little'
+    )
+    reply = await link.control(Opcode.LL_FEATURE_EXT_RSP, request)
+    assert len(reply) == len(request) and reply[1] >= page and reply[2] == page
+    await link.exchange()
+    return int.from_bytes(reply[3:], 'little')
+
+
 class PeerLink:
     def __init__(
         self,

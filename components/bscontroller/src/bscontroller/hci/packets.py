@@ -1827,6 +1827,35 @@ class HCI_Write_Connection_Accept_Timeout_Command(
 
 
 # -----------------------------------------------------------------------------
+@dataclasses.dataclass
+class HCI_Read_Automatic_Flush_Timeout_ReturnParameters(
+    HCI_StatusAndConnectionHandleReturnParameters
+):
+    flush_timeout: int = field(metadata=metadata(2))
+
+
+@HCI_SyncCommand.sync_command(HCI_Read_Automatic_Flush_Timeout_ReturnParameters)
+@dataclasses.dataclass
+class HCI_Read_Automatic_Flush_Timeout_Command(
+    HCI_SyncCommand[HCI_Read_Automatic_Flush_Timeout_ReturnParameters]
+):
+    """Read Automatic Flush Timeout (Core Vol 4, Part E, 7.3.29)."""
+
+    connection_handle: int = field(metadata=metadata(2))
+
+
+@HCI_SyncCommand.sync_command(HCI_StatusAndConnectionHandleReturnParameters)
+@dataclasses.dataclass
+class HCI_Write_Automatic_Flush_Timeout_Command(
+    HCI_SyncCommand[HCI_StatusAndConnectionHandleReturnParameters]
+):
+    """Write Automatic Flush Timeout (Core Vol 4, Part E, 7.3.30)."""
+
+    connection_handle: int = field(metadata=metadata(2))
+    flush_timeout: int = field(metadata=metadata(2))
+
+
+# -----------------------------------------------------------------------------
 @HCI_SyncCommand.sync_command(HCI_StatusReturnParameters)
 @dataclasses.dataclass
 class HCI_Set_Controller_To_Host_Flow_Control_Command(
@@ -3027,6 +3056,23 @@ class HCI_LE_Set_Extended_Advertising_Parameters_Command(
     secondary_advertising_phy: int = field(metadata=Phy.type_metadata(1))
     advertising_sid: int = field(metadata=metadata(1))
     scan_request_notification_enable: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@HCI_SyncCommand.sync_command(
+    HCI_LE_Set_Extended_Advertising_Parameters_ReturnParameters
+)
+@dataclasses.dataclass
+class HCI_LE_Set_Extended_Advertising_Parameters_V2_Command(
+    HCI_LE_Set_Extended_Advertising_Parameters_Command
+):
+    """LE Set Extended Advertising Parameters [v2] (Core Vol 4, Part E, 7.8.53)."""
+
+    name = 'HCI_LE_SET_EXTENDED_ADVERTISING_PARAMETERS_V2_COMMAND'
+    op_code = HCI_LE_SET_EXTENDED_ADVERTISING_PARAMETERS_V2_COMMAND
+
+    primary_advertising_phy_options: int = field(metadata=metadata(1))
+    secondary_advertising_phy_options: int = field(metadata=metadata(1))
 
 
 # -----------------------------------------------------------------------------
@@ -4311,6 +4357,16 @@ class HCI_LE_Set_Host_Feature_Command(HCI_SyncCommand[HCI_StatusReturnParameters
 
 
 # -----------------------------------------------------------------------------
+@HCI_SyncCommand.sync_command(HCI_StatusReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_Set_Host_Feature_V2_Command(HCI_SyncCommand[HCI_StatusReturnParameters]):
+    """Set a Host feature by its 16-bit index (Core Vol 4, Part E, 7.8.115)."""
+
+    bit_number: int = field(metadata=metadata(2))
+    bit_value: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
 @dataclasses.dataclass
 class HCI_LE_Enhanced_Read_Transmit_Power_Level_ReturnParameters(
     HCI_StatusAndConnectionHandleReturnParameters
@@ -5441,6 +5497,7 @@ class HCI_LE_Extended_Advertising_Report_Event(HCI_LE_Meta_Event):
     }
 
     NO_ADI_FIELD_PROVIDED = 0xFF
+    LE_CODED_S2 = 0x04
     TX_POWER_INFORMATION_NOT_AVAILABLE = 0x7F
     RSSI_NOT_AVAILABLE = 0x7F
     ANONYMOUS_ADDRESS_TYPE = 0xFF

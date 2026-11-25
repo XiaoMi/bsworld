@@ -30,7 +30,7 @@ from bscontroller.linklayer import (
     AdvertisingMode,
     AdvertisingPduType,
 )
-from bscontroller.linklayer.advertising import SyncInfo
+from bscontroller.linklayer.advertising import AdvertisingCoding, SyncInfo
 from bscontroller.linklayer.parameters import Parameters, valid_channel_map
 from bscontroller.linklayer.pawr import (
     PawrAdvertiser,
@@ -101,6 +101,8 @@ class Advertising:
     max_events: int = 0
     primary_phy: Phy = Phy.LE_1M
     secondary_phy: Phy = Phy.LE_1M
+    primary_coding: AdvertisingCoding = AdvertisingCoding.NO_PREFERENCE
+    secondary_coding: AdvertisingCoding = AdvertisingCoding.NO_PREFERENCE
     mode: int = AdvertisingMode.NONCONNECTABLE_NONSCANNABLE
     notify_scan_request: bool = False
     filter_policy: int = 0

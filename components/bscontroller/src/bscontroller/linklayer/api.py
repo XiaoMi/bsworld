@@ -19,6 +19,7 @@ from bscontroller.linklayer import (
     AdvertisingMode,
     AdvertisingPduType,
 )
+from bscontroller.linklayer.advertising import AdvertisingCoding
 from bscontroller.linklayer.bis import BigInfo
 from bscontroller.linklayer.data_length import DataLengths
 from bscontroller.linklayer.parameters import Parameters
@@ -62,6 +63,8 @@ class AdvertisingConfig:
     sid: int = 0
     primary_phy: Phy = Phy.LE_1M
     secondary_phy: Phy = Phy.LE_1M
+    primary_coding: AdvertisingCoding = AdvertisingCoding.NO_PREFERENCE
+    secondary_coding: AdvertisingCoding = AdvertisingCoding.NO_PREFERENCE
     mode: int = AdvertisingMode.NONCONNECTABLE_NONSCANNABLE
     notify_scan_request: bool = False
     filter_policy: int = 0

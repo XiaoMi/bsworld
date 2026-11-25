@@ -68,6 +68,7 @@ async def periodic_transmit(link: RadioLink, item: Advertising, handle: int) -> 
         item.periodic_data,
         item.periodic_next_us,
         item.secondary_phy,
+        coding=item.secondary_coding.factor(),
         access_address=item.periodic_aa,
         crc_init=item.periodic_crc,
         power_dbm=item.tx_power_dbm,
@@ -165,11 +166,12 @@ async def subevent_transmit(link: RadioLink, item: Advertising) -> None:
         return
     pdu = manager.subevent_indication(item, current).encode()
     phy = item.secondary_phy
+    coding = item.secondary_coding.factor()
     start_us, channel = current.start_us, current.channel
     if not link.resource.admit(
         item,
         start_us - RADIO_SWITCH_TIME_US,
-        start_us + phy.airtime_us(len(pdu)),
+        start_us + phy.airtime_us(len(pdu), coding),
         RadioPriority.PERIODIC_TX,
         earliest_us=link.radio.earliest_start_us(channel, phy, transmit=True)
         - RADIO_SWITCH_TIME_US,
@@ -183,6 +185,7 @@ async def subevent_transmit(link: RadioLink, item: Advertising) -> None:
         access_address=item.periodic_aa,
         crc_init=item.periodic_crc,
         phy=phy,
+        coding=coding,
         power_dbm=item.tx_power_dbm,
     )
     manager.end_subevent(item, current, transmitted=True)

@@ -216,19 +216,20 @@ class FrameSpaceProcedure:
 
     def fits_phy_pair(self, tx_phy: Phy, rx_phy: Phy) -> bool:
         spacing = self.interval_overhead_us(tx_phy, rx_phy)
+        parameters = self.connection.parameters
         return (
-            spacing == 2 * LL_IFS_US
-            or self.connection.parameters.interval * LL_CONN_INTERVAL_UNIT_US
-            >= self.owner.data_length.minimum_interval_us(tx_phy, rx_phy, spacing)
+            parameters.rate_interval_us is None and spacing == 2 * LL_IFS_US
+        ) or parameters.interval_us >= self.owner.data_length.minimum_interval_us(
+            tx_phy, rx_phy, spacing
         )
 
     def _fits_link(self, change: FrameSpaceChange) -> bool:
-        for tx, rx, interval in self.owner.link_timings():
+        for tx, rx, interval_us in self.owner.link_timings():
             spacing = self.interval_overhead_us(tx, rx, change)
-            if (
-                spacing > self.interval_overhead_us(tx, rx)
-                and interval * LL_CONN_INTERVAL_UNIT_US
-                < self.owner.data_length.minimum_interval_us(tx, rx, spacing)
+            if spacing > self.interval_overhead_us(
+                tx, rx
+            ) and interval_us < self.owner.data_length.minimum_interval_us(
+                tx, rx, spacing
             ):
                 return False
         return True

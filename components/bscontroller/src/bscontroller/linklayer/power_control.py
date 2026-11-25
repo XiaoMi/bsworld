@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING
 
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
-    LL_CONN_INTERVAL_UNIT_US,
     LL_EVENT_COUNTER_MASK,
     LL_RESPONSE_TIMEOUT_US,
     ControlOpcode,
@@ -559,9 +558,7 @@ class PowerControl:
                 self.next_request_us = max(
                     self.next_request_us,
                     self.connection.radio.now_us
-                    + 2
-                    * self.connection.parameters.interval
-                    * LL_CONN_INTERVAL_UNIT_US,
+                    + 2 * self.connection.parameters.interval_us,
                 )
             response = RESPONSE.pack(
                 Opcode.LL_POWER_CONTROL_RSP, self._flags(level), delta, level, apr
