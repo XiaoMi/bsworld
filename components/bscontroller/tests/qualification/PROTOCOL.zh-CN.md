@@ -8,7 +8,7 @@
 
 测试覆盖设备发现、广播、连接、定时、报文编码、跳频、安全和数据传输。选取的用例也覆盖隐私、基于决策的广播过滤（DBAF）、BIS 广播与同步接收，以及 CIS。
 
-下表按测试规范章节列出 33 个文件中的 1188 个协议用例，其中 HCI 223 个、LL 965 个。可按测试规范编号查找和运行用例。
+下表按测试规范章节列出 43 个文件中的 1188 个协议用例，其中 HCI 223 个、LL 965 个。可按测试规范编号查找和运行用例。
 
 | 目录 | 来源章节 | 测试文件 | 选取用例数 |
 |---|---|---|---:|
@@ -25,8 +25,18 @@
 | `hci/` | 4.15.1 Connected Isochronous Streams | [connected_isochronous_test.py](hci/connected_isochronous_test.py) | 27 |
 | `hci/` | 4.15.2 Broadcast Isochronous Streams | [broadcast_isochronous_test.py](hci/broadcast_isochronous_test.py) | 17 |
 | `hci/` | 4.17 Event Versioning | [event_versioning_test.py](hci/event_versioning_test.py) | 6 |
-| `ll/` | 4.2 Device Discovery | [device_discovery_test.py](ll/device_discovery_test.py) | 183 |
-| `ll/` | 4.3 Connection | [connection_test.py](ll/connection_test.py) | 260 |
+| `ll/` | 4.2 Advertising and Advertising Sets | [device_discovery_test.py](ll/device_discovery_test.py) | 72 |
+| `ll/` | 4.2 Active and Passive Scanning | [scanning_test.py](ll/scanning_test.py) | 31 |
+| `ll/` | 4.2 Scan Filtering and Advertiser Monitoring | [scan_filtering_test.py](ll/scan_filtering_test.py) | 34 |
+| `ll/` | 4.2 Periodic Advertising | [periodic_advertising_test.py](ll/periodic_advertising_test.py) | 15 |
+| `ll/` | 4.2 Periodic Synchronization | [periodic_sync_test.py](ll/periodic_sync_test.py) | 31 |
+| `ll/` | 4.3 Connection Establishment | [connection_test.py](ll/connection_test.py) | 61 |
+| `ll/` | 4.3 ACL Data, Acknowledgment and Termination | [acl_data_test.py](ll/acl_data_test.py) | 37 |
+| `ll/` | 4.3 Connection Parameters | [connection_parameters_test.py](ll/connection_parameters_test.py) | 36 |
+| `ll/` | 4.3 PHY Update | [phy_update_test.py](ll/phy_update_test.py) | 33 |
+| `ll/` | 4.3 Data Length Update | [data_length_test.py](ll/data_length_test.py) | 36 |
+| `ll/` | 4.3 Feature Exchange and Long LL Control PDUs | [feature_exchange_test.py](ll/feature_exchange_test.py) | 44 |
+| `ll/` | 4.3 Version Exchange | [version_exchange_test.py](ll/version_exchange_test.py) | 13 |
 | `ll/` | 4.3 Connection Subrating | [subrating_test.py](ll/subrating_test.py) | 21 |
 | `ll/` | 4.3 Connection Rate | [connection_rate_test.py](ll/connection_rate_test.py) | 10 |
 | `ll/` | 4.3.7 Periodic Advertising Sync Transfer | [sync_transfer_test.py](ll/sync_transfer_test.py) | 84 |
@@ -67,7 +77,7 @@ python -m pytest tests/qualification -k 'LL/DDI/SCN/BV-88-C' -v -rs
 
 ## 理解测试结果
 
-pytest 的 `passed` 表示已执行的断言通过。选取的协议用例执行完成后，会把协议裁决和限制写入 `protocol.log`。失败和跳过状态由 pytest 报告。
+pytest 的 `passed` 表示已执行的断言通过。选取的协议用例执行完成后，会把协议裁决和限制写入 `protocol.log`。终端按 `PASS` 和 `PARTIAL` 分别统计。使用 `--junitxml` 时，还可在 XML 报告中通过 `protocol_verdict` 查看每个成功执行的用例的裁决。失败和跳过状态由 pytest 报告。
 
 | 结果 | 含义 |
 |---|---|

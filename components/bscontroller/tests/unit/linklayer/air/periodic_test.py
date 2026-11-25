@@ -8,8 +8,7 @@ Matrix: advertiser {train timing, SyncInfo, chain, CSA #2, data update, enable
 rules}; synchronizer {acquire via SyncInfo, establish, report, skip, loss,
 6-event failure, cancel, terminate, list, channel-map ACAD, receive enable}.
 
-Scenarios run on the ``air/harness.py`` harness and reuse ``configure``,
-``enable`` and ``split`` from ``extended_advertising_test.py``. The advertiser
+Scenarios use the scripted radio in ``air/harness.py``. The advertiser
 half drives the IUT as a periodic advertiser and reads AUX_SYNC_IND trains on the
 periodic access address. The synchronizer half uses the ``Train`` helper as a
 Lower Tester periodic advertiser: it announces via ADV_EXT_IND + AUX_ADV_IND
@@ -32,27 +31,27 @@ from bscontroller.linklayer.channel_selection import channel_selection_2
 from bscontroller.linklayer.pdu import PDU_ADV_ADI_DID_BITS, PDU_ADV_ADI_DID_MASK
 from bscontroller.radio.base import Phy
 from tests.support import AD_CHANNEL_MAP_UPDATE_INDICATION, advertising_data
-from tests.unit.linklayer.air.extended_advertising_test import (
-    configure as configure_extended,
+from tests.unit.linklayer.air.advertising import (
+    configure_extended,
+    enable_extended,
+    split_primary_auxiliary,
 )
-from tests.unit.linklayer.air.extended_advertising_test import (
-    enable as enable_extended,
-)
-from tests.unit.linklayer.air.extended_advertising_test import split
 from tests.unit.linklayer.air.harness import OTHER, PEER, ErrorCode, hci
+from tests.unit.linklayer.air.periodic import (
+    AUX_CHANNEL,
+    PERIODIC_REPORT,
+    Train,
+    drain_periodic,
+)
+from tests.unit.linklayer.periodic import PERIODIC_INTERVAL, SYNC_AA, SYNC_CRC
 
 Operation = hci.HCI_LE_Set_Extended_Advertising_Data_Command.Operation
 Options = hci.HCI_LE_Periodic_Advertising_Create_Sync_Command.Options
-PERIODIC_INTERVAL = 80  # 100 ms
 PERIODIC_US = PERIODIC_INTERVAL * LL_PERIODIC_INTERVAL_UNIT_US
-SYNC_AA = 0x8E89BED7 ^ 0x13579BDF
-SYNC_CRC = 0x445566
 ESTABLISHED = hci.HCI_LE_Periodic_Advertising_Sync_Established_Event
-PERIODIC_REPORT = hci.HCI_LE_Periodic_Advertising_Report_Event
 LOST = hci.HCI_LE_Periodic_Advertising_Sync_Lost_Event
 WINDOW = 160
 WINDOW_US = WINDOW * HCI_LE_SCAN_INTERVAL_UNIT_US
-AUX_CHANNEL = 12
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +175,7 @@ def test_aux_adv_ind_carries_syncinfo_to_the_train(iut):
     item = iut.link.advertisers[0]
     iut.run(3 * PERIODIC_US)
     packets = iut.lt_rx_all()
-    _, auxiliary = split(
+    _, auxiliary = split_primary_auxiliary(
         [packet for packet in packets if packet.access_address is None]
     )
     train = trains(packets, item)
@@ -482,7 +481,7 @@ def test_periodic_did_follows_periodic_data_only(iut):
         assert last.ext.data == b'periodic'
         assert last.ext.adi >> PDU_ADV_ADI_DID_BITS == item.sid
         dids.append(last.ext.adi & PDU_ADV_ADI_DID_MASK)
-        _, auxiliary = split(
+        _, auxiliary = split_primary_auxiliary(
             [packet for packet in packets if packet.access_address is None]
         )
         auxiliary_adis |= {packet.ext.adi for packet in auxiliary}
@@ -493,67 +492,6 @@ def test_periodic_did_follows_periodic_data_only(iut):
 # ---------------------------------------------------------------------------
 # Synchronizer: Lower Tester advertises a periodic train
 # ---------------------------------------------------------------------------
-class Train:
-    """A Lower Tester periodic advertiser: SyncInfo announcements and AUX_SYNC_IND."""
-
-    def __init__(
-        self,
-        iut,
-        *,
-        address=PEER,
-        sid=3,
-        interval=PERIODIC_INTERVAL,
-        counter=0,
-        phy=Phy.LE_1M,
-    ):
-        self.iut, self.address, self.sid = iut, address, sid
-        self.interval, self.counter, self.phy = interval, counter, phy
-        self.channel_map = LL_DATA_CHANNEL_MAP_ALL
-        self.anchor_us = None
-
-    @property
-    def interval_us(self):
-        return self.interval * LL_PERIODIC_INTERVAL_UNIT_US
-
-    def announce(self, offset_us=30_000):
-        """ADV_EXT_IND + AUX_ADV_IND with SyncInfo; the train starts offset later."""
-        primary = ExtendedPdu(
-            adi=self.sid << 12 | 1, aux_ptr=AuxPtr(AUX_CHANNEL, 3000, self.phy)
-        )
-        info = SyncInfo(
-            offset_us, self.interval, self.channel_map, SYNC_AA, SYNC_CRC, self.counter
-        )
-        auxiliary = ExtendedPdu(
-            address=bytes(self.address),
-            random_address=self.address.is_random,
-            adi=self.sid << 12 | 1,
-            sync_info=info,
-        )
-        self.iut.lt_tx(primary, phy=Phy.LE_1M)
-        self.iut.lt_tx(auxiliary, phy=self.phy, channel=AUX_CHANNEL, after=3000)
-        self._offset_us = offset_us
-
-    def first_anchor(self):
-        """Anchor of the event SyncInfo described, once the announcement arrived."""
-        aux = self.iut.radio.delivered[-1]
-        self.anchor_us = aux.start_us + self._offset_us
-        return self.anchor_us
-
-    def send(self, data=b'', *, skip=False, **fields):
-        """Schedule this train event (or let it pass silently) and step the anchor."""
-        if not skip:
-            self.iut.lt_tx(
-                ExtendedPdu(data=data, **fields),
-                phy=self.phy,
-                at=self.anchor_us,
-                access_address=SYNC_AA,
-                channel=channel_selection_2(self.counter, SYNC_AA, self.channel_map),
-            )
-        self.anchor_us += self.interval_us
-        self.counter = (self.counter + 1) & LL_EVENT_COUNTER_MASK
-
-    def run_through(self):
-        self.iut.run_until(self.anchor_us - self.interval_us + 2000)
 
 
 def create_sync(
@@ -572,13 +510,6 @@ def create_sync(
         ),
         status,
     )
-
-
-def drain_periodic(iut):
-    found = [event for event in iut.events if isinstance(event, PERIODIC_REPORT)]
-    for event in found:
-        iut.events.remove(event)
-    return [event.data for event in found]
 
 
 def acquire(iut, train, **sync):

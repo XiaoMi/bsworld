@@ -16,7 +16,7 @@ from bscontroller.linklayer.advertising import ExtendedPdu, SyncInfo
 from bscontroller.linklayer.channel_selection import channel_selection_2
 from bscontroller.linklayer.discovery import PeriodicSync
 from bscontroller.linklayer.pawr import PawrSync, PawrTiming
-from tests.unit.linklayer.air.extended_advertising_test import configure
+from tests.unit.linklayer.air.advertising import configure_extended, enable_extended
 from tests.unit.linklayer.air.harness import PEER
 
 TIMING = PawrTiming(3, 16, 8, 10)
@@ -190,7 +190,7 @@ def test_data_request_callback_can_release_train(iut, request_number, action):
         - Released trains transmit nothing and raise no exception.
         - A restarted train retains its own anchor and subevent state.
     """
-    configure(iut)
+    configure_extended(iut)
     iut.ut(hci.HCI_LE_Set_Event_Mask_Command(((1 << 64) - 1).to_bytes(8, 'little')))
     iut.ut(
         hci.HCI_LE_Set_Periodic_Advertising_Parameters_V2_Command(
@@ -261,7 +261,7 @@ def test_restarted_train_ignores_old_subevent_completion(iut):
     Expected:
         - The replacement stays at subevent zero, before its first transmission.
     """
-    configure(iut)
+    configure_extended(iut)
     iut.ut(
         hci.HCI_LE_Set_Periodic_Advertising_Parameters_V2_Command(
             0, 80, 80, 0, 3, 16, 8, 10, 2
@@ -293,7 +293,7 @@ def test_failed_response_report_callback_can_restart_train(iut):
     Expected:
         - The replacement retains its initial anchor, counter and subevent zero.
     """
-    configure(iut)
+    configure_extended(iut)
     iut.ut(hci.HCI_LE_Set_Event_Mask_Command(((1 << 64) - 1).to_bytes(8, 'little')))
     iut.ut(
         hci.HCI_LE_Set_Periodic_Advertising_Parameters_V2_Command(
@@ -367,7 +367,7 @@ def test_subevent_train_uses_each_payload_once(iut):
     Expected:
         - Only the requested instance contains data; later PDUs are empty and unchained.
     """
-    configure(iut)
+    configure_extended(iut)
     iut.ut(
         hci.HCI_LE_Set_Periodic_Advertising_Parameters_V2_Command(
             0, 80, 80, 0, 3, 16, 8, 10, 2
@@ -406,16 +406,14 @@ def test_long_interval_announces_only_encodable_syncinfo(iut):
         - Later advertisements point to the first periodic anchor using a
           nonzero, representable offset and the unchanged event counter.
     """
-    from tests.unit.linklayer.air.extended_advertising_test import enable
-
-    configure(iut)
+    configure_extended(iut)
     iut.ut(
         hci.HCI_LE_Set_Periodic_Advertising_Parameters_V2_Command(
             0, 0x5000, 0x5000, 0, 128, 160, 8, 10, 1
         )
     )
     iut.ut(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 0))
-    enable(iut)
+    enable_extended(iut)
     iut.run_until(1_000_000)
     early = [packet.ext for packet in iut.lt_rx_all() if packet.ext.address]
     assert early and all(pdu.sync_info is None for pdu in early)
@@ -440,9 +438,7 @@ def test_mid_event_syncinfo_wraps_counter(iut):
         - The AUX_ADV_IND SyncInfo names counter zero without overflow.
         - Its offset points to the following event's subevent-zero anchor.
     """
-    from tests.unit.linklayer.air.extended_advertising_test import enable
-
-    configure(iut)
+    configure_extended(iut)
     iut.ut(
         hci.HCI_LE_Set_Periodic_Advertising_Parameters_V2_Command(
             0, 80, 80, 0, 3, 16, 8, 10, 2
@@ -453,7 +449,7 @@ def test_mid_event_syncinfo_wraps_counter(iut):
     item.periodic_next_us = 0
     item.periodic_counter = 0xFFFF
     item.pawr_state.subevent = 1
-    enable(iut)
+    enable_extended(iut)
     iut.run_until(5_000)
     advertised = [p for p in iut.lt_rx_all() if p.ext.sync_info]
     assert advertised
@@ -516,7 +512,7 @@ def test_released_train_cannot_commit_delayed_connection(iut, source, replacemen
         handle = 1
         result = dict(pawr_sync=train)
     else:
-        configure(iut)
+        configure_extended(iut)
         iut.ut(
             hci.HCI_LE_Set_Periodic_Advertising_Parameters_V2_Command(
                 0, 80, 80, 0, 3, 16, 8, 10, 2

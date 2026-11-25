@@ -12,20 +12,12 @@ from tests.qualification.cases import (
     procedure_cases,
     verify_case,
 )
-from tests.qualification.peer import establish
+from tests.qualification.peer import (
+    establish,
+    expect_remote_power_read_error,
+)
 
 ErrorCode = hci.HCI_ErrorCode
-
-
-async def expect_remote_power_read_error(tester, handle, phy, error):
-    """Require either permitted placement of the remote power-read error."""
-    status = await tester.command(
-        hci.HCI_LE_Read_Remote_Transmit_Power_Level_Command(handle, phy),
-        (error, ErrorCode.SUCCESS),
-    )
-    if status.status == ErrorCode.SUCCESS:
-        report = await tester.event(hci.HCI_LE_Transmit_Power_Reporting_Event)
-        assert report.status == error
 
 
 async def enhanced_read_transmit_power(tester):
@@ -111,7 +103,7 @@ async def read_remote_power_unknown_handle(tester):
     await link.disconnect()
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Check the local power levels and active PHY on an established ACL.
 PROCEDURES |= procedure_cases(

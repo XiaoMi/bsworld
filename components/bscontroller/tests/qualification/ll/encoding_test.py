@@ -870,7 +870,7 @@ async def packets_to_another_central(tester):
     await _invalid_connection_address(tester, central=True, established=True)
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Verify that an advertiser ignores scan requests with an invalid advertising-channel
 # synchronization word and continues advertising.

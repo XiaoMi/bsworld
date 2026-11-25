@@ -52,6 +52,24 @@ class ProcedureContext:
         self.phase = ProcedurePhase.COMPLETE
 
 
+class LocalProcedure:
+    """A control exchange with its own response deadline and local procedure slot."""
+
+    context: ProcedureContext | None
+
+    @property
+    def pending(self) -> bool:
+        return self.context is not None and self.context.active
+
+    @property
+    def busy(self) -> bool:
+        return self.pending
+
+    @property
+    def deadline_us(self) -> int:
+        return self.context.deadline_us if self.pending else 0
+
+
 @dataclass
 class ProcedureResponseTimer:
     """Serialized Instant-related slot timer with a procedure-instance owner.

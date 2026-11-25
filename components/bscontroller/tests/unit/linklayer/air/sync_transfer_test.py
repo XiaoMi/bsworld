@@ -7,7 +7,7 @@
 Matrix: {first AUX_SYNC_IND, six missed events} x {reports enabled, disabled,
 masked event} plus CTE_Type at the first AUX_SYNC_IND and reset. The
 LL_PERIODIC_SYNC_IND is delivered on an unscheduled connection context, so the
-scripted radio serves only the train from ``periodic_test.py``. PDU encoding
+scripted radio serves only the Lower Tester periodic train. PDU encoding
 and recipient rules are in llcp/sync_transfer_test.py.
 """
 
@@ -24,13 +24,8 @@ from tests.unit.linklayer.air.harness import (
     ErrorCode,
     hci,
 )
-from tests.unit.linklayer.air.periodic_test import (
-    PERIODIC_INTERVAL,
-    PERIODIC_REPORT,
-    Train,
-    drain_periodic,
-)
-from tests.unit.linklayer.llcp.sync_transfer_test import indication, sync_info
+from tests.unit.linklayer.air.periodic import PERIODIC_REPORT, Train, drain_periodic
+from tests.unit.linklayer.periodic import PERIODIC_INTERVAL, indication, sync_info
 
 RECEIVED = hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_Event
 RECEIVED_V2 = hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_V2_Event

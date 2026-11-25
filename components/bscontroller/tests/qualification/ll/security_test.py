@@ -6,7 +6,6 @@
 import random
 
 import pytest
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from bscontroller import hci
 from bscontroller.linklayer import (
@@ -17,7 +16,6 @@ from bscontroller.linklayer import (
     LL_IFS_US,
     LL_RESPONSE_TIMEOUT_US,
     LL_SUPERVISION_TIMEOUT_UNIT_US,
-    PDU_CONTROL_ENC_REQ_SIZE,
     PDU_CONTROL_ENC_RSP_SIZE,
     PDU_CONTROL_FEATURE_SET_SIZE,
     PDU_CONTROL_FEATURE_SIZE,
@@ -28,7 +26,6 @@ from bscontroller.linklayer import (
     PDU_DATA_SN_MASK,
     PDU_HEADER_SIZE,
     AdvertisingPduType,
-    ControlOpcode,
     LlId,
 )
 from tests.qualification import privacy as privacy_peer
@@ -38,23 +35,35 @@ from tests.qualification.cases import (
     procedure_cases,
     verify_case,
 )
+from tests.qualification.connection import (
+    check_duplicate_advertiser_request,
+    check_duplicate_initiator_request,
+)
 from tests.qualification.link import (
-    _EncryptedPeer,
     check_connection_silent,
 )
-from tests.qualification.ll import connection_test as connection_cases
 from tests.qualification.peer import (
     PeerLink,
-    establish,
-    exchange_features,
     host_send,
     peer_send,
     received_acl,
 )
+from tests.qualification.security import (
+    MODE_SETUP_DATA_SIZE,
+    MODE_SETUP_TOTAL_OCTETS,
+    ROOT,
+    ErrorCode,
+    Opcode,
+    aes,
+    begin_encryption,
+    establish_security_link,
+    exchange_security_features,
+    expect_no_encryption_result,
+    finish_encryption,
+)
 from tests.qualification.tester import (
     DUT_ADDRESS,
     LOWER_CENTRAL_PUBLIC_ADDRESS,
-    LOWER_PERIPHERAL_PUBLIC_ADDRESS,
     PEER_ADDRESS,
     LinkParameters,
     decode_extended,
@@ -70,13 +79,6 @@ from tests.support import (
     CONTROLLER_COMPANY_IDENTIFIER,
 )
 
-ErrorCode = hci.HCI_ErrorCode
-Opcode = ControlOpcode
-# LL.TS.p28, printed 4.1-29: public common IR/ER value, in HCI octet order.
-ROOT = bytes.fromhex('112233445566778899aabbccddeeff00')[::-1]
-# Mode Setup sends 1000 zero octets in ten-octet HCI packets before and after setup.
-MODE_SETUP_DATA_SIZE = 10
-MODE_SETUP_TOTAL_OCTETS = 1000
 # Receiving Encrypted Data sends 1000 independent ten-octet LL start PDUs.
 RECEIVE_PACKET_COUNT = 1000
 RECEIVE_DATA_SIZE = 10
@@ -84,44 +86,6 @@ RECEIVE_DATA_SIZE = 10
 AUTHENTICATED_TIMEOUT_IXIT = 100
 # Figure 4.8-42 observes two seconds of empty traffic before the pause response.
 PAUSE_DATA_GUARD_US = 2_000_000
-
-
-class _SecurityPeer(_EncryptedPeer):
-    def __init__(self, link):
-        super().__init__(link)
-        self.received_data = []
-        self.received_controls = []
-        self.termination_received = False
-        self.last_new_mic_tx_us = None
-        self.generator = random.Random(0)
-
-    async def _send(self, channel, data, llid, start):
-        new_mic = self.tx_enabled and data and self.tx_sn != self.sn
-        await super()._send(channel, data, llid, start)
-        if new_mic:
-            self.last_new_mic_tx_us = self.last_sent_end_us - 1
-
-    def decode(self, packet):
-        packet = super().decode(packet)
-        if packet.pdu[0] & PDU_DATA_LLID_MASK == LlId.CONTROL:
-            self.received_controls.append((packet, self.rx_enabled))
-        if (
-            packet.pdu[0] & PDU_DATA_LLID_MASK == LlId.CONTROL
-            and len(packet.pdu) > PDU_HEADER_SIZE
-            and packet.pdu[PDU_HEADER_SIZE] == Opcode.LL_TERMINATE_IND
-        ):
-            self.termination_received = True
-        if (
-            packet.pdu[0] & PDU_DATA_LLID_MASK != LlId.CONTROL
-            and packet.pdu[PDU_HEADER_SIZE:]
-        ):
-            self.received_data.append((packet.pdu[PDU_HEADER_SIZE:], self.rx_enabled))
-        return packet
-
-
-def _aes(key, plaintext):
-    encryptor = Cipher(algorithms.AES(key[::-1]), modes.ECB()).encryptor()
-    return encryptor.update(plaintext[::-1])[::-1]
 
 
 async def _authenticated_data(tester, link, data):
@@ -134,151 +98,12 @@ async def _authenticated_data(tester, link, data):
     return timestamp
 
 
-async def _begin(tester, link, *, refresh=False):
-    """Stop after ENC_REQ reception (Central) or ENC_RSP/LTK request (Peripheral)."""
-    link.skd_component = link.generator.randbytes(LL_ENCRYPTION_SKD_HALF_SIZE)
-    link.iv_component = link.generator.randbytes(LL_ENCRYPTION_IV_HALF_SIZE)
-    if link.central:
-        if not refresh:
-            await tester.command(
-                hci.HCI_LE_Enable_Encryption_Command(
-                    link.handle, link.rand, link.ediv, link.ltk
-                )
-            )
-        request = await link.control(Opcode.LL_ENC_REQ)
-        assert len(request) == PDU_CONTROL_ENC_REQ_SIZE
-        assert (
-            request[1:9] == link.rand
-            and int.from_bytes(request[9:11], 'little') == link.ediv
-        )
-        dhk = _aes(ROOT, (2).to_bytes(16, 'little'))
-        div = int.from_bytes(request[9:11], 'little') ^ int.from_bytes(
-            _aes(dhk, request[1:9] + bytes(8))[:2], 'little'
-        )
-        assert _aes(ROOT, div.to_bytes(16, 'little')) == link.ltk
-        link.install(
-            request[11:19] + link.skd_component, request[19:23] + link.iv_component
-        )
-    else:
-        response = await link.control(
-            Opcode.LL_ENC_RSP,
-            bytes([Opcode.LL_ENC_REQ])
-            + link.rand
-            + link.ediv.to_bytes(2, 'little')
-            + link.skd_component
-            + link.iv_component,
-        )
-        assert len(response) == PDU_CONTROL_ENC_RSP_SIZE
-        event = await tester.event(hci.HCI_LE_Long_Term_Key_Request_Event)
-        assert event.connection_handle == link.handle
-        assert (
-            event.random_number == link.rand
-            and event.encryption_diversifier == link.ediv
-        )
-        link.install(
-            link.skd_component + response[1:9], link.iv_component + response[9:13]
-        )
-
-
 async def _encrypted_link(tester, central):
-    link = await _security_link(tester, central)
-    await _feature_exchange(link, ping=False)
-    await _begin(tester, link)
-    await _finish(tester, link)
+    link = await establish_security_link(tester, central)
+    await exchange_security_features(link, ping=False)
+    await begin_encryption(tester, link)
+    await finish_encryption(tester, link)
     return link
-
-
-async def _feature_exchange(link, *, ping=True, extended_reject=False):
-    features = hci.LeFeatureMask.LE_ENCRYPTION
-    if ping:
-        features |= hci.LeFeatureMask.LE_PING
-    if extended_reject:
-        features |= hci.LeFeatureMask.EXTENDED_REJECT_INDICATION
-    await exchange_features(link, features)
-
-
-async def _finish(
-    tester, link, *, refresh=False, response_sent=False, check_event=True
-):
-    _no_encryption_result(tester)
-    received_before = len(link.received_data)
-    if link.central:
-        if not response_sent:
-            await link.exchange(
-                bytes([Opcode.LL_ENC_RSP]) + link.skd_component + link.iv_component,
-                llid=LlId.CONTROL,
-            )
-        link.rx_enabled = True
-        packet = await link.exchange(
-            bytes([Opcode.LL_START_ENC_REQ]), llid=LlId.CONTROL
-        )
-        assert packet.pdu[0] & PDU_DATA_LLID_MASK == LlId.CONTINUATION
-        assert packet.pdu[PDU_HEADER_SIZE:] == b''
-        assert await link.control(Opcode.LL_START_ENC_RSP, check_ack=True) == bytes(
-            [Opcode.LL_START_ENC_RSP]
-        )
-        assert len(link.received_data) == received_before, (
-            'user data sent before encryption completed'
-        )
-        _no_encryption_result(tester)
-        link.tx_enabled = True
-        await link.exchange(bytes([Opcode.LL_START_ENC_RSP]), llid=LlId.CONTROL)
-    else:
-        result = await tester.command(
-            hci.HCI_LE_Long_Term_Key_Request_Reply_Command(link.handle, link.ltk)
-        )
-        assert result.connection_handle == link.handle
-        assert await link.control(Opcode.LL_START_ENC_REQ) == bytes(
-            [Opcode.LL_START_ENC_REQ]
-        )
-        await link.exchange()
-        link.tx_enabled = link.rx_enabled = True
-        assert await link.control(
-            Opcode.LL_START_ENC_RSP,
-            bytes([Opcode.LL_START_ENC_RSP]),
-            check_ack=True,
-        ) == bytes([Opcode.LL_START_ENC_RSP])
-        assert len(link.received_data) == received_before, (
-            'queued data leaked before refresh completed'
-        )
-    await link.exchange()
-    if not check_event:
-        # Event-version procedures verify their own mask-dependent HCI result.
-        return
-    event = await tester.event(
-        hci.HCI_Encryption_Key_Refresh_Complete_Event
-        if refresh
-        else hci.HCI_Encryption_Change_Event
-    )
-    assert event.status == ErrorCode.SUCCESS and event.connection_handle == link.handle
-    if not refresh:
-        assert (
-            event.encryption_enabled
-            == hci.HCI_Encryption_Change_Event.Enabled.E0_OR_AES_CCM
-        )
-    _no_encryption_result(tester)
-
-
-async def _key_preamble(tester):
-    """Exercise the HCI key-calculation boundary, independently checking AES."""
-    div = int.from_bytes(
-        (await tester.command(hci.HCI_LE_Rand_Command())).random_number[:2], 'little'
-    )
-    rand = (await tester.command(hci.HCI_LE_Rand_Command())).random_number
-
-    async def encrypt(key, plaintext):
-        result = await tester.command(hci.HCI_LE_Encrypt_Command(key, plaintext))
-        assert result.encrypted_data == _aes(key, plaintext)
-        return result.encrypted_data
-
-    dhk = await encrypt(ROOT, (2).to_bytes(16, 'little'))
-    y = int.from_bytes((await encrypt(dhk, rand + bytes(8)))[:2], 'little')
-    ediv = div ^ y
-    recovered_div = ediv ^ int.from_bytes(_aes(dhk, rand + bytes(8))[:2], 'little')
-    assert recovered_div == div
-    ltk = await encrypt(ROOT, div.to_bytes(16, 'little'))
-    assert ltk == _aes(ROOT, recovered_div.to_bytes(16, 'little'))
-    return (rand, ediv, ltk)
 
 
 async def _mic_failure(tester, *, central, header_error):
@@ -359,12 +184,14 @@ async def _repeat_corrupted_data(tester, link, corrupted, until):
 async def _mode_setup(tester, *, central):
     """Verify complete encryption setup and both address rounds with 1000 octets."""
     for random_address in (False, True):
-        link = await _security_link(tester, central, random_address=random_address)
-        await _feature_exchange(link, ping=False)
+        link = await establish_security_link(
+            tester, central, random_address=random_address
+        )
+        await exchange_security_features(link, ping=False)
         for _ in range(MODE_SETUP_TOTAL_OCTETS // MODE_SETUP_DATA_SIZE):
             await host_send(tester, link, bytes(MODE_SETUP_DATA_SIZE))
-        await _begin(tester, link)
-        await _finish(tester, link)
+        await begin_encryption(tester, link)
+        await finish_encryption(tester, link)
         for _ in range(MODE_SETUP_TOTAL_OCTETS // MODE_SETUP_DATA_SIZE):
             await host_send(tester, link, bytes(MODE_SETUP_DATA_SIZE))
         await link.disconnect()
@@ -379,22 +206,9 @@ def _no_disconnect(tester, link=None):
         assert not link.termination_received, 'IUT sent LL_TERMINATE_IND'
 
 
-def _no_encryption_result(tester):
-    assert not any(
-        isinstance(
-            event,
-            (
-                hci.HCI_Encryption_Change_Event,
-                hci.HCI_Encryption_Key_Refresh_Complete_Event,
-            ),
-        )
-        for event in tester.events
-    ), 'encryption result reported before the required handshake completed'
-
-
 async def _overlapping(tester, *, features=False, version_exchanged=False):
     """Observe deferral across the whole handshake, including prior-version state."""
-    link = await _security_link(tester, True)
+    link = await establish_security_link(tester, True)
     peer_features = int(hci.LeFeatureMask.LE_ENCRYPTION)
     if features:
         declared = await tester.command(
@@ -425,13 +239,13 @@ async def _overlapping(tester, *, features=False, version_exchanged=False):
         assert await link.control(Opcode.LL_VERSION_IND, payload) == version_response
         await link.exchange()
     first_control = len(link.received_controls)
-    await _begin(tester, link)
+    await begin_encryption(tester, link)
     await link.exchange(payload, llid=LlId.CONTROL)
     packet = await link.exchange()
     assert packet.pdu[PDU_HEADER_SIZE:] == b'', (
         'overlapping response sent before encryption completes'
     )
-    await _finish(tester, link)
+    await finish_encryption(tester, link)
     completed_us = link.last_new_mic_tx_us
     assert completed_us is not None
     if version_exchanged:
@@ -461,7 +275,7 @@ async def _overlapping(tester, *, features=False, version_exchanged=False):
             assert len(result) == PDU_CONTROL_VERSION_SIZE
             assert result == version_response
     _no_disconnect(tester, link)
-    _no_encryption_result(tester)
+    expect_no_encryption_result(tester)
     await link.disconnect()
 
 
@@ -492,14 +306,14 @@ async def _pause(tester, link, *, send_data=False):
         )
         if send_data:
             await peer_send(tester, link, b'\xff')
-            _no_encryption_result(tester)
+            expect_no_encryption_result(tester)
             _no_disconnect(tester, link)
             guard = tester.radio.now_us + PAUSE_DATA_GUARD_US
             while link.anchor < guard:
                 packet = await link.exchange()
                 assert packet.pdu[PDU_HEADER_SIZE:] == b''
                 _no_disconnect(tester, link)
-                _no_encryption_result(tester)
+                expect_no_encryption_result(tester)
         await link.exchange(bytes([Opcode.LL_PAUSE_ENC_RSP]), llid=LlId.CONTROL)
         link.rx_enabled = False
         assert await link.control(Opcode.LL_PAUSE_ENC_RSP) == bytes(
@@ -532,14 +346,14 @@ async def _pause_procedure(tester, *, central, send_data=False):
                 )
             )
         )
-    await _begin(tester, link, refresh=True)
+    await begin_encryption(tester, link, refresh=True)
     assert len(link.received_data) == queued_before, (
         'user data sent during the unencrypted restart handshake'
     )
     assert link.iv != old_iv
     assert link.session_key != old_key, 'session key was reused during refresh'
-    _no_encryption_result(tester)
-    await _finish(tester, link, refresh=True)
+    expect_no_encryption_result(tester)
+    await finish_encryption(tester, link, refresh=True)
     if send_data:
         if central:
             await peer_send(tester, link, b'\x11')
@@ -557,16 +371,16 @@ async def _pause_procedure(tester, *, central, send_data=False):
             assert event.connection_handles == [link.handle]
             assert event.num_completed_packets == [1]
     _no_disconnect(tester, link)
-    _no_encryption_result(tester)
+    expect_no_encryption_result(tester)
     await link.disconnect()
 
 
 async def _ping(tester, *, central, mode):
     """Check encrypted Ping, MIC timer reset, response and expiry in each role."""
-    link = await _security_link(tester, central)
-    await _feature_exchange(link, ping=mode != 'unknown')
-    await _begin(tester, link)
-    await _finish(tester, link)
+    link = await establish_security_link(tester, central)
+    await exchange_security_features(link, ping=mode != 'unknown')
+    await begin_encryption(tester, link)
+    await finish_encryption(tester, link)
     if mode == 'respond':
         assert await link.control(
             Opcode.LL_PING_RSP, bytes([Opcode.LL_PING_REQ])
@@ -679,15 +493,15 @@ async def _observe_authentication_expiry(tester, link, deadline):
 
 async def _reject(tester, *, central, extended):
     """Check the specified rejection stage, reason, packet and HCI result."""
-    link = await _security_link(
+    link = await establish_security_link(
         tester, central, random_address=not central or not extended, random_peer=False
     )
-    await _feature_exchange(link, ping=False, extended_reject=extended)
+    await exchange_security_features(link, ping=False, extended_reject=extended)
     if not central and not extended:
         plaintext = (2).to_bytes(16, 'little')
         result = await tester.command(hci.HCI_LE_Encrypt_Command(ROOT, plaintext))
-        assert result.encrypted_data == _aes(ROOT, plaintext)
-    await _begin(tester, link)
+        assert result.encrypted_data == aes(ROOT, plaintext)
+    await begin_encryption(tester, link)
     reason = (
         ErrorCode.PIN_OR_KEY_MISSING_ERROR
         if extended or not central
@@ -700,13 +514,13 @@ async def _reject(tester, *, central, extended):
         + bytes([reason])
     )
     if central:
-        _no_encryption_result(tester)
+        expect_no_encryption_result(tester)
         if extended:
             await link.exchange(
                 bytes([Opcode.LL_ENC_RSP]) + link.skd_component + link.iv_component,
                 llid=LlId.CONTROL,
             )
-            _no_encryption_result(tester)
+            expect_no_encryption_result(tester)
         await link.exchange(payload, llid=LlId.CONTROL)
         event = await tester.event(hci.HCI_Encryption_Change_Event)
         assert (
@@ -749,43 +563,14 @@ async def _receive_encryption_rejection(link, *, extended):
     raise AssertionError('encryption rejection not received')
 
 
-async def _security_link(tester, central, *, random_address=False, random_peer=True):
-    rand, ediv, ltk = await _key_preamble(tester)
-    address = None
-    peer = LOWER_PERIPHERAL_PUBLIC_ADDRESS if central else LOWER_CENTRAL_PUBLIC_ADDRESS
-    if random_address:
-        irk = _aes(ROOT, (1).to_bytes(16, 'little'))
-        prand = bytes.fromhex('948170')
-        address = hci.Address(
-            _aes(irk, prand + bytes(13))[:3] + prand, hci.AddressType.RANDOM_DEVICE
-        )
-        assert address.is_resolvable
-        if random_peer:
-            peer = hci.Address('C0:11:22:33:44:55', hci.AddressType.RANDOM_DEVICE)
-    link = _SecurityPeer(
-        await establish(
-            tester,
-            central=central,
-            peer_address=peer,
-            random=random_address,
-            random_address=address,
-            interval=8,
-            timeout=30,
-        )
-    )
-    link.rand, link.ediv, link.ltk = (rand, ediv, ltk)
-    link.generator.seed(rand)
-    return link
-
-
 async def _security_timeout(tester, *, central, stage, data=False):
     """Withhold a particular handshake PDU while ACKs prevent supervision expiry."""
     if not central:
         await _peripheral_missing_start_response(tester)
         return
-    link = await _security_link(tester, central)
+    link = await establish_security_link(tester, central)
     earliest_reset = tester.radio.now_us
-    await _begin(tester, link)
+    await begin_encryption(tester, link)
     latest_reset = link.last_received.start_us
     if stage != 'response':
         await link.exchange(
@@ -807,14 +592,16 @@ async def _security_timeout(tester, *, central, stage, data=False):
             await link.exchange(check_ack=True)
     if data:
         await peer_send(tester, link, b'\xff')
-    _no_encryption_result(tester)
+    expect_no_encryption_result(tester)
     await _observe_security_timeout(tester, link, earliest_reset, latest_reset)
 
 
 async def _peripheral_missing_start_response(tester):
     """Bound T_PRT by observable events without inventing an air-bit origin."""
-    link = await _security_link(tester, False, random_address=True, random_peer=False)
-    await _begin(tester, link)
+    link = await establish_security_link(
+        tester, False, random_address=True, random_peer=False
+    )
+    await begin_encryption(tester, link)
     earliest_reset = tester.radio.now_us
     result = await tester.command(
         hci.HCI_LE_Long_Term_Key_Request_Reply_Command(link.handle, link.ltk)
@@ -872,7 +659,7 @@ async def _observe_security_timeout(tester, link, earliest_reset, latest_reset):
 
 async def _unexpected(tester, *, data=False, refresh=False):
     """Send ENC_RSP then the forbidden PDU in the same Central connection event."""
-    link = await _security_link(tester, True)
+    link = await establish_security_link(tester, True)
     if data:
         version = await tester.command(hci.HCI_Read_Local_Version_Information_Command())
         if version.lmp_version < hci.SpecificationVersion.BLUETOOTH_CORE_5_0:
@@ -880,15 +667,15 @@ async def _unexpected(tester, *, data=False, refresh=False):
                 'Legacy pre-5.0 MIC-failure termination path is not implemented'
             )
     if refresh:
-        await _begin(tester, link)
-        await _finish(tester, link)
+        await begin_encryption(tester, link)
+        await finish_encryption(tester, link)
         old_key, old_iv = link.session_key, link.iv
         await _pause(tester, link)
-    await _begin(tester, link, refresh=refresh)
+    await begin_encryption(tester, link, refresh=refresh)
     if refresh:
         assert link.session_key != old_key, 'session key was reused during refresh'
         assert link.iv != old_iv, 'initialization vector was reused during refresh'
-    _no_encryption_result(tester)
+    expect_no_encryption_result(tester)
     channel = link.channel
     packet = await tester.expect_pdu(
         channel,
@@ -921,7 +708,7 @@ async def _unexpected(tester, *, data=False, refresh=False):
     assert acknowledgement.pdu[PDU_HEADER_SIZE:] == b''
     assert int(bool(acknowledgement.pdu[0] & PDU_DATA_NESN_MASK)) != link.sn
     link._accept(link.decode(acknowledgement))
-    _no_encryption_result(tester)
+    expect_no_encryption_result(tester)
     payload = (
         b'\xff'
         if data
@@ -951,7 +738,7 @@ async def _unexpected(tester, *, data=False, refresh=False):
 
 async def _peripheral_unexpected_start_pdu(tester, *, data):
     """Inject in the first event, without waiting for ENC_RSP or a Host LTK event."""
-    link = await _security_link(tester, False)
+    link = await establish_security_link(tester, False)
     request = (
         bytes([Opcode.LL_ENC_REQ])
         + link.rand
@@ -1964,15 +1751,15 @@ async def central_encryption_sending_data_before_ll_enc_rsp(tester):
         Figure 4.1-27 operand correction documented in Central Encryption
         Mode Setup.
     """
-    link = await _security_link(tester, True)
-    await _begin(tester, link)
+    link = await establish_security_link(tester, True)
+    await begin_encryption(tester, link)
     await peer_send(tester, link, b'\xff')
-    _no_encryption_result(tester)
+    expect_no_encryption_result(tester)
     _no_disconnect(tester, link)
-    await _finish(tester, link)
+    await finish_encryption(tester, link)
     await peer_send(tester, link, b'\x11')
     _no_disconnect(tester, link)
-    _no_encryption_result(tester)
+    expect_no_encryption_result(tester)
     await link.disconnect()
 
 
@@ -3767,7 +3554,7 @@ async def privacy_duplicate_advertiser(tester):
         LL.TS.p28, SEC/ADV/BI-01-C, PDF pages 1235-1238, Figures 4.8-23/24;
         Core Vol 6, Part B, 4.5 and 4.7.
     """
-    await connection_cases.reject_existing_connection_request(tester, privacy=True)
+    await check_duplicate_advertiser_request(tester, privacy=True)
 
 
 async def privacy_duplicate_initiator(tester):
@@ -3795,7 +3582,7 @@ async def privacy_duplicate_initiator(tester):
         LL.TS.p28, SEC/INI/BI-01-C, PDF pages 1240-1243, Figures 4.8-26/27;
         Core Vol 6, Part B, 4.5 and 4.7.
     """
-    await connection_cases.duplicate_connection_request(tester, privacy=True)
+    await check_duplicate_initiator_request(tester, privacy=True)
 
 
 async def privacy_random_address_scanning(tester, *, encrypt):
@@ -3834,7 +3621,7 @@ async def privacy_random_address_scanning(tester, *, encrypt):
         LL.TS.p28, Section 4.8.4.1, PDF pages 1238-1240, Table 4.8-7,
         Figure 4.8-25; Core Vol 3, Part H, 2.2.2; Vol 6, Part B, 4.4.3.2.
     """
-    irk = _aes(ROOT, (1).to_bytes(16, 'little'))
+    irk = aes(ROOT, (1).to_bytes(16, 'little'))
     address = privacy_peer.private_address(irk)
     await tester.command(hci.HCI_LE_Set_Random_Address_Command(privacy_peer.FALLBACK))
     await privacy_peer.scanning(tester, active=True, own_type=1)
@@ -3865,7 +3652,7 @@ async def privacy_random_address_scanning(tester, *, encrypt):
         assert result.encrypted_data[:3] == bytes(address)[:3]
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Verify that a Peripheral performs an encryption-mode change using the correct
 # encryption. The Lower Tester maintains a Central connection and initiates encryption

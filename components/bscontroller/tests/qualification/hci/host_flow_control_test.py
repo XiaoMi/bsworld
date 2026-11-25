@@ -86,7 +86,7 @@ async def scanning_event_mask(tester):
     await tester.command(hci.HCI_LE_Set_Scan_Enable_Command(0, 0))
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Verify that LE Set Event Mask controls advertising reports while scanning.
 PROCEDURES |= procedure_cases(

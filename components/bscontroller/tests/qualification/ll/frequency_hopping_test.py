@@ -446,7 +446,7 @@ async def accepting_minimum_number_of_used_channels(tester):
     await link.disconnect()
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Verify that an advertiser accepts CONNECT_IND, stops advertising and maintains a
 # Peripheral connection using the correct data-channel sequence. The Lower Tester

@@ -12,161 +12,13 @@ from tests.qualification.cases import (
     procedure_cases,
     verify_case,
 )
+from tests.qualification.hci.capabilities import COMMAND_BITS
 from tests.qualification.peer import establish
 from tests.qualification.tester import LOWER_PERIPHERAL_PUBLIC_ADDRESS
 
 ErrorCode = hci.HCI_ErrorCode
 RADIO_CASES = {'HCI/CIN/BV-14-C'}
 
-# Independent ICS/IXIT declaration of this test DUT; never read from the backend.
-EXPECTED_COMMANDS = frozenset(
-    {
-        hci.HCI_DISCONNECT_COMMAND,
-        hci.HCI_READ_CONNECTION_ACCEPT_TIMEOUT_COMMAND,
-        hci.HCI_WRITE_CONNECTION_ACCEPT_TIMEOUT_COMMAND,
-        hci.HCI_LE_ADD_DEVICE_TO_RESOLVING_LIST_COMMAND,
-        hci.HCI_LE_REMOVE_DEVICE_FROM_RESOLVING_LIST_COMMAND,
-        hci.HCI_LE_CLEAR_RESOLVING_LIST_COMMAND,
-        hci.HCI_LE_READ_RESOLVING_LIST_SIZE_COMMAND,
-        hci.HCI_LE_READ_PEER_RESOLVABLE_ADDRESS_COMMAND,
-        hci.HCI_LE_READ_LOCAL_RESOLVABLE_ADDRESS_COMMAND,
-        hci.HCI_LE_SET_ADDRESS_RESOLUTION_ENABLE_COMMAND,
-        hci.HCI_LE_SET_RESOLVABLE_PRIVATE_ADDRESS_TIMEOUT_COMMAND,
-        hci.HCI_LE_SET_RESOLVABLE_PRIVATE_ADDRESS_TIMEOUT_V2_COMMAND,
-        hci.HCI_LE_SET_PRIVACY_MODE_COMMAND,
-        hci.HCI_LE_SET_DECISION_DATA_COMMAND,
-        hci.HCI_LE_SET_DECISION_INSTRUCTIONS_COMMAND,
-        hci.HCI_LE_ADD_DEVICE_TO_FILTER_ACCEPT_LIST_COMMAND,
-        hci.HCI_LE_ADD_DEVICE_TO_PERIODIC_ADVERTISER_LIST_COMMAND,
-        hci.HCI_LE_CLEAR_ADVERTISING_SETS_COMMAND,
-        hci.HCI_LE_CLEAR_FILTER_ACCEPT_LIST_COMMAND,
-        hci.HCI_LE_CLEAR_PERIODIC_ADVERTISER_LIST_COMMAND,
-        hci.HCI_LE_CONNECTION_UPDATE_COMMAND,
-        hci.HCI_LE_CREATE_CONNECTION_CANCEL_COMMAND,
-        hci.HCI_LE_CREATE_CONNECTION_COMMAND,
-        hci.HCI_LE_ENABLE_ENCRYPTION_COMMAND,
-        hci.HCI_LE_ENCRYPT_COMMAND,
-        hci.HCI_LE_READ_LOCAL_P_256_PUBLIC_KEY_COMMAND,
-        hci.HCI_LE_GENERATE_DHKEY_COMMAND,
-        hci.HCI_LE_GENERATE_DHKEY_V2_COMMAND,
-        hci.HCI_LE_EXTENDED_CREATE_CONNECTION_COMMAND,
-        hci.HCI_LE_LONG_TERM_KEY_REQUEST_NEGATIVE_REPLY_COMMAND,
-        hci.HCI_LE_LONG_TERM_KEY_REQUEST_REPLY_COMMAND,
-        hci.HCI_LE_PERIODIC_ADVERTISING_CREATE_SYNC_CANCEL_COMMAND,
-        hci.HCI_LE_PERIODIC_ADVERTISING_CREATE_SYNC_COMMAND,
-        hci.HCI_LE_PERIODIC_ADVERTISING_SET_INFO_TRANSFER_COMMAND,
-        hci.HCI_LE_PERIODIC_ADVERTISING_SYNC_TRANSFER_COMMAND,
-        hci.HCI_LE_PERIODIC_ADVERTISING_TERMINATE_SYNC_COMMAND,
-        hci.HCI_LE_RAND_COMMAND,
-        hci.HCI_LE_READ_ADVERTISING_PHYSICAL_CHANNEL_TX_POWER_COMMAND,
-        hci.HCI_LE_READ_BUFFER_SIZE_COMMAND,
-        hci.HCI_LE_READ_BUFFER_SIZE_V2_COMMAND,
-        hci.HCI_LE_READ_ISO_TX_SYNC_COMMAND,
-        hci.HCI_LE_READ_ISO_LINK_QUALITY_COMMAND,
-        hci.HCI_LE_SET_CIG_PARAMETERS_COMMAND,
-        hci.HCI_LE_SET_CIG_PARAMETERS_TEST_COMMAND,
-        hci.HCI_LE_CREATE_CIS_COMMAND,
-        hci.HCI_LE_REMOVE_CIG_COMMAND,
-        hci.HCI_LE_ACCEPT_CIS_REQUEST_COMMAND,
-        hci.HCI_LE_REJECT_CIS_REQUEST_COMMAND,
-        hci.HCI_LE_CREATE_BIG_COMMAND,
-        hci.HCI_LE_CREATE_BIG_TEST_COMMAND,
-        hci.HCI_LE_TERMINATE_BIG_COMMAND,
-        hci.HCI_LE_BIG_CREATE_SYNC_COMMAND,
-        hci.HCI_LE_BIG_TERMINATE_SYNC_COMMAND,
-        hci.HCI_LE_SETUP_ISO_DATA_PATH_COMMAND,
-        hci.HCI_LE_REMOVE_ISO_DATA_PATH_COMMAND,
-        hci.HCI_LE_ISO_TRANSMIT_TEST_COMMAND,
-        hci.HCI_LE_ISO_RECEIVE_TEST_COMMAND,
-        hci.HCI_LE_ISO_READ_TEST_COUNTERS_COMMAND,
-        hci.HCI_LE_ISO_TEST_END_COMMAND,
-        hci.HCI_LE_READ_CHANNEL_MAP_COMMAND,
-        hci.HCI_LE_READ_FILTER_ACCEPT_LIST_SIZE_COMMAND,
-        hci.HCI_LE_READ_LOCAL_SUPPORTED_FEATURES_COMMAND,
-        hci.HCI_LE_READ_ALL_LOCAL_SUPPORTED_FEATURES_COMMAND,
-        hci.HCI_LE_READ_ALL_REMOTE_FEATURES_COMMAND,
-        hci.HCI_LE_ADD_DEVICE_TO_MONITORED_ADVERTISERS_LIST_COMMAND,
-        hci.HCI_LE_REMOVE_DEVICE_FROM_MONITORED_ADVERTISERS_LIST_COMMAND,
-        hci.HCI_LE_CLEAR_MONITORED_ADVERTISERS_LIST_COMMAND,
-        hci.HCI_LE_READ_MONITORED_ADVERTISERS_LIST_SIZE_COMMAND,
-        hci.HCI_LE_ENABLE_MONITORING_ADVERTISERS_COMMAND,
-        hci.HCI_LE_READ_MAXIMUM_ADVERTISING_DATA_LENGTH_COMMAND,
-        hci.HCI_LE_READ_MAXIMUM_DATA_LENGTH_COMMAND,
-        hci.HCI_LE_READ_NUMBER_OF_SUPPORTED_ADVERTISING_SETS_COMMAND,
-        hci.HCI_LE_READ_PERIODIC_ADVERTISER_LIST_SIZE_COMMAND,
-        hci.HCI_LE_READ_PHY_COMMAND,
-        hci.HCI_LE_READ_RF_PATH_COMPENSATION_COMMAND,
-        hci.HCI_LE_WRITE_RF_PATH_COMPENSATION_COMMAND,
-        hci.HCI_LE_ENHANCED_READ_TRANSMIT_POWER_LEVEL_COMMAND,
-        hci.HCI_LE_READ_REMOTE_TRANSMIT_POWER_LEVEL_COMMAND,
-        hci.HCI_LE_SET_PATH_LOSS_REPORTING_PARAMETERS_COMMAND,
-        hci.HCI_LE_SET_PATH_LOSS_REPORTING_ENABLE_COMMAND,
-        hci.HCI_LE_SET_TRANSMIT_POWER_REPORTING_ENABLE_COMMAND,
-        hci.HCI_LE_READ_REMOTE_FEATURES_COMMAND,
-        hci.HCI_LE_CONNECTION_RATE_REQUEST_COMMAND,
-        hci.HCI_LE_SET_DEFAULT_RATE_PARAMETERS_COMMAND,
-        hci.HCI_LE_READ_MINIMUM_SUPPORTED_CONNECTION_INTERVAL_COMMAND,
-        hci.HCI_LE_MODIFY_SLEEP_CLOCK_ACCURACY_COMMAND,
-        hci.HCI_LE_REQUEST_PEER_SCA_COMMAND,
-        hci.HCI_LE_SET_HOST_FEATURE_COMMAND,
-        hci.HCI_LE_SET_HOST_FEATURE_V2_COMMAND,
-        hci.HCI_LE_SET_DEFAULT_SUBRATE_COMMAND,
-        hci.HCI_LE_SUBRATE_REQUEST_COMMAND,
-        hci.HCI_LE_FRAME_SPACE_UPDATE_COMMAND,
-        hci.HCI_LE_READ_SUGGESTED_DEFAULT_DATA_LENGTH_COMMAND,
-        hci.HCI_LE_READ_SUPPORTED_STATES_COMMAND,
-        hci.HCI_LE_REMOTE_CONNECTION_PARAMETER_REQUEST_NEGATIVE_REPLY_COMMAND,
-        hci.HCI_LE_REMOTE_CONNECTION_PARAMETER_REQUEST_REPLY_COMMAND,
-        hci.HCI_LE_REMOVE_ADVERTISING_SET_COMMAND,
-        hci.HCI_LE_REMOVE_DEVICE_FROM_FILTER_ACCEPT_LIST_COMMAND,
-        hci.HCI_LE_REMOVE_DEVICE_FROM_PERIODIC_ADVERTISER_LIST_COMMAND,
-        hci.HCI_LE_SET_ADVERTISING_DATA_COMMAND,
-        hci.HCI_LE_SET_ADVERTISING_ENABLE_COMMAND,
-        hci.HCI_LE_SET_ADVERTISING_PARAMETERS_COMMAND,
-        hci.HCI_LE_SET_ADVERTISING_SET_RANDOM_ADDRESS_COMMAND,
-        hci.HCI_LE_SET_DATA_LENGTH_COMMAND,
-        hci.HCI_LE_SET_DEFAULT_PERIODIC_ADVERTISING_SYNC_TRANSFER_PARAMETERS_COMMAND,
-        hci.HCI_LE_SET_DEFAULT_PHY_COMMAND,
-        hci.HCI_LE_SET_EVENT_MASK_COMMAND,
-        hci.HCI_LE_SET_EXTENDED_ADVERTISING_DATA_COMMAND,
-        hci.HCI_LE_SET_EXTENDED_ADVERTISING_ENABLE_COMMAND,
-        hci.HCI_LE_SET_EXTENDED_ADVERTISING_PARAMETERS_COMMAND,
-        hci.HCI_LE_SET_EXTENDED_ADVERTISING_PARAMETERS_V2_COMMAND,
-        hci.HCI_LE_SET_EXTENDED_SCAN_ENABLE_COMMAND,
-        hci.HCI_LE_SET_EXTENDED_SCAN_PARAMETERS_COMMAND,
-        hci.HCI_LE_SET_EXTENDED_SCAN_RESPONSE_DATA_COMMAND,
-        hci.HCI_LE_SET_HOST_CHANNEL_CLASSIFICATION_COMMAND,
-        hci.HCI_LE_SET_PERIODIC_ADVERTISING_DATA_COMMAND,
-        hci.HCI_LE_SET_PERIODIC_ADVERTISING_ENABLE_COMMAND,
-        hci.HCI_LE_SET_PERIODIC_ADVERTISING_PARAMETERS_COMMAND,
-        hci.HCI_LE_SET_PERIODIC_ADVERTISING_PARAMETERS_V2_COMMAND,
-        hci.HCI_LE_SET_PERIODIC_ADVERTISING_SUBEVENT_DATA_COMMAND,
-        hci.HCI_LE_SET_PERIODIC_ADVERTISING_RESPONSE_DATA_COMMAND,
-        hci.HCI_LE_SET_PERIODIC_SYNC_SUBEVENT_COMMAND,
-        hci.HCI_LE_EXTENDED_CREATE_CONNECTION_V2_COMMAND,
-        hci.HCI_LE_SET_PERIODIC_ADVERTISING_RECEIVE_ENABLE_COMMAND,
-        hci.HCI_LE_SET_PERIODIC_ADVERTISING_SYNC_TRANSFER_PARAMETERS_COMMAND,
-        hci.HCI_LE_SET_PHY_COMMAND,
-        hci.HCI_LE_SET_RANDOM_ADDRESS_COMMAND,
-        hci.HCI_LE_SET_SCAN_ENABLE_COMMAND,
-        hci.HCI_LE_SET_SCAN_PARAMETERS_COMMAND,
-        hci.HCI_LE_SET_SCAN_RESPONSE_DATA_COMMAND,
-        hci.HCI_LE_WRITE_SUGGESTED_DEFAULT_DATA_LENGTH_COMMAND,
-        hci.HCI_READ_AUTHENTICATED_PAYLOAD_TIMEOUT_COMMAND,
-        hci.HCI_READ_AUTOMATIC_FLUSH_TIMEOUT_COMMAND,
-        hci.HCI_READ_BD_ADDR_COMMAND,
-        hci.HCI_READ_LOCAL_SUPPORTED_COMMANDS_COMMAND,
-        hci.HCI_READ_LOCAL_SUPPORTED_FEATURES_COMMAND,
-        hci.HCI_READ_LOCAL_VERSION_INFORMATION_COMMAND,
-        hci.HCI_READ_REMOTE_VERSION_INFORMATION_COMMAND,
-        hci.HCI_READ_RSSI_COMMAND,
-        hci.HCI_RESET_COMMAND,
-        hci.HCI_SET_EVENT_MASK_COMMAND,
-        hci.HCI_SET_EVENT_MASK_PAGE_2_COMMAND,
-        hci.HCI_WRITE_AUTHENTICATED_PAYLOAD_TIMEOUT_COMMAND,
-        hci.HCI_WRITE_AUTOMATIC_FLUSH_TIMEOUT_COMMAND,
-    }
-)
 EXPECTED_LOCAL_VERSION = (
     hci.SpecificationVersion.BLUETOOTH_CORE_6_1,
     0,
@@ -176,57 +28,16 @@ EXPECTED_LOCAL_VERSION = (
 )
 
 
-# Expected capability declarations of the configured DUT, not implementation imports.
-EXPECTED_LE_FEATURES = int(
-    hci.LeFeatureMask.LE_ENCRYPTION
-    | hci.LeFeatureMask.LL_PRIVACY
-    | hci.LeFeatureMask.EXTENDED_SCANNER_FILTER_POLICIES
-    | hci.LeFeatureMask.DECISION_BASED_ADVERTISING_FILTERING
-    | hci.LeFeatureMask.ADVERTISING_CODING_SELECTION
-    | hci.LeFeatureMask.LE_PING
-    | hci.LeFeatureMask.LE_EXTENDED_ADVERTISING
-    | hci.LeFeatureMask.LE_PERIODIC_ADVERTISING
-    | hci.LeFeatureMask.PERIODIC_ADVERTISING_ADI_SUPPORT
-    | hci.LeFeatureMask.PERIODIC_ADVERTISING_WITH_RESPONSES_ADVERTISER
-    | hci.LeFeatureMask.PERIODIC_ADVERTISING_WITH_RESPONSES_SCANNER
-    | hci.LeFeatureMask.PERIODIC_ADVERTISING_SYNC_TRANSFER_SENDER
-    | hci.LeFeatureMask.PERIODIC_ADVERTISING_SYNC_TRANSFER_RECIPIENT
-    | hci.LeFeatureMask.CHANNEL_SELECTION_ALGORITHM_2
-    | hci.LeFeatureMask.CONNECTION_PARAMETERS_REQUEST_PROCEDURE
-    | hci.LeFeatureMask.EXTENDED_REJECT_INDICATION
-    | hci.LeFeatureMask.LE_2M_PHY
-    | hci.LeFeatureMask.LE_CODED_PHY
-    | hci.LeFeatureMask.LE_DATA_PACKET_LENGTH_EXTENSION
-    | hci.LeFeatureMask.PERIPHERAL_INITIATED_FEATURE_EXCHANGE
-    | hci.LeFeatureMask.LE_POWER_CONTROL_REQUEST
-    | hci.LeFeatureMask.LE_POWER_CONTROL_REQUEST_DUP
-    | hci.LeFeatureMask.LE_PATH_LOSS_MONITORING
-    | hci.LeFeatureMask.MINIMUM_NUMBER_OF_USED_CHANNELS_PROCEDURE
-    | hci.LeFeatureMask.REMOTE_PUBLIC_KEY_VALIDATION
-    | hci.LeFeatureMask.LL_EXTENDED_FEATURE_SET
-    | hci.LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_CENTRAL
-    | hci.LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_PERIPHERAL
-    | hci.LeFeatureMask.ISOCHRONOUS_BROADCASTER
-    | hci.LeFeatureMask.SYNCHRONIZED_RECEIVER
-    | hci.LeFeatureMask.SLEEP_CLOCK_ACCURACY_UPDATES
-    | hci.LeFeatureMask.CONNECTION_SUBRATING
-).to_bytes(8, 'little')
-EXPECTED_LE_FEATURES_PAGE_1 = (
-    (
-        hci.LeFeatureMask.MONITORING_ADVERTISERS
-        | hci.LeFeatureMask.FRAME_SPACE_UPDATE
-        | hci.LeFeatureMask.SHORTER_CONNECTION_INTERVALS
-        | hci.LeFeatureMask.LE_FLUSHABLE_ACL_DATA
-    )
-    >> 64
-).to_bytes(24, 'little')
+# Core Vol 6, Part B, 4.6, Table 4.9. Host-controlled bits are zero at reset.
+EXPECTED_LE_FEATURES = bytes.fromhex('ff 79 01 ff 3e 1d 00 80')
+EXPECTED_LE_FEATURES_PAGE_1 = bytes.fromhex('03 05') + bytes(22)
 
 
 async def read_local_supported_commands(tester):
     """Read Local Supported Commands command.
 
     Initial Condition:
-        No LL connection exists. EXPECTED_COMMANDS declares this LE Controller's
+        No LL connection exists. The ICS declares this LE Controller's
         supported commands independently of the returned bitmap or backend.
 
     Test Steps:
@@ -245,18 +56,18 @@ async def read_local_supported_commands(tester):
         PDF/printed pages 49-50; source [1] 7.4.2 and [2] LE Command Tables.
     """
     result = await tester.command(hci.HCI_Read_Local_Supported_Commands_Command())
-    # Read Local Supported Commands itself has no bit assigned in this bitmap.
-    mapped = EXPECTED_COMMANDS - {hci.HCI_READ_LOCAL_SUPPORTED_COMMANDS_COMMAND}
-    expected = sum(hci.HCI_SUPPORTED_COMMANDS_MASKS[op] for op in mapped)
-    assert result.supported_commands == expected.to_bytes(64, 'little')
+    expected = bytearray(64)
+    for octet, bit in COMMAND_BITS.values():
+        expected[octet] |= 1 << bit
+    assert result.supported_commands == expected
 
 
 async def read_local_version_information(tester):
     """Read Local Version Information Command.
 
     Initial Condition:
-        No LL connection exists. EXPECTED_LOCAL_VERSION declares HCI 5.0,
-        revision zero, LMP 5.0, manufacturer 0xFFFF and subversion zero.
+        No LL connection exists. EXPECTED_LOCAL_VERSION declares HCI 6.1,
+        revision zero, LMP 6.1, manufacturer 0xFFFF and subversion zero.
 
     Test Steps:
         The source procedure is the unnumbered MSC in Figure 4.18:
@@ -424,7 +235,7 @@ async def read_rssi(tester):
     await link.disconnect()
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Verify the v1 Supported_Commands bitmap against the independently declared commands,
 # including zero bits for unsupported or undefined commands.
@@ -497,7 +308,8 @@ async def read_all_local_supported_features(tester):
     Initial Condition:
         The IUT has no LL connection. The declared page 0 features are those of
         EXPECTED_LE_FEATURES; page 1 declares Monitoring Advertisers (bit 64)
-        and Frame Space Update (bit 65).
+        and Frame Space Update (bit 65), plus Shorter Connection Intervals and
+        LE Flushable ACL Data (bits 72 and 74).
 
     Test Steps:
         1. Send HCI LE Read All Local Supported Features.

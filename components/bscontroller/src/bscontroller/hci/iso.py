@@ -4,7 +4,7 @@
 """CIG, BIG and ISO commands and Host data input (Core Vol 4, Part E)."""
 
 from bscontroller import hci
-from bscontroller.hci.context import INVALID, SUCCESS, LeControllerContext
+from bscontroller.hci.context import SUCCESS, LeControllerContext
 from bscontroller.linklayer.api import (
     BigConfig,
     BigSyncConfig,
@@ -27,19 +27,15 @@ class LeIsoCommands(LeControllerContext):
 
     def on_hci_read_connection_accept_timeout_command(self, command):
         return hci.HCI_Read_Connection_Accept_Timeout_ReturnParameters(
-            SUCCESS, self.ll.connection_accept_timeout
+            SUCCESS, self.ll.cig.connection_accept_timeout
         )
 
     def on_hci_write_connection_accept_timeout_command(self, command):
-        # Vol 4, Part E, 6.7: 0.625 ms through 29 s in 625 µs units.
-        timeout = command.connection_accept_timeout
-        if not 1 <= timeout <= 0xB540:
-            return hci.HCI_StatusReturnParameters(INVALID)
-        self.ll.set_connection_accept_timeout(timeout)
-        return hci.HCI_StatusReturnParameters(SUCCESS)
+        status = self.ll.cig.set_accept_timeout(command.connection_accept_timeout)
+        return hci.HCI_StatusReturnParameters(status)
 
     def _set_cig_parameters(self, command, streams, **parameters):
-        status, handles = self.ll.set_cig_parameters(
+        status, handles = self.ll.cig.set_cig_parameters(
             CigConfig(
                 cig_id=command.cig_id,
                 sdu_interval_c_to_p=command.sdu_interval_c_to_p,
@@ -126,7 +122,7 @@ class LeIsoCommands(LeControllerContext):
         )
 
     def on_hci_le_create_cis_command(self, command):
-        status = self.ll.create_cis(
+        status = self.ll.cig.create_cis(
             tuple(
                 zip(
                     command.cis_connection_handle,
@@ -139,21 +135,21 @@ class LeIsoCommands(LeControllerContext):
 
     def on_hci_le_remove_cig_command(self, command):
         return hci.HCI_LE_Remove_CIG_ReturnParameters(
-            self.ll.remove_cig(command.cig_id), command.cig_id
+            self.ll.cig.remove_cig(command.cig_id), command.cig_id
         )
 
     def on_hci_le_accept_cis_request_command(self, command):
-        status = self.ll.accept_cis(command.connection_handle)
+        status = self.ll.cig.accept_cis(command.connection_handle)
         self.controller._send_hci_command_status(status, command.op_code)
 
     def on_hci_le_reject_cis_request_command(self, command):
-        status = self.ll.reject_cis(command.connection_handle, command.reason)
+        status = self.ll.cig.reject_cis(command.connection_handle, command.reason)
         return hci.HCI_StatusAndConnectionHandleReturnParameters(
             status, command.connection_handle
         )
 
     def _create_big(self, command, test=None):
-        status = self.ll.create_big(
+        status = self.ll.big.create(
             BigConfig(
                 handle=command.big_handle,
                 advertising_handle=command.advertising_handle,
@@ -191,11 +187,11 @@ class LeIsoCommands(LeControllerContext):
         )
 
     def on_hci_le_terminate_big_command(self, command):
-        status = self.ll.terminate_big(command.big_handle, command.reason)
+        status = self.ll.big.terminate(command.big_handle, command.reason)
         self.controller._send_hci_command_status(status, command.op_code)
 
     def on_hci_le_big_create_sync_command(self, command):
-        status = self.ll.synchronize_big(
+        status = self.ll.big.synchronize(
             BigSyncConfig(
                 command.big_handle,
                 command.sync_handle,
@@ -209,13 +205,13 @@ class LeIsoCommands(LeControllerContext):
         self.controller._send_hci_command_status(status, command.op_code)
 
     def on_hci_le_big_terminate_sync_command(self, command):
-        status = self.ll.terminate_big_sync(command.big_handle)
+        status = self.ll.big.terminate_sync(command.big_handle)
         return hci.HCI_LE_BIG_Terminate_Sync_ReturnParameters(
             status, command.big_handle
         )
 
     def on_hci_le_setup_iso_data_path_command(self, command):
-        status = self.ll.setup_iso_data_path(
+        status = self.ll.iso.setup(
             command.connection_handle,
             command.data_path_direction,
             command.data_path_id,
@@ -228,7 +224,7 @@ class LeIsoCommands(LeControllerContext):
         )
 
     def on_hci_le_remove_iso_data_path_command(self, command):
-        status = self.ll.remove_iso_data_path(
+        status = self.ll.iso.remove(
             command.connection_handle, command.data_path_direction
         )
         return hci.HCI_StatusAndConnectionHandleReturnParameters(
@@ -236,7 +232,7 @@ class LeIsoCommands(LeControllerContext):
         )
 
     def on_hci_le_read_iso_tx_sync_command(self, command):
-        status, sync = self.ll.iso_tx_sync(command.connection_handle)
+        status, sync = self.ll.iso.read_tx_sync(command.connection_handle)
         return hci.HCI_LE_Read_ISO_TX_Sync_ReturnParameters(
             status,
             command.connection_handle,
@@ -246,21 +242,19 @@ class LeIsoCommands(LeControllerContext):
         )
 
     def on_hci_le_read_iso_link_quality_command(self, command):
-        status, counters = self.ll.iso_link_quality(command.connection_handle)
+        status, counters = self.ll.iso.link_quality(command.connection_handle)
         return hci.HCI_LE_Read_ISO_Link_Quality_ReturnParameters(
             status, command.connection_handle, *counters
         )
 
     def on_hci_le_iso_transmit_test_command(self, command):
-        status = self.ll.set_iso_test(
-            command.connection_handle, True, command.payload_type
-        )
+        status = self.ll.iso.test(command.connection_handle, True, command.payload_type)
         return hci.HCI_StatusAndConnectionHandleReturnParameters(
             status, command.connection_handle
         )
 
     def on_hci_le_iso_receive_test_command(self, command):
-        status = self.ll.set_iso_test(
+        status = self.ll.iso.test(
             command.connection_handle, False, command.payload_type
         )
         return hci.HCI_StatusAndConnectionHandleReturnParameters(
@@ -268,7 +262,7 @@ class LeIsoCommands(LeControllerContext):
         )
 
     def on_hci_le_iso_read_test_counters_command(self, command):
-        status, counters = self.ll.iso_test_counters(command.connection_handle)
+        status, counters = self.ll.iso.counters(command.connection_handle)
         return hci.HCI_LE_ISO_Read_Test_Counters_ReturnParameters(
             status,
             command.connection_handle,
@@ -278,9 +272,7 @@ class LeIsoCommands(LeControllerContext):
         )
 
     def on_hci_le_iso_test_end_command(self, command):
-        status, counters = self.ll.iso_test_counters(
-            command.connection_handle, end=True
-        )
+        status, counters = self.ll.iso.counters(command.connection_handle, end=True)
         return hci.HCI_LE_ISO_Read_Test_Counters_ReturnParameters(
             status,
             command.connection_handle,
@@ -290,7 +282,7 @@ class LeIsoCommands(LeControllerContext):
         )
 
     def on_iso_packet(self, packet):
-        self.ll.receive_iso_packet(
+        self.ll.iso.input(
             packet.connection_handle,
             packet.iso_sdu_fragment,
             packet.pb_flag,

@@ -135,7 +135,6 @@ class ConnectionSnapshot:
     peer_features: int | None
     peer_version: tuple[int, int, int] | None
     data_lengths: DataLengths
-    auth_timeout_us: int
     reported: bool
     advertising_handle: int | None
     advertising_events: int
@@ -159,7 +158,6 @@ def connection_snapshot(connection: Connection) -> ConnectionSnapshot:
         connection.peer_features,
         connection.controls.peer_version,
         connection.controls.data_length.effective(),
-        connection.encryption.auth_timeout_us,
         connection.reported,
         connection.advertising_handle,
         connection.advertising_events,

@@ -105,6 +105,13 @@ class ControlProcedures:
         self.clock_accuracy = ClockAccuracyProcedure(self)
         self.subrating = Subrating(self)
         self.rate = ConnectionRateProcedure(self)
+        self._local_procedures = (
+            self.power,
+            self.clock_accuracy,
+            self.subrating,
+            self.rate,
+            self.frame_space,
+        )
         # Includes a local indication queued but not yet transmitted during a collision.
         self.version_sent = False
         self.peer_version: tuple[int, int, int] | None = None
@@ -137,11 +144,7 @@ class ControlProcedures:
             self.phy.context,
             self.connection_parameters.local_context,
             self.data_length.context,
-            self.power.context,
-            self.clock_accuracy.context,
-            self.subrating.context,
-            self.frame_space.context,
-            self.rate.context,
+            *(procedure.context for procedure in self._local_procedures),
         )
         return tuple(context for context in contexts if context is not None)
 
@@ -171,31 +174,22 @@ class ControlProcedures:
         return (
             self.peer_instant_blocked
             or self.version_request
-            or self.power.pending
-            or self.clock_accuracy.pending
-            or self.subrating.pending
-            or self.frame_space.busy
-            or self.rate.pending
+            or any(procedure.busy for procedure in self._local_procedures)
         )
 
     @property
     def next_deadline_us(self) -> int:
-        deadlines = [
-            deadline
-            for deadline in (
-                self.deadline_us,
-                self.data_length.deadline_us,
-                self.features.deadline_us,
-                self.version_deadline_us,
-                self.power.deadline_us,
-                self.clock_accuracy.deadline_us,
-                self.subrating.deadline_us,
-                self.frame_space.deadline_us,
-                self.rate.deadline_us,
-            )
-            if deadline
-        ]
-        return min(deadlines) if deadlines else 0
+        deadlines = (
+            self.data_length.deadline_us,
+            self.features.deadline_us,
+            self.version_deadline_us,
+            *self._response_deadlines(),
+        )
+        return min((deadline for deadline in deadlines if deadline), default=0)
+
+    def _response_deadlines(self) -> tuple[int, ...]:
+        """Procedures that disconnect the ACL on response timeout."""
+        return (self.deadline_us, *(p.deadline_us for p in self._local_procedures))
 
     def _instant_phys(self, update: InstantUpdate) -> tuple[int, int]:
         if self.connection.role == Role.CENTRAL:
@@ -572,13 +566,7 @@ class ControlProcedures:
             return True
         if self.data_length.control(payload) or self.features.control(payload):
             return True
-        if self.power.control(payload) or self.clock_accuracy.control(payload):
-            return True
-        if self.subrating.control(payload):
-            return True
-        if self.rate.control(payload):
-            return True
-        if self.frame_space.control(payload):
+        if any(procedure.control(payload) for procedure in self._local_procedures):
             return True
         opcode = payload[0]
         if (
@@ -770,17 +758,7 @@ class ControlProcedures:
         if self.features.check_timeout():
             return True
         now = self.connection.radio.now_us
-        if any(
-            deadline and now >= deadline
-            for deadline in (
-                self.deadline_us,
-                self.power.deadline_us,
-                self.clock_accuracy.deadline_us,
-                self.subrating.deadline_us,
-                self.frame_space.deadline_us,
-                self.rate.deadline_us,
-            )
-        ):
+        if any(deadline and now >= deadline for deadline in self._response_deadlines()):
             self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
             return True
         return False

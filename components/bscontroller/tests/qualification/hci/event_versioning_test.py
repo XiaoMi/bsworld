@@ -7,17 +7,17 @@ import pytest
 
 from bscontroller import hci
 from bscontroller.linklayer import LL_PERIODIC_INTERVAL_UNIT_US
+from tests.qualification import security
 from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.qualification.hci.device_discovery_test import (
-    _start_scanning,
-)
-from tests.qualification.ll import security_test as security
 from tests.qualification.peer import establish, host_send
+from tests.qualification.periodic import (
+    scan_periodic_advertiser,
+)
 from tests.qualification.tester import (
     LOWER_PERIPHERAL_PUBLIC_ADDRESS,
     create_connection,
@@ -146,7 +146,7 @@ async def encryption_change_versions(tester, *, central):
         encrypted-data, termination and random-address repetition steps.
     """
     for v1, v2 in ((True, True), (False, True), (True, False)):
-        link = await security._security_link(tester, central)
+        link = await security.establish_security_link(tester, central)
         general = (1 << 64) - 1
         if not v1:
             general &= ~(1 << (hci.HCI_ENCRYPTION_CHANGE_EVENT - 1))
@@ -158,13 +158,13 @@ async def encryption_change_versions(tester, *, central):
                 (ENCRYPTION_CHANGE_V2_MASK if v2 else 0).to_bytes(8, 'little')
             )
         )
-        await security._feature_exchange(link, ping=False)
+        await security.exchange_security_features(link, ping=False)
         for _ in range(
             security.MODE_SETUP_TOTAL_OCTETS // security.MODE_SETUP_DATA_SIZE
         ):
             await host_send(tester, link, bytes(security.MODE_SETUP_DATA_SIZE))
-        await security._begin(tester, link)
-        await security._finish(tester, link, check_event=False)
+        await security.begin_encryption(tester, link)
+        await security.finish_encryption(tester, link, check_event=False)
         event = _version_result(
             tester,
             ENCRYPTION_EVENTS,
@@ -228,7 +228,7 @@ async def periodic_sync_established_versions(tester):
         HCI.TS.p39.pdf, 4.17.3, HCI/EVV/BV-08-C, Table 4.122, Steps 1-14
         and alternative B; PDF/printed 375-376; source [17] 7.7.65.14.
     """
-    train = await _start_scanning(tester)
+    train = await scan_periodic_advertiser(tester)
     for v1, v2 in ((True, True), (False, True), (True, False)):
         await _le_versions(tester, SYNC_EVENTS, v1=v1, v2=v2)
         await tester.command(create_sync(sync_timeout=200))
@@ -279,7 +279,7 @@ async def periodic_report_versions(tester):
         HCI.TS.p39.pdf, 4.17.4, HCI/EVV/BV-10-C, Table 4.123, Steps 1-6
         and settling note; PDF/printed 376-377; source [17] 7.7.65.15.
     """
-    train = await _start_scanning(tester)
+    train = await scan_periodic_advertiser(tester)
     await tester.command(create_sync(sync_timeout=200))
     await train.announce(tester)
     await train.transmit(tester, b'setup')
@@ -438,7 +438,7 @@ async def central_connection_complete_versions(tester):
             assert event.status == ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Verify Encryption Change event-version selection under both-enabled, v2-only and
 # v1-only masks for an LE Controller supporting both versions.

@@ -518,7 +518,7 @@ async def peripheral_recommended_offset(tester):
     )
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Explicit test parameters cover LE Coded, asymmetric PHYs and LE 2M.
 PROCEDURES |= procedure_cases(

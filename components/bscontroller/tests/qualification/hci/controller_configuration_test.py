@@ -33,13 +33,13 @@ from tests.qualification.cases import (
     procedure_cases,
     verify_case,
 )
-from tests.qualification.hci.power_control_test import expect_remote_power_read_error
 from tests.qualification.peer import (
     PEER_FEATURES,
     change_phy,
     establish,
     exchange_feature_page,
     exchange_features,
+    expect_remote_power_read_error,
 )
 from tests.qualification.tester import (
     PEER_ADDRESS,
@@ -1407,7 +1407,7 @@ async def invalid_path_loss_monitoring_parameters(tester):
     await link.disconnect()
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Verify that a valid RF path compensation write completes in standby.
 PROCEDURES |= procedure_cases(

@@ -328,7 +328,7 @@ async def cis_receive_missing(tester, *, central):
     await _close_cis(tester, link, handle)
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Exercise all test payload patterns and counter outcomes for both CIS roles.
 for number, procedure, description in (

@@ -1005,7 +1005,7 @@ def _phy_cases(numbers, title, **parameters):
     }
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Confirm all three path-loss zones and a live threshold change.
 PROCEDURES |= procedure_cases(

@@ -27,6 +27,12 @@ from bscontroller.linklayer import (
 )
 from bscontroller.linklayer.timing import LL_RESPONSE_START_TOLERANCE_US
 from bscontroller.radio.base import RADIO_SWITCH_TIME_US, Phy
+from tests.unit.linklayer.air.advertising import (
+    LEGACY_INTERVAL,
+    AdvType,
+    configure_legacy,
+    enable_legacy,
+)
 from tests.unit.linklayer.air.harness import (
     CONNECT_PARAMETERS,
     IUT_ADDRESS,
@@ -40,43 +46,10 @@ from tests.unit.linklayer.air.harness import (
     scan_req,
 )
 
-AdvType = hci.HCI_LE_Set_Advertising_Parameters_Command.AdvertisingType
-INTERVAL = 32  # 20 ms, the minimum legacy interval for undirected advertising
-INTERVAL_US = INTERVAL * HCI_LE_ADV_INTERVAL_UNIT_US
+INTERVAL_US = LEGACY_INTERVAL * HCI_LE_ADV_INTERVAL_UNIT_US
 # The Host unmasks every LE event, so the Enhanced form is used (7.7.65.10).
 CONNECTED = hci.HCI_LE_Enhanced_Connection_Complete_Event
 ADV_CHANNELS = [37, 38, 39]
-
-
-def configure(
-    iut,
-    kind=AdvType.ADV_IND,
-    *,
-    data=b'',
-    scan_response=b'',
-    peer=PEER,
-    channel_map=0x07,
-    policy=0,
-    own=hci.OwnAddressType.PUBLIC,
-):
-    iut.ut(
-        hci.HCI_LE_Set_Advertising_Parameters_Command(
-            INTERVAL,
-            INTERVAL,
-            kind,
-            own,
-            peer.address_type,
-            peer,
-            channel_map,
-            policy,
-        )
-    )
-    iut.ut(hci.HCI_LE_Set_Advertising_Data_Command(data))
-    iut.ut(hci.HCI_LE_Set_Scan_Response_Data_Command(scan_response))
-
-
-def enable(iut, on=True, status=ErrorCode.SUCCESS):
-    iut.ut(hci.HCI_LE_Set_Advertising_Enable_Command(int(on)), status)
 
 
 def one_event(iut):
@@ -117,8 +90,8 @@ def test_undirected_pdu_on_each_channel(iut, kind, pdu_type, chsel):
 
     Parameters range over ADV_IND (ChSel set), ADV_SCAN_IND and ADV_NONCONN_IND.
     """
-    configure(iut, kind, data=b'\x02\x01\x06')
-    enable(iut)
+    configure_legacy(iut, kind, data=b'\x02\x01\x06')
+    enable_legacy(iut)
     packets = one_event(iut)
     assert [packet.channel for packet in packets] == ADV_CHANNELS
     for packet in packets:
@@ -152,8 +125,8 @@ def test_directed_pdu_carries_target_not_data(iut, kind):
 
     Parameters range over high and low duty cycle directed advertising.
     """
-    configure(iut, kind)
-    enable(iut)
+    configure_legacy(iut, kind)
+    enable_legacy(iut)
     packet = one_event(iut)[0]
     assert packet.kind == PduType.ADV_DIRECT_IND
     assert address_of(packet.pdu) == IUT_ADDRESS
@@ -179,8 +152,8 @@ def test_channel_map_selects_primary_channels_in_order(iut, channel_map, channel
 
     Parameters range over maps selecting {37}, {38}, and {37, 39}.
     """
-    configure(iut, AdvType.ADV_NONCONN_IND, channel_map=channel_map)
-    enable(iut)
+    configure_legacy(iut, AdvType.ADV_NONCONN_IND, channel_map=channel_map)
+    enable_legacy(iut)
     assert [packet.channel for packet in one_event(iut)] == channels
 
 
@@ -203,8 +176,8 @@ def test_connectable_event_listens_for_response_after_each_pdu(iut):
         - Three listen windows open, one per channel, each on the PDU's channel
           starting T_IFS after that PDU, adjusted by the response tolerance.
     """
-    configure(iut)
-    enable(iut)
+    configure_legacy(iut)
+    enable_legacy(iut)
     packets = one_event(iut)
     for previous, current in pairwise(packets):
         gap = current.start_us - previous.end_us
@@ -237,8 +210,8 @@ def test_nonconnectable_event_does_not_listen(iut):
     Expected:
         - The radio recorded no listen windows.
     """
-    configure(iut, AdvType.ADV_NONCONN_IND)
-    enable(iut)
+    configure_legacy(iut, AdvType.ADV_NONCONN_IND)
+    enable_legacy(iut)
     one_event(iut)
     assert not iut.radio.listens
 
@@ -260,8 +233,8 @@ def test_advertising_interval_includes_random_delay(iut):
         - Every inter-event gap lies in [advInterval, advInterval + 10 ms].
         - The gaps are not all identical.
     """
-    configure(iut, AdvType.ADV_NONCONN_IND)
-    enable(iut)
+    configure_legacy(iut, AdvType.ADV_NONCONN_IND)
+    enable_legacy(iut)
     iut.run(10 * INTERVAL_US)
     starts = [packet.start_us for packet in iut.lt_rx_all() if packet.channel == 37]
     gaps = [b - a for a, b in pairwise(starts)]
@@ -286,10 +259,10 @@ def test_disable_stops_advertising(iut):
     Expected:
         - No PDU is transmitted after the disable.
     """
-    configure(iut, AdvType.ADV_NONCONN_IND)
-    enable(iut)
+    configure_legacy(iut, AdvType.ADV_NONCONN_IND)
+    enable_legacy(iut)
     one_event(iut)
-    enable(iut, False)
+    enable_legacy(iut, False)
     iut.run(5 * INTERVAL_US)
     iut.lt_rx_q_is_empty()
 
@@ -321,8 +294,8 @@ def test_scan_request_answered_with_scan_response(iut, kind):
 
     Parameters range over ADV_IND and ADV_SCAN_IND.
     """
-    configure(iut, kind, scan_response=b'\x03\x09ab')
-    enable(iut)
+    configure_legacy(iut, kind, scan_response=b'\x03\x09ab')
+    enable_legacy(iut)
     iut.lt_tx(scan_req(), channel=37)
     packets = one_event(iut)
     advertised = PduType.ADV_IND if kind == AdvType.ADV_IND else PduType.ADV_SCAN_IND
@@ -372,8 +345,8 @@ def test_invalid_scan_request_is_ignored(iut, request_pdu):
     Parameters range over SCAN_REQ variants: wrong advertiser, truncated, length
     mismatch, and wrong RxAdd type.
     """
-    configure(iut, scan_response=b'rsp')
-    enable(iut)
+    configure_legacy(iut, scan_response=b'rsp')
+    enable_legacy(iut)
     iut.lt_tx(request_pdu, channel=37)
     assert all(packet.kind != PduType.SCAN_RSP for packet in one_event(iut))
 
@@ -394,8 +367,8 @@ def test_nonscannable_types_ignore_scan_request(iut):
     Expected:
         - No transmission in the event is a SCAN_RSP.
     """
-    configure(iut, AdvType.ADV_DIRECT_IND_LOW_DUTY)
-    enable(iut)
+    configure_legacy(iut, AdvType.ADV_DIRECT_IND_LOW_DUTY)
+    enable_legacy(iut)
     iut.lt_tx(scan_req(), channel=37)
     assert all(packet.kind != PduType.SCAN_RSP for packet in one_event(iut))
 
@@ -425,8 +398,8 @@ def test_scan_request_filter_policy(iut, policy, listed):
         iut.ut(
             hci.HCI_LE_Add_Device_To_Filter_Accept_List_Command(PEER.address_type, PEER)
         )
-    configure(iut, scan_response=b'rsp', policy=policy)
-    enable(iut)
+    configure_legacy(iut, scan_response=b'rsp', policy=policy)
+    enable_legacy(iut)
     iut.lt_tx(scan_req(), channel=37)
     answered = any(packet.kind == PduType.SCAN_RSP for packet in one_event(iut))
     # Bit 0 restricts scan requests to the Filter Accept List (Vol 4, 7.8.5).
@@ -462,8 +435,8 @@ def test_connect_request_creates_peripheral_connection(iut, chsel):
 
     Parameters range over the ChSel bit clear and set.
     """
-    configure(iut)
-    enable(iut)
+    configure_legacy(iut)
+    enable_legacy(iut)
     iut.lt_tx(connect_ind(chsel=chsel), channel=38)
     packets = one_event(iut)
     # The connection ends the event: nothing is sent on channel 39.
@@ -514,8 +487,8 @@ def test_malformed_connect_request_is_ignored(iut, lldata):
 
     Parameters range over short and long LLData.
     """
-    configure(iut)
-    enable(iut)
+    configure_legacy(iut)
+    enable_legacy(iut)
     iut.lt_tx(connect_ind(parameters=lldata), channel=37)
     assert len(one_event(iut)) == 3
     iut.ut_rx_q_is_empty()
@@ -540,8 +513,8 @@ def test_connect_request_with_invalid_parameters_is_ignored(iut):
     """
     from dataclasses import replace
 
-    configure(iut)
-    enable(iut)
+    configure_legacy(iut)
+    enable_legacy(iut)
     bad = replace(CONNECT_PARAMETERS, interval=5)
     iut.lt_tx(connect_ind(parameters=bad.encode()), channel=37)
     assert len(one_event(iut)) == 3
@@ -565,8 +538,8 @@ def test_nonconnectable_types_ignore_connect_request(iut, kind):
 
     Parameters range over ADV_SCAN_IND and ADV_NONCONN_IND.
     """
-    configure(iut, kind)
-    enable(iut)
+    configure_legacy(iut, kind)
+    enable_legacy(iut)
     iut.lt_tx(connect_ind(), channel=37)
     one_event(iut)
     assert not iut.link.connections
@@ -597,8 +570,8 @@ def test_connect_request_filter_policy(iut, policy, listed):
         iut.ut(
             hci.HCI_LE_Add_Device_To_Filter_Accept_List_Command(PEER.address_type, PEER)
         )
-    configure(iut, policy=policy)
-    enable(iut)
+    configure_legacy(iut, policy=policy)
+    enable_legacy(iut)
     iut.lt_tx(connect_ind(), channel=37)
     one_event(iut)
     # Bit 1 restricts connection requests to the Filter Accept List.
@@ -622,12 +595,12 @@ def test_connect_from_existing_peer_is_ignored(iut):
     Expected:
         - Exactly one connection exists and advertising is still enabled.
     """
-    configure(iut)
-    enable(iut)
+    configure_legacy(iut)
+    enable_legacy(iut)
     iut.lt_tx(connect_ind(), channel=37)
     one_event(iut)
     iut.ut_rx(CONNECTED, status=0)
-    enable(iut)
+    enable_legacy(iut)
     iut.radio.script.clear()
     iut.lt_tx(connect_ind(), channel=37)
     iut.run(INTERVAL_US + 10_001)
@@ -660,8 +633,8 @@ def test_directed_accepts_only_its_target(iut, kind):
 
     Parameters range over high and low duty cycle directed advertising.
     """
-    configure(iut, kind)
-    enable(iut)
+    configure_legacy(iut, kind)
+    enable_legacy(iut)
     iut.lt_tx(connect_ind(initiator=OTHER), channel=37)
     iut.lt_tx(connect_ind(), channel=38)
     one_event(iut)
@@ -686,8 +659,8 @@ def test_directed_ignores_filter_policy_for_target(iut):
     Expected:
         - The Host gets Enhanced Connection Complete.
     """
-    configure(iut, AdvType.ADV_DIRECT_IND_LOW_DUTY, policy=3)
-    enable(iut)
+    configure_legacy(iut, AdvType.ADV_DIRECT_IND_LOW_DUTY, policy=3)
+    enable_legacy(iut)
     iut.lt_tx(connect_ind(), channel=37)
     one_event(iut)
     iut.ut_rx(CONNECTED, status=0)
@@ -712,8 +685,8 @@ def test_high_duty_directed_times_out_after_1_28_s(iut):
           ADVERTISING_TIMEOUT_ERROR for the peer, and nothing else.
         - Advertising is disabled.
     """
-    configure(iut, AdvType.ADV_DIRECT_IND)
-    enable(iut)
+    configure_legacy(iut, AdvType.ADV_DIRECT_IND)
+    enable_legacy(iut)
     start = iut.now_us
     iut.run(LL_ADV_DIRECT_HIGH_DUTY_TIMEOUT_US + 10_000)
     packets = iut.lt_rx_all()
@@ -746,8 +719,8 @@ def test_low_duty_directed_has_no_timeout(iut):
         - Nothing reaches the Host.
         - Advertising is still enabled.
     """
-    configure(iut, AdvType.ADV_DIRECT_IND_LOW_DUTY)
-    enable(iut)
+    configure_legacy(iut, AdvType.ADV_DIRECT_IND_LOW_DUTY)
+    enable_legacy(iut)
     iut.run(2 * LL_ADV_DIRECT_HIGH_DUTY_TIMEOUT_US)
     iut.ut_rx_q_is_empty()
     assert iut.ll.advertising.any_enabled()
@@ -802,8 +775,8 @@ def test_parameter_validation(iut, fields, status):
     unsupported own address type, and bad peer address type.
     """
     values = dict(
-        advertising_interval_min=INTERVAL,
-        advertising_interval_max=INTERVAL,
+        advertising_interval_min=LEGACY_INTERVAL,
+        advertising_interval_max=LEGACY_INTERVAL,
         advertising_type=AdvType.ADV_IND,
         own_address_type=hci.OwnAddressType.PUBLIC,
         peer_address_type=PEER.address_type,
@@ -848,11 +821,11 @@ def test_parameters_disallowed_while_enabled(iut):
     Expected:
         - The command completes with COMMAND_DISALLOWED_ERROR.
     """
-    configure(iut)
-    enable(iut)
+    configure_legacy(iut)
+    enable_legacy(iut)
     iut.ut(
         hci.HCI_LE_Set_Advertising_Parameters_Command(
-            INTERVAL, INTERVAL, AdvType.ADV_IND, 0, 0, PEER, 7, 0
+            LEGACY_INTERVAL, LEGACY_INTERVAL, AdvType.ADV_IND, 0, 0, PEER, 7, 0
         ),
         ErrorCode.COMMAND_DISALLOWED_ERROR,
     )
@@ -901,8 +874,8 @@ def test_data_update_while_enabled_applies_to_next_event(iut):
         - The first event carries "old".
         - The next event carries "new".
     """
-    configure(iut, AdvType.ADV_NONCONN_IND, data=b'old')
-    enable(iut)
+    configure_legacy(iut, AdvType.ADV_NONCONN_IND, data=b'old')
+    enable_legacy(iut)
     assert one_event(iut)[0].pdu[8:] == b'old'
     iut.ut(hci.HCI_LE_Set_Advertising_Data_Command(b'new'))
     iut.run(INTERVAL_US + 10_001)
@@ -928,8 +901,8 @@ def test_random_own_address_uses_controller_random_address(iut):
     """
     random = hci.Address('C1:22:33:44:55:66', hci.AddressType.RANDOM_DEVICE)
     iut.ut(hci.HCI_LE_Set_Random_Address_Command(random))
-    configure(iut, AdvType.ADV_NONCONN_IND, own=hci.OwnAddressType.RANDOM)
-    enable(iut)
+    configure_legacy(iut, AdvType.ADV_NONCONN_IND, own=hci.OwnAddressType.RANDOM)
+    enable_legacy(iut)
     packet = one_event(iut)[0]
     assert packet.pdu[0] & 0x40
     assert address_of(packet.pdu) == random

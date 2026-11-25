@@ -272,7 +272,7 @@ async def reset_to_central(tester):
     await _observe_reset_connection(tester, link)
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Verify that Reset moves an advertising LE Controller to Standby.
 PROCEDURES |= procedure_cases(

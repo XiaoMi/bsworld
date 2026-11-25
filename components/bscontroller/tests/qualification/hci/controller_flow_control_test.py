@@ -72,7 +72,7 @@ async def buffer_size(tester):
     await link.disconnect(local=True)
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Verify the reported LE Controller buffer size and completed-packet flow control for
 # single-data-octet and buffer-sized L2CAP packets.

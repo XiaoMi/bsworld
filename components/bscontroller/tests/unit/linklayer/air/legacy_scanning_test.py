@@ -24,6 +24,7 @@ from bscontroller.linklayer import LL_IFS_US
 from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.parameters import Parameters
 from bscontroller.linklayer.state import Role
+from tests.unit.linklayer.air.advertising import SCAN_WINDOW, scan_legacy
 from tests.unit.linklayer.air.harness import (
     CONNECT_PARAMETERS,
     IUT_ADDRESS,
@@ -42,19 +43,9 @@ from tests.unit.linklayer.air.harness import (
 )
 
 ReportType = hci.HCI_LE_Advertising_Report_Event.EventType
-WINDOW = 16  # 10 ms
-WINDOW_US = WINDOW * HCI_LE_SCAN_INTERVAL_UNIT_US
+WINDOW_US = SCAN_WINDOW * HCI_LE_SCAN_INTERVAL_UNIT_US
 CONNECTED = hci.HCI_LE_Enhanced_Connection_Complete_Event
 FLUSH_TIMEOUT_US = 625  # One HCI automatic flush timeout slot.
-
-
-def scan(iut, *, active=False, policy=0, duplicates=0, interval=WINDOW, window=WINDOW):
-    iut.ut(
-        hci.HCI_LE_Set_Scan_Parameters_Command(
-            int(active), interval, window, hci.OwnAddressType.PUBLIC, policy
-        )
-    )
-    iut.ut(hci.HCI_LE_Set_Scan_Enable_Command(1, duplicates))
 
 
 def stop(iut):
@@ -101,7 +92,7 @@ def test_passive_reports_undirected(iut, pdu, report_type):
 
     Parameters range over ADV_IND, ADV_SCAN_IND and ADV_NONCONN_IND.
     """
-    scan(iut)
+    scan_legacy(iut)
     iut.lt_tx(pdu, rssi=-55.4)
     iut.run(WINDOW_US)
     iut.ut_rx_report(
@@ -134,7 +125,7 @@ def queue_flushable_acl(iut):
 
 def test_acl_flush_expiry_does_not_interrupt_passive_scanning(iut):
     """Catch a broadcast whose access address spans the software deadline."""
-    scan(iut)
+    scan_legacy(iut)
     connection = queue_flushable_acl(iut)
     iut.lt_tx(adv_nonconn_ind(), channel=37, at=FLUSH_TIMEOUT_US - 25)
 
@@ -151,7 +142,7 @@ def test_acl_flush_expiry_does_not_interrupt_passive_scanning(iut):
 @pytest.mark.parametrize('scanning', [False, True], ids=['idle', 'scan-gap'])
 def test_idle_phy_releases_acl_credit_at_flush_deadline(iut, scanning):
     if scanning:
-        scan(iut, window=4)
+        scan_legacy(iut, window=4)
     # A 2.5-ms scan window has closed when the ACL packet is queued.
     iut.run(3000)
     connection = queue_flushable_acl(iut)
@@ -188,7 +179,7 @@ def test_passive_reports_directed_to_us_without_data(iut):
         - The Host gets one ADV_DIRECT_IND report from the peer with empty data.
         - Nothing else reaches the Host.
     """
-    scan(iut)
+    scan_legacy(iut)
     iut.lt_tx(adv_direct_ind())
     iut.lt_tx(adv_direct_ind(target=OTHER))
     iut.run(2 * WINDOW_US)
@@ -226,7 +217,7 @@ def test_malformed_pdu_is_not_reported(iut, pdu):
     Parameters range over short, over-long, length-mismatched, wrong-type, and
     directed-without-target PDUs.
     """
-    scan(iut)
+    scan_legacy(iut)
     iut.lt_tx(pdu)
     iut.run(WINDOW_US)
     iut.ut_rx_q_is_empty()
@@ -246,7 +237,7 @@ def test_bad_crc_is_not_reported(iut):
     Expected:
         - Nothing reaches the Host.
     """
-    scan(iut)
+    scan_legacy(iut)
     iut.lt_tx(adv_ind(), valid_crc=False)
     iut.run(WINDOW_US)
     iut.ut_rx_q_is_empty()
@@ -274,7 +265,7 @@ def test_filter_accept_list_policy(iut, listed):
     """
     if listed:
         accept(iut, PEER)
-    scan(iut, policy=1)
+    scan_legacy(iut, policy=1)
     iut.lt_tx(adv_ind())
     iut.lt_tx(adv_ind(OTHER))
     iut.run(2 * WINDOW_US)
@@ -299,7 +290,7 @@ def test_filter_matches_address_type(iut):
         - Nothing reaches the Host.
     """
     accept(iut, hci.Address(bytes(PEER), hci.AddressType.PUBLIC_DEVICE))
-    scan(iut, policy=1)
+    scan_legacy(iut, policy=1)
     iut.lt_tx(adv_ind())
     iut.run(WINDOW_US)
     iut.ut_rx_q_is_empty()
@@ -325,7 +316,7 @@ def test_duplicate_filtering(iut, duplicates):
 
     Parameters range over filtering disabled and enabled.
     """
-    scan(iut, duplicates=duplicates)
+    scan_legacy(iut, duplicates=duplicates)
     for _ in range(3):
         iut.lt_tx(adv_ind(data=b'same'))
     iut.lt_tx(adv_ind(data=b'changed'))
@@ -352,7 +343,7 @@ def test_duplicate_filter_resets_on_reenable(iut):
     Expected:
         - Two reports are produced across the two windows.
     """
-    scan(iut, duplicates=1)
+    scan_legacy(iut, duplicates=1)
     iut.lt_tx(adv_ind())
     iut.run(WINDOW_US)
     stop(iut)
@@ -376,7 +367,7 @@ def test_scan_rotates_primary_channels_per_window(iut):
     Expected:
         - The first three listen windows use channels 37, 38, 39 in order.
     """
-    scan(iut)
+    scan_legacy(iut)
     iut.run(3 * WINDOW_US)
     channels = [channel for _, _, channel, _ in iut.radio.listens]
     assert channels[:3] == [37, 38, 39]
@@ -398,7 +389,7 @@ def test_scan_window_gaps_do_not_listen(iut):
         - Each listen starts within the first window of its interval.
         - No listen is longer than one window.
     """
-    scan(iut, interval=4 * WINDOW, window=WINDOW)
+    scan_legacy(iut, interval=4 * SCAN_WINDOW, window=SCAN_WINDOW)
     iut.run(4 * WINDOW_US)
     for start, end, _, _ in iut.radio.listens:
         assert start % (4 * WINDOW_US) < WINDOW_US
@@ -421,7 +412,7 @@ def test_disabled_scanner_does_not_listen_or_report(iut):
         - The radio recorded no listen windows.
         - Nothing reaches the Host.
     """
-    scan(iut)
+    scan_legacy(iut)
     stop(iut)
     iut.lt_tx(adv_ind())
     iut.run(WINDOW_US)
@@ -455,7 +446,7 @@ def test_active_sends_scan_request_and_reports_response(iut, pdu):
 
     Parameters range over ADV_IND and ADV_SCAN_IND advertisements.
     """
-    scan(iut, active=True)
+    scan_legacy(iut, active=True)
     iut.lt_tx(pdu)
     iut.lt_tx(scan_rsp(data=b'rsp'))
     iut.run(WINDOW_US)
@@ -488,7 +479,7 @@ def test_active_does_not_request_nonscannable(iut, pdu):
 
     Parameters range over ADV_NONCONN_IND and ADV_DIRECT_IND.
     """
-    scan(iut, active=True)
+    scan_legacy(iut, active=True)
     iut.lt_tx(pdu)
     iut.run(WINDOW_US)
     iut.lt_rx_q_is_empty()
@@ -528,7 +519,7 @@ def test_active_unmatched_response_is_a_failure(iut, response):
     Parameters range over no response, wrong advertiser, wrong address type, a
     non-SCAN_RSP PDU, and a length mismatch.
     """
-    scan(iut, active=True)
+    scan_legacy(iut, active=True)
     iut.lt_tx(adv_ind())
     if response is not None:
         iut.lt_tx(response)
@@ -556,7 +547,7 @@ def test_active_backoff_doubles_after_two_failures(iut):
         - Two SCAN_REQs were sent.
         - The backoff upper limit is 2 and the count is 1 or 2.
     """
-    scan(iut, active=True)
+    scan_legacy(iut, active=True)
     for _ in range(2):
         iut.lt_tx(adv_ind())
         iut.run(WINDOW_US)
@@ -582,7 +573,7 @@ def test_active_backoff_suppresses_requests_until_count_reaches_zero(iut):
         - Exactly one SCAN_REQ was sent (on the third advertisement).
         - All three advertisements are reported.
     """
-    scan(iut, active=True)
+    scan_legacy(iut, active=True)
     iut.link.scan.backoff.count = 3
     for _ in range(3):
         iut.lt_tx(adv_ind())
@@ -609,7 +600,7 @@ def test_active_scan_respects_filter_policy(iut):
         - The scanner transmitted nothing.
         - Nothing reaches the Host.
     """
-    scan(iut, active=True, policy=1)
+    scan_legacy(iut, active=True, policy=1)
     iut.lt_tx(adv_ind())
     iut.run(WINDOW_US)
     iut.lt_rx_q_is_empty()
@@ -628,7 +619,10 @@ def test_active_scan_respects_filter_policy(iut):
             ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
         ),
         (dict(le_scan_interval=0x4001), ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR),
-        (dict(le_scan_window=WINDOW + 1), ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR),
+        (
+            dict(le_scan_window=SCAN_WINDOW + 1),
+            ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+        ),
         (
             dict(own_address_type=4),
             ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR,
@@ -659,8 +653,8 @@ def test_scan_parameter_validation(iut, fields, status):
     """
     values = dict(
         le_scan_type=0,
-        le_scan_interval=WINDOW,
-        le_scan_window=WINDOW,
+        le_scan_interval=SCAN_WINDOW,
+        le_scan_window=SCAN_WINDOW,
         own_address_type=0,
         scanning_filter_policy=0,
     )
@@ -680,9 +674,9 @@ def test_scan_parameters_disallowed_while_scanning(iut):
     Expected:
         - The command completes with COMMAND_DISALLOWED_ERROR.
     """
-    scan(iut)
+    scan_legacy(iut)
     iut.ut(
-        hci.HCI_LE_Set_Scan_Parameters_Command(0, WINDOW, WINDOW, 0, 0),
+        hci.HCI_LE_Set_Scan_Parameters_Command(0, SCAN_WINDOW, SCAN_WINDOW, 0, 0),
         ErrorCode.COMMAND_DISALLOWED_ERROR,
     )
 
@@ -725,7 +719,7 @@ def test_filter_list_is_locked_while_in_use(iut):
         - The add during scanning fails with COMMAND_DISALLOWED_ERROR.
         - The add after stopping succeeds.
     """
-    scan(iut, policy=1)
+    scan_legacy(iut, policy=1)
     iut.ut(
         hci.HCI_LE_Add_Device_To_Filter_Accept_List_Command(PEER.address_type, PEER),
         ErrorCode.COMMAND_DISALLOWED_ERROR,
@@ -809,8 +803,8 @@ def test_anonymous_filter_entry_ignores_address_bytes(iut):
 # ---------------------------------------------------------------------------
 def create_connection(iut, peer=PEER, *, policy=0, status=ErrorCode.SUCCESS, **changes):
     values = dict(
-        le_scan_interval=WINDOW,
-        le_scan_window=WINDOW,
+        le_scan_interval=SCAN_WINDOW,
+        le_scan_window=SCAN_WINDOW,
         initiator_filter_policy=policy,
         peer_address_type=peer.address_type,
         peer_address=peer,
@@ -1014,7 +1008,7 @@ def test_initiate_busy_and_existing_connection(iut):
 @pytest.mark.parametrize(
     'changes',
     [
-        dict(le_scan_window=WINDOW + 1),
+        dict(le_scan_window=SCAN_WINDOW + 1),
         dict(connection_interval_min=5),
         dict(connection_interval_min=50, connection_interval_max=40),
         dict(supervision_timeout=5),
@@ -1058,7 +1052,7 @@ def test_scanning_and_initiating_share_the_radio(iut):
     Expected:
         - The radio recorded at least two listen windows.
     """
-    scan(iut)
+    scan_legacy(iut)
     create_connection(iut)
     iut.run(4 * WINDOW_US)
     # The scanner context alternates between the two roles.

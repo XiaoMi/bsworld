@@ -156,6 +156,19 @@ class CigManager:
         stream = self.streams.get(handle)
         return stream.event if stream is not None else None
 
+    def waiting_for_establishment(self, handle: int) -> bool:
+        stream = self.streams.get(handle)
+        return stream is not None and (
+            stream.event is None or not stream.event.established
+        )
+
+    def set_accept_timeout(self, timeout: int) -> int:
+        # Core Vol 4, Part E, 6.7: units of 625 microseconds.
+        if not 1 <= timeout <= 0xB540:
+            return INVALID
+        self.connection_accept_timeout = timeout
+        return SUCCESS
+
     def iso_link_quality(self, handle: int) -> tuple[int, tuple[int, ...]]:
         event = self.event_for_handle(handle)
         if event is None or not event.established:

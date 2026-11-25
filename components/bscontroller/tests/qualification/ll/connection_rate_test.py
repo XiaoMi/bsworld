@@ -49,7 +49,7 @@ PAGE_BASE = 64
 SCI = 1 << (hci.LeFeature.SHORTER_CONNECTION_INTERVALS - PAGE_BASE)
 SCI_HOST = 1 << (hci.LeFeature.SHORTER_CONNECTION_INTERVALS_HOST_SUPPORT - PAGE_BASE)
 PACKET = bytes(range(10))
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 
 def host_parameters(low, high, factor, latency, continuation, timeout=TIMEOUT):

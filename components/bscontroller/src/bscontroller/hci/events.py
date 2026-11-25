@@ -373,10 +373,10 @@ class LeControllerEvents:
                 )
             )
 
-    def on_acl_received(self, connection: ConnectionSnapshot, continuation, data):
+    def on_acl_received(self, handle: int, continuation, data):
         self._emit_hci_packet(
             hci.HCI_AclDataPacket(
-                connection_handle=connection.handle,
+                connection_handle=handle,
                 pb_flag=(
                     hci.HCI_ACL_PB_CONTINUATION
                     if continuation
@@ -446,11 +446,11 @@ class LeControllerEvents:
             )
         )
 
-    def on_acl_completed(self, connection: ConnectionSnapshot):
+    def on_acl_completed(self, handle: int):
         """Number Of Completed Packets (Vol 4, Part E, 7.7.19)."""
         self._emit_hci_packet(
             hci.HCI_Number_Of_Completed_Packets_Event(
-                connection_handles=[connection.handle], num_completed_packets=[1]
+                connection_handles=[handle], num_completed_packets=[1]
             )
         )
 

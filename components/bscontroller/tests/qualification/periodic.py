@@ -37,6 +37,7 @@ from tests.qualification.tester import (
     csa2_channel,
     decode_extended,
     ext_pdu,
+    scan_parameters,
 )
 
 # Selected preparation gap when a periodic PDU displaced an announcement.
@@ -310,3 +311,16 @@ class PeriodicAdvertiser:
     async def transmit(self, tester, data, *, adi=None):
         await self.announce_until(tester, self.train.anchor)
         await self.train.transmit(tester, data, adi=adi)
+
+
+async def scan_periodic_advertiser(tester):
+    await tester.command(scan_parameters(extended=True))
+    await tester.command(hci.HCI_LE_Set_Extended_Scan_Enable_Command(1, 0, 0, 0))
+    train = PeriodicTrain(tester.radio.now_us + 100_000)
+    await train.announce(tester)
+    event = await tester.event(hci.HCI_LE_Extended_Advertising_Report_Event)
+    (report,) = event.reports
+    assert report.address == PEER_ADDRESS and report.advertising_sid == 3
+    assert report.periodic_advertising_interval == train.interval
+    assert (report.event_type >> hci.HCI_LE_EXT_ADV_REPORT_DATA_STATUS_SHIFT) == 0
+    return train

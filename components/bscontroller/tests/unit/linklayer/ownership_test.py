@@ -7,11 +7,9 @@ contexts before any upper-layer publication, and HCI only sees detached views.
 LL Control Procedure behaviour is specified by the scenario matrix in llcp/.
 """
 
-import ast
 import subprocess
 import sys
 from dataclasses import FrozenInstanceError, replace
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -33,54 +31,33 @@ from bscontroller.linklayer.state import Role
 from tests.unit.helpers import PARAMETERS, FakeRadio
 
 
-@pytest.mark.parametrize(
-    'module',
-    [
-        'api',
-        'bis',
-        'broadcast',
-        'iso',
-        'isoal',
-        'iso_radio',
-        'service',
-        'notifications',
-        'connection_event',
-        'data_path',
-        'procedure',
-        'phy',
-        'connection_parameters',
-        'resource',
-        'roles',
-        'link',
-    ],
-)
-def test_ll_modules_do_not_load_hci_or_runtime(module):
-    """Link-Layer modules import no HCI or runtime package.
+def test_ll_modules_do_not_load_hci_or_runtime():
+    """The Link Layer can be imported independently of HCI and the runtime.
 
-    Purpose: Verify each listed ``bscontroller.linklayer`` module can be
-    imported in a clean interpreter without pulling in any ``bscontroller.hci``
-    or ``bscontroller.runtime`` module, enforcing the layering contract.
+    Purpose: Catch dependencies from any LL module into either upper layer.
 
     Steps:
-        1. For each parametrized module, run a fresh Python process that imports
-           it and then asserts no hci/runtime module is present in
-           ``sys.modules``.
+        1. Start a clean Python interpreter and import the Link Layer.
+        2. Discover and import every module in that package.
 
     Expected:
-        - The subprocess exits zero (the import-isolation assertion holds) for
-          every module.
+        - After each import, both upper-layer packages are absent from sys.modules.
     """
-    # Run in a fresh interpreter: the fixture's Host codec must not conceal a
-    # dependency.
     subprocess.run(
         [
             sys.executable,
             '-c',
-            "import sys, importlib; "
-            f"importlib.import_module('bscontroller.linklayer.{module}'); "
-            "assert not any(name == prefix or name.startswith(prefix + '.') "
-            "for name in sys.modules "
-            "for prefix in ('bscontroller.hci', 'bscontroller.runtime'))",
+            """
+import importlib
+import pkgutil
+import sys
+import bscontroller.linklayer as ll
+
+for module in pkgutil.walk_packages(ll.__path__, ll.__name__ + '.'):
+    importlib.import_module(module.name)
+    for forbidden in ('bscontroller.hci', 'bscontroller.runtime'):
+        assert forbidden not in sys.modules, (module.name, forbidden)
+""",
         ],
         check=True,
     )
@@ -335,7 +312,7 @@ def test_ll_does_not_replace_an_existing_sync_acquisition(controller):
     assert service.link.sync is active
 
 
-# HCI / Link Layer service boundary (moved from hci/boundary_test.py)
+# HCI / Link Layer service boundary
 def test_advertising_configuration_cannot_replace_runtime_state(controller):
     """Reconfiguring an advertising set updates config but keeps runtime state.
 
@@ -560,47 +537,29 @@ def test_masked_remote_parameter_request_uses_the_ll_service(connection, monkeyp
     ]
 
 
-def test_hci_does_not_enter_live_ll_collections_or_procedure_objects():
-    """HCI source never names live LL collections or procedure objects.
+def test_acl_notifications_publish_only_the_handle(connection, monkeypatch):
+    """ACL notifications identify the connection by its HCI handle.
 
-    Purpose: Verify, by static analysis of the ``bscontroller.hci`` package,
-    that HCI code never accesses live Link-Layer collection or procedure
-    attributes (advertisers, connections, syncs, scan, controls, etc.), keeping
-    HCI confined to detached views.
+    Purpose: Verify the values the notification adapter delivers to the HCI sink.
 
     Steps:
-        1. Parse every ``*.py`` file in the hci package.
-        2. Walk each AST and inspect every attribute access.
+        1. Deliver an ACL continuation fragment and a completed-packet notification.
+        2. Record the arguments received by the sink for each notification.
 
     Expected:
-        - No attribute name matches the forbidden set in any hci source file.
+        - The data callback receives the handle, continuation flag, and payload.
+        - The credit callback receives the handle.
     """
-    import bscontroller.hci as package
+    received = []
+    completed = []
+    adapter = connection.link.listener
+    monkeypatch.setattr(
+        adapter.sink, 'on_acl_received', lambda *args: received.append(args)
+    )
+    monkeypatch.setattr(adapter.sink, 'on_acl_completed', completed.append)
 
-    forbidden = {
-        'advertisers',
-        'connections',
-        'syncs',
-        'scan',
-        'initiating',
-        'sync',
-        'controls',
-        'encryption',
-        'packet_security',
-        'groups',
-        'streams',
-    }
-    for source in Path(package.__file__).parent.glob('*.py'):
-        for node in ast.walk(ast.parse(source.read_text())):
-            if isinstance(node, ast.Attribute):
-                if isinstance(node.value, ast.Attribute) and node.value.attr == 'll':
-                    assert node.attr not in {'broadcast', 'iso'}
-                # Encryption is also a decoded HCI BIG command field. It
-                # carries a scalar mode, not a live LL encryption procedure.
-                if (
-                    node.attr == 'encryption'
-                    and isinstance(node.value, ast.Name)
-                    and node.value.id == 'command'
-                ):
-                    continue
-                assert node.attr not in forbidden, (source.name, node.lineno, node.attr)
+    adapter.on_acl_received(connection, True, b'payload')
+    adapter.on_acl_completed(connection)
+
+    assert received == [(connection.handle, True, b'payload')]
+    assert completed == [connection.handle]

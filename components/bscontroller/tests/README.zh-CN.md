@@ -7,6 +7,8 @@
 | `unit/` | 按实现模块组织，覆盖 Controller 算法、状态归属、调度以及 FIFO、线程和时钟行为。 | Python 测试环境。 |
 | `qualification/hci/`、`qualification/ll/` | HCI 和 Link Layer 用例按规范章节组织，由独立测试器执行。 | 纯 HCI 用例使用 Python 测试环境，射频用例还需要 BabbleSim。 |
 
+`unit/hci/` 验证 Host 通过 H4 发送的命令以及收到的状态和事件。`unit/linklayer/llcp/` 验证控制流程的状态转换，`unit/linklayer/air/` 使用预设的对端报文验证射频调度。协议用例通过 HCI 或空口驱动 Controller，并按测试规范判定观测结果。
+
 各章节的覆盖范围、日志位置和结果解读见[协议测试指南](qualification/PROTOCOL.zh-CN.md)。
 
 ## 运行

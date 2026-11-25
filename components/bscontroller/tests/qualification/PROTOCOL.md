@@ -8,7 +8,7 @@ This suite checks BSController HCI commands, events, and Link Layer behavior for
 
 The suite covers discovery, advertising, connections, timing, packet encoding, frequency hopping, security, and data transfer. The selected cases include privacy, Decision-Based Advertising Filtering (DBAF), BIS broadcasting and synchronized reception, and CIS.
 
-The table lists 1188 selected protocol cases across 33 files, with 223 HCI cases and 965 LL cases. Find and select cases by their test specification identifiers.
+The table lists 1188 selected protocol cases across 43 files, with 223 HCI cases and 965 LL cases. Find and select cases by their test specification identifiers.
 
 | Directory | Source Chapter | Test File | Selected Cases |
 |---|---|---|---:|
@@ -25,8 +25,18 @@ The table lists 1188 selected protocol cases across 33 files, with 223 HCI cases
 | `hci/` | 4.15.1 Connected Isochronous Streams | [connected_isochronous_test.py](hci/connected_isochronous_test.py) | 27 |
 | `hci/` | 4.15.2 Broadcast Isochronous Streams | [broadcast_isochronous_test.py](hci/broadcast_isochronous_test.py) | 17 |
 | `hci/` | 4.17 Event Versioning | [event_versioning_test.py](hci/event_versioning_test.py) | 6 |
-| `ll/` | 4.2 Device Discovery | [device_discovery_test.py](ll/device_discovery_test.py) | 183 |
-| `ll/` | 4.3 Connection | [connection_test.py](ll/connection_test.py) | 260 |
+| `ll/` | 4.2 Advertising and Advertising Sets | [device_discovery_test.py](ll/device_discovery_test.py) | 72 |
+| `ll/` | 4.2 Active and Passive Scanning | [scanning_test.py](ll/scanning_test.py) | 31 |
+| `ll/` | 4.2 Scan Filtering and Advertiser Monitoring | [scan_filtering_test.py](ll/scan_filtering_test.py) | 34 |
+| `ll/` | 4.2 Periodic Advertising | [periodic_advertising_test.py](ll/periodic_advertising_test.py) | 15 |
+| `ll/` | 4.2 Periodic Synchronization | [periodic_sync_test.py](ll/periodic_sync_test.py) | 31 |
+| `ll/` | 4.3 Connection Establishment | [connection_test.py](ll/connection_test.py) | 61 |
+| `ll/` | 4.3 ACL Data, Acknowledgment and Termination | [acl_data_test.py](ll/acl_data_test.py) | 37 |
+| `ll/` | 4.3 Connection Parameters | [connection_parameters_test.py](ll/connection_parameters_test.py) | 36 |
+| `ll/` | 4.3 PHY Update | [phy_update_test.py](ll/phy_update_test.py) | 33 |
+| `ll/` | 4.3 Data Length Update | [data_length_test.py](ll/data_length_test.py) | 36 |
+| `ll/` | 4.3 Feature Exchange and Long LL Control PDUs | [feature_exchange_test.py](ll/feature_exchange_test.py) | 44 |
+| `ll/` | 4.3 Version Exchange | [version_exchange_test.py](ll/version_exchange_test.py) | 13 |
 | `ll/` | 4.3 Connection Subrating | [subrating_test.py](ll/subrating_test.py) | 21 |
 | `ll/` | 4.3 Connection Rate | [connection_rate_test.py](ll/connection_rate_test.py) | 10 |
 | `ll/` | 4.3.7 Periodic Advertising Sync Transfer | [sync_transfer_test.py](ll/sync_transfer_test.py) | 84 |
@@ -67,7 +77,7 @@ Use `-n 4` for a fixed worker count. For worker setup and output isolation, see 
 
 ## Interpreting results
 
-A pytest `passed` result means the executed assertions passed. A selected procedure that completes records its protocol verdict and any limitations in `protocol.log`. Pytest reports failures and skips.
+A pytest `passed` result means the executed assertions passed. A selected procedure that completes records its protocol verdict and any limitations in `protocol.log`. The terminal summary counts `PASS` and `PARTIAL` separately. With `--junitxml`, each completed case also records its `protocol_verdict` in the XML report. Pytest reports failures and skips.
 
 | Result | Meaning |
 |---|---|

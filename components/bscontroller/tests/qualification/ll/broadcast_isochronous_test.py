@@ -980,7 +980,7 @@ async def receiver_sdu_length(tester, *, framed):
     await finish_receiver(tester, peer)
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Section 4.11.4.1 selects the BN=1 preparation for clear and encrypted BIGs.
 PROCEDURES |= procedure_cases(
