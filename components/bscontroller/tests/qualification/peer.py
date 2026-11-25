@@ -949,3 +949,14 @@ async def exchange_iut_features(tester, link, features=PEER_FEATURES):
     )
     event = await tester.event(hci.HCI_LE_Read_Remote_Features_Complete_Event)
     assert event.status == ErrorCode.SUCCESS
+
+
+async def expect_remote_power_read_error(tester, handle, phy, error):
+    """Require either permitted placement of the remote power-read error."""
+    status = await tester.command(
+        hci.HCI_LE_Read_Remote_Transmit_Power_Level_Command(handle, phy),
+        (error, ErrorCode.SUCCESS),
+    )
+    if status.status == ErrorCode.SUCCESS:
+        report = await tester.event(hci.HCI_LE_Transmit_Power_Reporting_Event)
+        assert report.status == error

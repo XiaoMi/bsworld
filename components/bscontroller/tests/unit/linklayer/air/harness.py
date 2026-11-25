@@ -40,6 +40,7 @@ from bscontroller.linklayer.parameters import Parameters
 from bscontroller.linklayer.timing import LL_RESPONSE_START_TOLERANCE_US
 from bscontroller.radio.base import PHY_CODED_S8_FACTOR, Phy, RadioSwitch, Received
 from tests.support import LE_EVENT_MASK_V1
+from tests.unit.helpers import host_notifications, take_host_notification
 
 ErrorCode = hci.HCI_ErrorCode
 PduType = AdvertisingPduType
@@ -54,7 +55,6 @@ CONNECT_PARAMETERS = Parameters(
     0x9A328370, 0x123456, 1, 0, 24, 0, 100, (1 << 37) - 1, 7
 )
 _COMMAND_RESULTS = (hci.HCI_Command_Complete_Event, hci.HCI_Command_Status_Event)
-_FLOW_EVENTS = (hci.HCI_Number_Of_Completed_Packets_Event,)
 
 
 # ---------------------------------------------------------------------------
@@ -330,22 +330,12 @@ class AirHarness:
         assert actual == status, (type(command).__name__, actual, status)
         return result
 
-    def _notifications(self):
-        return [event for event in self.events if not isinstance(event, _FLOW_EVENTS)]
-
     def ut_rx(self, event_type, **fields):
-        notifications = self._notifications()
-        assert notifications, f'expected {event_type.__name__}, Host queue empty'
-        event = notifications[0]
-        self.events.remove(event)
-        assert isinstance(event, event_type), f'expected {event_type.__name__}: {event}'
-        for name, value in fields.items():
-            assert getattr(event, name) == value, (name, getattr(event, name), value)
-        return event
+        return take_host_notification(self.events, event_type, **fields)
 
     def ut_rx_report(self, **fields):
         """Next advertising report (legacy or extended), unwrapped."""
-        notifications = self._notifications()
+        notifications = host_notifications(self.events)
         assert notifications, 'expected an advertising report, Host queue empty'
         event = notifications[0]
         assert isinstance(
@@ -362,7 +352,8 @@ class AirHarness:
         return report
 
     def ut_rx_q_is_empty(self):
-        assert not self._notifications(), self._notifications()
+        notifications = host_notifications(self.events)
+        assert not notifications, notifications
 
     def reports(self) -> list:
         """Pop every pending advertising report."""

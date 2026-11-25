@@ -3,12 +3,20 @@
 
 """Frame Space negotiation and the packet executor's timing view."""
 
-import struct
-
 import pytest
 
 from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.radio.base import Phy
+from tests.unit.linklayer.llcp.frame_space import (
+    COMPLETE,
+    CP,
+    ONE_MBPS,
+    PC,
+    TWO_MBPS,
+    UPDATE,
+    request,
+    response,
+)
 from tests.unit.linklayer.llcp.harness import (
     CENTRAL,
     PERIPHERAL,
@@ -21,23 +29,6 @@ from tests.unit.linklayer.llcp.harness import (
     reject_ext_ind,
     unknown_rsp,
 )
-
-UPDATE = hci.HCI_LE_Frame_Space_Update_Command
-COMPLETE = hci.HCI_LE_Frame_Space_Update_Complete_Event
-CP = UPDATE.SpacingType.T_IFS_ACL_CP
-PC = UPDATE.SpacingType.T_IFS_ACL_PC
-ONE_MBPS = 1
-TWO_MBPS = 2
-
-
-def request(minimum, maximum, phys, spacing):
-    return struct.pack(
-        '<BHHBH', Opcode.LL_FRAME_SPACE_REQ, minimum, maximum, phys, spacing
-    )
-
-
-def response(space, phys, spacing):
-    return struct.pack('<BHBH', Opcode.LL_FRAME_SPACE_RSP, space, phys, spacing)
 
 
 def test_current_phy_timing_only_changes_when_selected_phy_becomes_active(central):

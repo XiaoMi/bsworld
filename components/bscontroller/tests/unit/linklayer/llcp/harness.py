@@ -42,7 +42,7 @@ from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.connection_parameters import PARAM_REQUEST, UPDATE
 from bscontroller.linklayer.data_path import PacketCipher
 from bscontroller.linklayer.encryption import ENC_REQUEST, ENC_RESPONSE
-from tests.unit.helpers import PARAMETERS
+from tests.unit.helpers import PARAMETERS, host_notifications, take_host_notification
 
 Opcode = ControlOpcode
 ErrorCode = hci.HCI_ErrorCode
@@ -63,9 +63,6 @@ PHY_1M, PHY_2M, PHY_CODED = (
     int(hci.PhyBit.LE_CODED),
 )
 UNSPECIFIED_OFFSETS = (0xFFFF,) * 6
-
-# Host notifications that are flow control, not procedure outcomes.
-_FLOW_EVENTS = (hci.HCI_Number_Of_Completed_Packets_Event,)
 
 
 # ---------------------------------------------------------------------------
@@ -265,26 +262,13 @@ class LlcpHarness:
         self.controller.on_packet(bytes(command))
         return self.controller.events[offset:]
 
-    def _notifications(self) -> list:
-        return [
-            event
-            for event in self.controller.events
-            if not isinstance(event, _FLOW_EVENTS)
-        ]
-
     def ut_rx(self, event_type, **fields):
         """Pop the next Host notification, which must match type and fields."""
-        notifications = self._notifications()
-        assert notifications, f'expected {event_type.__name__}, Host queue empty'
-        event = notifications[0]
-        self.controller.events.remove(event)
-        assert isinstance(event, event_type), f'expected {event_type.__name__}: {event}'
-        for name, value in fields.items():
-            assert getattr(event, name) == value, (name, getattr(event, name), value)
-        return event
+        return take_host_notification(self.controller.events, event_type, **fields)
 
     def ut_rx_q_is_empty(self) -> None:
-        assert not self._notifications(), self._notifications()
+        notifications = host_notifications(self.controller.events)
+        assert not notifications, notifications
 
     def completed_packets(self) -> int:
         """Pop Number Of Completed Packets credits for this handle."""

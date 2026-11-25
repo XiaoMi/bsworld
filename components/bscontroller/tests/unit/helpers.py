@@ -98,6 +98,27 @@ class FakeRadio:
         return None
 
 
+def host_notifications(events):
+    """Keep ACL completion credits queued for the tests that check flow control."""
+    return [
+        event
+        for event in events
+        if not isinstance(event, hci.HCI_Number_Of_Completed_Packets_Event)
+    ]
+
+
+def take_host_notification(events, event_type, **fields):
+    notifications = host_notifications(events)
+    assert notifications, f'expected {event_type.__name__}, Host queue empty'
+    event = notifications[0]
+    assert isinstance(event, event_type), f'expected {event_type.__name__}: {event}'
+    for name, expected in fields.items():
+        actual = getattr(event, name)
+        assert actual == expected, (name, actual, expected)
+    events.remove(event)
+    return event
+
+
 def check_access_address(value):
     """Independent bit-string oracle for generated addresses, including Coded PHY."""
     assert (value ^ PDU_ADV_ACCESS_ADDRESS).bit_count() > 1

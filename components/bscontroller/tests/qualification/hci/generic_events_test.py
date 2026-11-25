@@ -14,9 +14,7 @@ from tests.qualification.cases import (
     procedure_cases,
     verify_case,
 )
-from tests.qualification.hci.controller_information_test import (
-    EXPECTED_COMMANDS,
-)
+from tests.qualification.hci.capabilities import COMMAND_BITS, EXPECTED_COMMANDS
 from tests.qualification.tester import (
     create_connection,
     create_sync,
@@ -115,17 +113,15 @@ async def unsupported_commands_on_each_supported_controller(tester):
 
 async def _reject_mixed_command_families(tester, legacy, extended):
     """Execute both directions of a section's complete supported-command tables."""
-    supported = int.from_bytes(
-        (
-            await tester.command(hci.HCI_Read_Local_Supported_Commands_Command())
-        ).supported_commands,
-        'little',
-    )
+    supported = (
+        await tester.command(hci.HCI_Read_Local_Supported_Commands_Command())
+    ).supported_commands
     for first, rejected in ((legacy[0], extended), (extended[0], legacy)):
         await tester.command(hci.HCI_Reset_Command())
         await tester.command(first)
         for command in rejected:
-            if supported & hci.HCI_SUPPORTED_COMMANDS_MASKS[command.op_code]:
+            octet, bit = COMMAND_BITS[command.op_code]
+            if supported[octet] & (1 << bit):
                 status = (
                     (
                         ErrorCode.COMMAND_DISALLOWED_ERROR,
@@ -354,7 +350,7 @@ async def rfu_commands(tester):
         )
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Verify that every standard HCI opcode declared unsupported by this LE-only Controller
 # returns Unknown HCI Command through either allowed event.

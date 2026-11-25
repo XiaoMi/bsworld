@@ -1171,7 +1171,7 @@ async def inactive_cig_commands(tester, *, remove):
     assert removed.cig_id == 1
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Reuse the configured CIS after cancellation while the peer still has its request.
 PROCEDURES |= procedure_cases(

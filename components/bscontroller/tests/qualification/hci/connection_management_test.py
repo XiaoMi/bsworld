@@ -364,7 +364,7 @@ async def peer_sca_unsupported(tester):
         )
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Verify the connection handle and current transmit/receive PHY from Read PHY.
 PROCEDURES |= procedure_cases(

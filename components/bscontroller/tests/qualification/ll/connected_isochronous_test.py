@@ -635,7 +635,7 @@ async def cis_host_support(tester):
             await tester.command(hci.HCI_LE_Remove_CIG_Command(1))
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Verify rejection from the Lower Tester and from the IUT Host.
 PROCEDURES |= procedure_cases(

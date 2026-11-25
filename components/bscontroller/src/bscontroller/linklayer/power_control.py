@@ -19,7 +19,7 @@ from bscontroller.linklayer import (
     ControlOpcode,
 )
 from bscontroller.linklayer.features import LeFeatureMask
-from bscontroller.linklayer.procedure import ProcedureContext
+from bscontroller.linklayer.procedure import LocalProcedure, ProcedureContext
 from bscontroller.radio.base import (
     PHY_CODED_S2_FACTOR,
     PHY_TIME_UNITS_PER_SECOND,
@@ -230,7 +230,7 @@ class PathLossMonitoring:
         return zone
 
 
-class PowerControl:
+class PowerControl(LocalProcedure):
     def __init__(self, owner: ControlProcedures):
         self.owner = owner
         self.active_phy = self.tx_phy
@@ -284,14 +284,6 @@ class PowerControl:
 
     def transmit_iso_power_dbm(self, phy: PowerPhy) -> int:
         return self._local_power(phy)
-
-    @property
-    def pending(self) -> bool:
-        return self.context is not None and self.context.active
-
-    @property
-    def deadline_us(self) -> int:
-        return self.context.deadline_us if self.pending else 0
 
     def _radiative(self, nominal: int) -> int:
         return compensated_power(nominal, self.tx_compensation)

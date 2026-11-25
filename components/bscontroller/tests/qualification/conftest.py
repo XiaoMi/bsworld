@@ -17,6 +17,7 @@ from bscontroller.hci.controller import Controller
 from bscontroller.radio.babblesim import BabbleSimRadio
 from bscontroller.runtime.phy import find_phy
 from bscontroller.runtime.worker import RadioControllerWorker
+from tests.qualification.cases import protocol_labels
 from tests.qualification.tester import (
     DUT_ADDRESS,
     AirTester,
@@ -36,6 +37,37 @@ def pytest_configure(config):
         'markers',
         'source_conflict: unresolved source procedure or verdict requirements',
     )
+
+
+def pytest_collection_modifyitems(items):
+    seen = {}
+    for item in items:
+        callspec = getattr(item, 'callspec', None)
+        if not callspec or not {'identifier', 'procedure'} <= callspec.params.keys():
+            continue
+        identifier = callspec.params['identifier']
+        if identifier in seen:
+            raise pytest.UsageError(
+                f'Duplicate {identifier} in {seen[identifier]} and {item.nodeid}'
+            )
+        seen[identifier] = item.nodeid
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item, call):
+    report = yield
+    callspec = getattr(item, 'callspec', None)
+    if (
+        report.when == 'call'
+        and report.passed
+        and callspec
+        and {'identifier', 'procedure'} <= callspec.params.keys()
+    ):
+        verdict = 'PARTIAL' if protocol_labels(callspec.params['marks']) else 'PASS'
+        prop = ('protocol_verdict', verdict)
+        report.user_properties.append(prop)
+        item.user_properties.append(prop)
+    return report
 
 
 @pytest_asyncio.fixture

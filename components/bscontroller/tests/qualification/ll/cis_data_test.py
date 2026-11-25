@@ -352,7 +352,7 @@ async def two_cis_one_cig(tester):
             await receive_sdu(tester, handle, incoming)
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # The encryption command changes ACL key state only before CIS creation.
 PROCEDURES |= procedure_cases(

@@ -1537,7 +1537,7 @@ async def pawr_advertising_sync_transfer(tester, *, central):
     await _disconnect(tester, link)
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 
 def _roles(variants):

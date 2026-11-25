@@ -1575,7 +1575,7 @@ async def coded_secondary_scanning_latest_transmission(
     await _auxiliary_scan_timing(tester, phy=Phy.LE_CODED, latest=True)
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Verify that an advertiser responds to scan requests at the specified minimum/maximum
 # inter-packet timing. The Lower Tester requests information from the IUT and receives a

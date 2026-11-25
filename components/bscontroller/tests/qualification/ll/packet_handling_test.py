@@ -39,16 +39,25 @@ from bscontroller.linklayer import (
     PDU_HEADER_SIZE,
     LlId,
 )
+from tests.qualification import security
 from tests.qualification.cases import (
     ProcedureMap,
     collect_cases,
     procedure_cases,
     verify_case,
 )
-from tests.qualification.link import ErrorCode, Opcode
-from tests.qualification.ll import connection_test as connection
-from tests.qualification.ll import security_test as security
-from tests.qualification.peer import establish, exchange_features
+from tests.qualification.connection import (
+    _check_parameter_choice,
+    _check_parameter_pdu,
+    _select_peer_interval,
+)
+from tests.qualification.link import ErrorCode, Opcode, _check_parameter_update
+from tests.qualification.peer import (
+    establish,
+    exchange_features,
+    finish_phy_update,
+    phy_update_pdu,
+)
 from tests.qualification.tester import (
     LOWER_CENTRAL_PUBLIC_ADDRESS,
     LOWER_DATA_ACCESS_ADDRESS,
@@ -299,7 +308,7 @@ async def _parameter_request(tester, link):
     assert event.connection_handle == link.handle
     fields = (event.interval_min, event.interval_max, event.max_latency, event.timeout)
     # Validate the Upper Tester's proposed reply with the independent LL checker.
-    connection._check_parameter_pdu(
+    _check_parameter_pdu(
         bytes([Opcode.LL_CONNECTION_PARAM_RSP])
         + struct.pack(
             '<HHHHBH6H',
@@ -407,22 +416,20 @@ async def _complete_phy_response(tester, link, response):
         assert tx and rx and not (tx | rx) & ~mask
         central = 0 if rx & (1 << (link.tx_phy - 1)) else rx & -rx
         peripheral = 0 if tx & (1 << (link.rx_phy - 1)) else tx & -tx
-        update = connection._update_pdu(link, central, peripheral)
+        update = phy_update_pdu(link, central, peripheral)
         allowed = (rx, tx)
         await link.exchange(update, llid=LlId.CONTROL)
-    await connection._finish_update(
-        tester, link, update, event_required=False, allowed=allowed
-    )
+    await finish_phy_update(tester, link, update, event_required=False, allowed=allowed)
 
 
 async def _complete_parameter_response(tester, link, response, accepted):
     if link.central:
         update = response
-        interval, timeout = connection._check_parameter_choice(update, accepted)
+        interval, timeout = _check_parameter_choice(update, accepted)
         _check_future_instant(link, update)
     else:
-        fields = connection._check_parameter_pdu(response)
-        interval = connection._select_peer_interval(*fields[:2], fields[4])
+        fields = _check_parameter_pdu(response)
+        interval = _select_peer_interval(*fields[:2], fields[4])
         timeout = fields[3]
         update = bytes([Opcode.LL_CONNECTION_UPDATE_IND]) + struct.pack(
             '<BHHHHH',
@@ -434,7 +441,7 @@ async def _complete_parameter_response(tester, link, response, accepted):
             (link.counter + LL_INSTANT_MIN_LISTENING_EVENTS) & LL_EVENT_COUNTER_MASK,
         )
         await link.exchange(update, llid=LlId.CONTROL)
-    await connection._check_parameter_update(tester, link, update, interval, timeout)
+    await _check_parameter_update(tester, link, update, interval, timeout)
 
 
 def _check_future_instant(link, payload):
@@ -455,8 +462,8 @@ async def _complete_encryption_response(tester, link, stimulus, response):
         await link.exchange()
         link.tx_enabled = link.rx_enabled = False
         await link.exchange(bytes([Opcode.LL_PAUSE_ENC_RSP]), llid=LlId.CONTROL)
-        await security._begin(tester, link, refresh=True)
-        await security._finish(tester, link, refresh=True)
+        await security.begin_encryption(tester, link, refresh=True)
+        await security.finish_encryption(tester, link, refresh=True)
         return link
     assert not link.central
     assert not getattr(link, 'tx_enabled', False), 'ENC_REQ before encryption pause'
@@ -470,11 +477,11 @@ async def _complete_encryption_response(tester, link, stimulus, response):
     assert event.connection_handle == link.handle
     assert event.random_number == stimulus[1:9]
     assert event.encryption_diversifier == int.from_bytes(stimulus[9:11], 'little')
-    link = security._SecurityPeer(link)
+    link = security.SecurityPeer(link)
     link.rand = stimulus[1:9]
     link.ediv = int.from_bytes(stimulus[9:11], 'little')
     link.install(stimulus[11:19] + response[1:9], stimulus[19:23] + response[9:13])
-    await security._finish(tester, link)
+    await security.finish_encryption(tester, link)
     return link
 
 
@@ -911,7 +918,7 @@ async def control_pdus_not_permitted_in_the_current_role(tester, *, central):
     await link.disconnect(local=False)
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Verify the opcode-specific handling of invalid LL Control CtrData lengths and the
 # ability to continue the relevant Link Layer procedure.

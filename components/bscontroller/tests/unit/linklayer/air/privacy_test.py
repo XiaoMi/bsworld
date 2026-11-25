@@ -7,9 +7,12 @@ import pytest
 
 from bscontroller import hci
 from tests.unit.helpers import extended_parameters
+from tests.unit.linklayer.air.advertising import (
+    configure_legacy,
+    enable_legacy,
+    scan_legacy,
+)
 from tests.unit.linklayer.air.harness import PEER, adv_direct_ind, connect_ind
-from tests.unit.linklayer.air.legacy_advertising_test import configure, enable
-from tests.unit.linklayer.air.legacy_scanning_test import scan
 
 HOST_RPA = hci.Address('70:81:94:0D:FB:AA')
 
@@ -35,8 +38,8 @@ def test_host_supplied_rpa_is_not_a_controller_generated_local_rpa(iut):
         - The new connection uses the Host-supplied address as its own address.
     """
     iut.ut(hci.HCI_LE_Set_Random_Address_Command(HOST_RPA))
-    configure(iut, own=1)
-    enable(iut)
+    configure_legacy(iut, own=1)
+    enable_legacy(iut)
     iut.lt_tx(connect_ind(advertiser=HOST_RPA), channel=37)
     iut.run(1)
     event = iut.ut_rx(hci.HCI_LE_Enhanced_Connection_Complete_Event)
@@ -143,7 +146,7 @@ def test_unresolved_directed_rpa_uses_legacy_directed_report(iut, policy):
     """
     if policy == 3:
         iut.ut(hci.HCI_LE_Add_Device_To_Filter_Accept_List_Command(1, PEER))
-    scan(iut, policy=policy)
+    scan_legacy(iut, policy=policy)
     iut.lt_tx(adv_direct_ind(target=HOST_RPA), channel=37)
     iut.run(1000)
     if policy == 0:

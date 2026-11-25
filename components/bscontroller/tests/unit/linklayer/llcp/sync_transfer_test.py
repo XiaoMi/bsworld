@@ -37,23 +37,25 @@ from tests.unit.linklayer.llcp.harness import (
     ErrorCode,
     Opcode,
     hci,
-    pdu,
     unknown_rsp,
+)
+from tests.unit.linklayer.periodic import (
+    ADVERTISER,
+    CTRDATA,
+    PERIODIC_INTERVAL,
+    SERVICE_DATA,
+    SYNC_AA,
+    SYNC_CRC,
+    indication,
+    sync_info,
 )
 
 RECIPIENT = LeFeatureMask.PERIODIC_ADVERTISING_SYNC_TRANSFER_RECIPIENT
 RECEIVED = hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_Event
-PERIODIC_INTERVAL = 80
 PERIODIC_US = PERIODIC_INTERVAL * LL_PERIODIC_INTERVAL_UNIT_US
 CONNECTION_US = 24 * LL_CONN_INTERVAL_UNIT_US
-SYNC_AA = 0x8E89BED7 ^ 0x13579BDF
-SYNC_CRC = 0x445566
-SERVICE_DATA = 0xA5C3
-ADVERTISER = Address('00:11:22:33:44:77', AddressType.PUBLIC_DEVICE)
 IDENTITY = Address('C0:AA:BB:CC:DD:EE', AddressType.RANDOM_DEVICE)
 PEER_IRK = bytes(range(1, 17))
-# Independent LL_PERIODIC_SYNC_IND CtrData layout (Vol 6, Part B, Figure 2.48).
-CTRDATA = struct.Struct('<H18sHHBB6sH')
 OFFSET_UNIT_300 = 1 << 13
 OFFSET_ADJUST = 1 << 14
 OFFSET_ADJUST_US = 2_457_600
@@ -61,47 +63,6 @@ OFFSET_ADJUST_US = 2_457_600
 
 def rpa(key, prand=bytes.fromhex('456789')[::-1]):
     return Address(address_hash(key, prand) + prand, AddressType.RANDOM_DEVICE)
-
-
-def sync_info(offset_field, interval=PERIODIC_INTERVAL, counter=0, sca=5):
-    return struct.pack(
-        '<HH5sI3sH',
-        offset_field,
-        interval,
-        (LL_DATA_CHANNEL_MAP_ALL | sca << 37).to_bytes(5, 'little'),
-        SYNC_AA,
-        SYNC_CRC.to_bytes(3, 'little'),
-        counter,
-    )
-
-
-def indication(
-    *,
-    info=None,
-    event=0,
-    last=0,
-    sid=3,
-    random=False,
-    sca=0,
-    phy=0x01,
-    address=ADVERTISER,
-    sync_event=0,
-    identifier=SERVICE_DATA,
-):
-    info = sync_info(100) if info is None else info
-    return pdu(
-        Opcode.LL_PERIODIC_SYNC_IND,
-        CTRDATA.pack(
-            identifier,
-            info,
-            event,
-            last,
-            sid | int(random) << 4 | sca << 5,
-            phy,
-            bytes(address),
-            sync_event,
-        ),
-    )
 
 
 def decode(payload):

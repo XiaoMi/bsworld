@@ -502,7 +502,7 @@ async def failure_to_sync(tester):
     raise AssertionError('BIG acquisition did not fail')
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Section 4.15.2 distinguishes invalid ranges from incompatible timing and
 # unsupported framing; every row executes its own normative command sequence.

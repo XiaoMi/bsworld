@@ -21,7 +21,11 @@ from bscontroller.linklayer import (
 from bscontroller.linklayer.connection_parameters import preferred_interval
 from bscontroller.linklayer.features import LeFeature, LeFeatureMask
 from bscontroller.linklayer.instant import InstantUpdate
-from bscontroller.linklayer.procedure import ProcedureContext, ProcedurePhase
+from bscontroller.linklayer.procedure import (
+    LocalProcedure,
+    ProcedureContext,
+    ProcedurePhase,
+)
 from bscontroller.linklayer.state import Role
 from bscontroller.linklayer.subrating import (
     MAX_SUBRATE_FACTOR,
@@ -169,16 +173,12 @@ class ConnectionRateContext(ProcedureContext):
     acknowledged: bool = False
 
 
-class ConnectionRateProcedure:
+class ConnectionRateProcedure(LocalProcedure):
     def __init__(self, owner: ControlProcedures):
         self.owner = owner
         self.connection = owner.connection
         self.limits = self.connection.link.default_rate
         self.context: ConnectionRateContext | None = None
-
-    @property
-    def pending(self) -> bool:
-        return self.context is not None and self.context.active
 
     @property
     def instant_pending(self) -> bool:
@@ -197,10 +197,6 @@ class ConnectionRateProcedure:
             or self.owner.connection_parameters.request_pending
             or self.owner.subrating.report_after_ack
         )
-
-    @property
-    def deadline_us(self) -> int:
-        return self.context.deadline_us if self.pending else 0
 
     @property
     def local_supported(self) -> bool:

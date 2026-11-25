@@ -7,6 +7,8 @@ English | [简体中文](README.zh-CN.md)
 | `unit/` | Controller algorithms, state ownership, scheduling, and FIFO, thread, and clock behavior, grouped by implementation module. | Python test environment. |
 | `qualification/hci/`, `qualification/ll/` | HCI and Link Layer cases grouped by specification chapter and exercised with independent testers. | Python test environment for HCI-only cases, plus BabbleSim for RF cases. |
 
+Use `unit/hci/` to check the H4 command, status and event that the Host sees. Use `unit/linklayer/llcp/` for control procedure transitions and `unit/linklayer/air/` to exercise radio scheduling with scripted packets. Qualification cases drive the Controller through HCI or the air interface and check the observations required by the specification.
+
 See the [protocol test guide](qualification/PROTOCOL.md) for coverage by chapter, log locations, and how to interpret results.
 
 ## Run

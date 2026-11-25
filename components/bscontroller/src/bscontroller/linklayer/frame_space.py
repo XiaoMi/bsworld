@@ -20,7 +20,7 @@ from bscontroller.linklayer import (
     ControlOpcode,
 )
 from bscontroller.linklayer.features import LeFeature, LeFeatureMask
-from bscontroller.linklayer.procedure import ProcedureContext
+from bscontroller.linklayer.procedure import LocalProcedure, ProcedureContext
 from bscontroller.linklayer.state import Role
 from bscontroller.radio.base import RADIO_SWITCH_TIME_US, Phy
 
@@ -98,7 +98,7 @@ class FrameSpaceRequest:
         )
 
 
-class FrameSpaceProcedure:
+class FrameSpaceProcedure(LocalProcedure):
     def __init__(self, owner: ControlProcedures):
         self.owner = owner
         self.connection = owner.connection
@@ -112,16 +112,8 @@ class FrameSpaceProcedure:
         self.collision = False
 
     @property
-    def pending(self) -> bool:
-        return self.context is not None and self.context.active
-
-    @property
     def busy(self) -> bool:
         return self.pending or self.response is not None
-
-    @property
-    def deadline_us(self) -> int:
-        return self.context.deadline_us if self.pending else 0
 
     @property
     def tx_direction(self) -> Spacing:

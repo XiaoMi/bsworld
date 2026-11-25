@@ -355,19 +355,11 @@ class LeConnectionCommands(LeControllerContext):
         See Bluetooth spec Vol 4, Part E - 7.3.93 Read Authenticated Payload Timeout
         Command
         '''
-        connection = self.ll.connection_snapshot(command.connection_handle)
+        status, timeout_us = self.ll.authenticated_timeout(command.connection_handle)
         return hci.HCI_Read_Authenticated_Payload_Timeout_ReturnParameters(
-            (
-                SUCCESS
-                if connection
-                else DISALLOWED
-                if self.ll.has_iso_handle(command.connection_handle)
-                else hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
-            ),
+            status,
             command.connection_handle,
-            connection.auth_timeout_us // HCI_AUTHENTICATED_PAYLOAD_TIMEOUT_UNIT_US
-            if connection
-            else 0,
+            timeout_us // HCI_AUTHENTICATED_PAYLOAD_TIMEOUT_UNIT_US,
         )
 
     def on_hci_write_authenticated_payload_timeout_command(self, command):

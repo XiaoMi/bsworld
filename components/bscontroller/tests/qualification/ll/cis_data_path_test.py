@@ -314,7 +314,7 @@ async def receive_variable_pdu_sizes(tester, *, central):
     assert transitions <= delivered
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Check the data and flow-control credit independently of the ACL exchange.
 PROCEDURES |= procedure_cases(

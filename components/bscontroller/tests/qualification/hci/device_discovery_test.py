@@ -94,19 +94,6 @@ async def _configure_periodic_set(tester, *, with_data=False):
         )
 
 
-async def _start_scanning(tester):
-    await tester.command(scan_parameters(extended=True))
-    await tester.command(hci.HCI_LE_Set_Extended_Scan_Enable_Command(1, 0, 0, 0))
-    train = PeriodicTrain(tester.radio.now_us + 100_000)
-    await train.announce(tester)
-    event = await tester.event(hci.HCI_LE_Extended_Advertising_Report_Event)
-    (report,) = event.reports
-    assert report.address == PEER_ADDRESS and report.advertising_sid == 3
-    assert report.periodic_advertising_interval == train.interval
-    assert (report.event_type >> hci.HCI_LE_EXT_ADV_REPORT_DATA_STATUS_SHIFT) == 0
-    return train
-
-
 async def advertising_disable(tester):
     """Set Advertising Enable.
 
@@ -1916,7 +1903,7 @@ async def pawr_response_too_long(tester):
     await tester.command(hci.HCI_LE_Periodic_Advertising_Terminate_Sync_Command(handle))
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Verify that disabling advertising stops subsequent ADV_IND transmissions.
 PROCEDURES |= procedure_cases(

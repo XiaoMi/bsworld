@@ -20,12 +20,24 @@ class Procedure:
     marks: tuple[Any, ...] = ()
 
 
-ProcedureMap: TypeAlias = dict[str, Procedure]
+class ProcedureMap(dict[str, Procedure]):
+    """Merging variants must preserve every test specification identifier."""
+
+    def __ior__(self, other):
+        duplicates = self.keys() & other.keys()
+        if duplicates:
+            raise ValueError(f'Duplicate protocol cases: {sorted(duplicates)}')
+        return super().__ior__(other)
+
+    def __or__(self, other):
+        result = ProcedureMap(self)
+        result |= other
+        return result
 
 
 def procedure_cases(procedure: ProcedureFunction, variants) -> ProcedureMap:
     """Register case descriptions, arguments and optional pytest parameter marks."""
-    cases = {}
+    cases = ProcedureMap()
     for identifier, variant in variants.items():
         description, parameters = getattr(variant, 'values', variant)
         assert isinstance(description, str) and description.strip(), identifier
@@ -62,8 +74,12 @@ def collect_cases(procedures: ProcedureMap, *, radio_cases=(), radio=False):
     return cases
 
 
+def protocol_labels(marks):
+    return sorted({mark.name for mark in marks} & {'limited', 'source_conflict'})
+
+
 async def verify_case(tester, identifier, description, procedure, parameters, marks):
-    labels = sorted({mark.name for mark in marks} & {'limited', 'source_conflict'})
+    labels = protocol_labels(marks)
     tester.output.write(
         f'CASE {identifier}\nDESCRIPTION {description}\n'
         f'PROCEDURE {procedure.__doc__.strip()}\n'

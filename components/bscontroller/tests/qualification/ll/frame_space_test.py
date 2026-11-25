@@ -1191,7 +1191,7 @@ def phy_cases(central, start, *, symmetric, local):
     }
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Same PHY, current directional gap and encryption matrices in Tables 4.4-7/8/9
 # and 4.4-17/18/19/20.

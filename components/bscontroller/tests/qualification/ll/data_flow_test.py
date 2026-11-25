@@ -269,7 +269,7 @@ async def receive_fragmented_l2cap_header(tester, *, central):
     await _fragmented_header(tester, receive=True, central=central)
 
 
-PROCEDURES: ProcedureMap = {}
+PROCEDURES = ProcedureMap()
 
 # Verify correct transmission of an L2CAP frame when its header is split across HCI ACL
 # packets, including a zero-octet HCI start fragment.

@@ -21,7 +21,7 @@ from bscontroller.linklayer import (
     ControlOpcode,
 )
 from bscontroller.linklayer.features import LeFeatureMask
-from bscontroller.linklayer.procedure import ProcedureContext
+from bscontroller.linklayer.procedure import LocalProcedure, ProcedureContext
 from bscontroller.linklayer.state import Role
 
 if TYPE_CHECKING:
@@ -163,7 +163,7 @@ class PendingSubrateReport:
     request: SubrateContext | None
 
 
-class Subrating:
+class Subrating(LocalProcedure):
     def __init__(self, owner: ControlProcedures):
         self.owner = owner
         self.connection = owner.connection
@@ -175,14 +175,6 @@ class Subrating:
         self.peer_request: SubrateRequest | None = None
         self.report_after_ack: PendingSubrateReport | None = None
         self.peer_rejected = False
-
-    @property
-    def pending(self) -> bool:
-        return self.context is not None and self.context.active
-
-    @property
-    def deadline_us(self) -> int:
-        return self.context.deadline_us if self.pending else 0
 
     @property
     def peer_supported(self) -> bool:

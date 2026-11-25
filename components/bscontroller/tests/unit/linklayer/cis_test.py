@@ -262,10 +262,10 @@ def test_iso_test_commands_require_an_established_cis(controller, pending_cis):
     service = controller.le_procedures.ll
     unknown = ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
     for transmit in (False, True):
-        assert service.set_iso_test(handle, transmit, 0) == unknown
+        assert service.iso.test(handle, transmit, 0) == unknown
         assert manager.iso.get_stream(handle, transmit).test_type is None
     for end in (False, True):
-        status, counters = service.iso_test_counters(handle, end=end)
+        status, counters = service.iso.counters(handle, end=end)
         assert status == unknown
         assert (counters.received, counters.missed, counters.failed) == (0, 0, 0)
 

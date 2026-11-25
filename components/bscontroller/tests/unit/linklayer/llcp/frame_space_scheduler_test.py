@@ -12,7 +12,7 @@ from bscontroller.linklayer import (
 )
 from bscontroller.linklayer.data_length import DataLengths
 from bscontroller.radio.base import Phy, Received
-from tests.unit.linklayer.llcp.frame_space_test import (
+from tests.unit.linklayer.llcp.frame_space import (
     COMPLETE,
     CP,
     ONE_MBPS,
