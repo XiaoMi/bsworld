@@ -36,6 +36,8 @@ class DataStatus(IntEnum):
 class AdvertisingReport:
     properties: AdvertisingProperties
     data_status: DataStatus = DataStatus.COMPLETE
+    primary_coding: int = 0
+    secondary_coding: int = 0
 
 
 LL_ADV_FILTER_SCAN_MASK = 1

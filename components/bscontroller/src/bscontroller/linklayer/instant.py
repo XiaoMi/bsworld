@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from bscontroller.linklayer.connection_rate import ConnectionRateUpdate
     from bscontroller.linklayer.parameters import Parameters
 
 
@@ -22,3 +23,14 @@ class InstantUpdate:
     local: bool = False
     anchor_reference: tuple[int, int] | None = None
     notify: bool | None = None
+    rate: ConnectionRateUpdate | None = None
+
+    @property
+    def changes_timing(self) -> bool:
+        return self.parameters is not None or self.rate is not None
+
+    @property
+    def interval_us(self) -> int | None:
+        if self.parameters is not None:
+            return self.parameters.interval_us
+        return self.rate.interval_us if self.rate is not None else None

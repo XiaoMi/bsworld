@@ -220,10 +220,10 @@ def subevent_start_us(item: Advertising) -> int:
     )
 
 
-def connect_exchange_us(phy: Phy) -> int:
+def connect_exchange_us(phy: Phy, coding: int) -> int:
     """AUX_CONNECT_REQ, T_IFS and AUX_CONNECT_RSP (Core Vol 6, Part B, 4.4.2.12.2)."""
     return (
-        phy.airtime_us(PDU_ADV_CONNECT_SIZE)
+        phy.airtime_us(PDU_ADV_CONNECT_SIZE, coding)
         + LL_IFS_US
         + phy.airtime_us(PDU_ADV_AUX_CONNECT_RSP_SIZE)
     )
@@ -238,11 +238,12 @@ def subevent_transmit_window(item: Advertising, connecting: bool) -> RadioReserv
     assert timing is not None and state is not None
     entry = state.data.get(state.instance(timing.num_subevents))
     phy = item.secondary_phy
+    coding = item.secondary_coding.factor()
     duration = (
-        connect_exchange_us(phy)
+        connect_exchange_us(phy, coding)
         if connecting
         else phy.airtime_us(
-            len(subevent_pdu(item, entry.data if entry else b'').encode())
+            len(subevent_pdu(item, entry.data if entry else b'').encode()), coding
         )
     )
     return RadioReservation(
@@ -440,6 +441,21 @@ class ConnectionManager:
             for connection in self.contexts.values()
         ]
 
+    @property
+    def next_acl_flush_us(self) -> int | None:
+        return min(
+            (
+                deadline
+                for connection in self.contexts.values()
+                if (deadline := connection.next_acl_flush_us) is not None
+            ),
+            default=None,
+        )
+
+    def expire_acl(self) -> None:
+        for connection in tuple(self.contexts.values()):
+            connection.expire_acl()
+
     async def run(self, connection: Connection, target_us: int) -> None:
         await connection.advance_to_us(
             target_us, radio_until_us=self.link.resource.deadline_us
@@ -635,6 +651,7 @@ class AdvertisingManager:
             pdu,
             item.secondary_phy,
             indication_limit_us(timing, item.pawr_response_slots),
+            coding=item.secondary_coding.factor(),
         ):
             # Host data that fits without the update indication keeps priority.
             pdu = replace(pdu, acad=b'')

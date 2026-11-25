@@ -45,6 +45,16 @@ class ControlListener(Protocol):
     def local_version(self) -> tuple[int, int, int]: ...
 
     def on_connection_updated(self, connection: Connection, status: int) -> None: ...
+    def on_connection_rate_changed(
+        self,
+        connection: Connection,
+        status: int,
+        interval: int,
+        factor: int,
+        latency: int,
+        continuation: int,
+        timeout: int,
+    ) -> None: ...
     def on_phy_updated(self, connection: Connection, status: int) -> None: ...
     def on_frame_space_updated(
         self,

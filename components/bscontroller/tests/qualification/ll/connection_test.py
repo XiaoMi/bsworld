@@ -19527,11 +19527,14 @@ PROCEDURES |= procedure_cases(
 
 
 def _extended_feature_pdu(pdu, opcode, page):
-    """Only Frame Space Update is peer-visible on page 1 of the DUT declaration."""
+    """Check the independent ICS expectation for peer-visible page 1 features."""
     assert len(pdu) == 27
     assert pdu[:3] == bytes([opcode, 1, page])
-    expected = b'\x02' + bytes(23) if page == 1 else bytes(24)
-    assert pdu[3:] == expected
+    page_1 = (
+        hci.LeFeatureMask.FRAME_SPACE_UPDATE
+        | hci.LeFeatureMask.SHORTER_CONNECTION_INTERVALS
+    ) >> 64
+    assert pdu[3:] == (page_1 if page == 1 else 0).to_bytes(24, 'little')
 
 
 async def extended_feature_response(tester, *, central):
@@ -19554,8 +19557,9 @@ async def extended_feature_response(tester, *, central):
 
     Expected Outcome:
         Pass verdict: every page has the correct response opcode, length and
-        page number. MaxPage is 1. Page 1 reports Frame Space Update, and
-        excludes Monitoring Advertisers, which has Send to Peer = N.
+        page number. MaxPage is 1. Page 1 reports Frame Space Update and Shorter
+        Connection Intervals. Monitoring Advertisers and LE Flushable ACL Data
+        have Send to Peer = N. The SCI Host Support bit remains cleared.
 
     Reference:
         LL.TS.p28, Section 4.3.7.50, Table 4.3-133, Figure 4.3-262,
@@ -19775,6 +19779,131 @@ PROCEDURES |= procedure_cases(
         'LL/CON/PER/BV-167-C': (
             'LL Extended Feature Set Not Supported by the Peer',
             {'central': False, 'peer_initiates': False},
+        ),
+    },
+)
+
+
+class _FlushTimeoutPeer(PeerLink):
+    withheld_payload = None
+
+    def _accept(self, packet):
+        saved = self.nesn
+        super()._accept(packet)
+        if packet.pdu[PDU_HEADER_SIZE:] == self.withheld_payload:
+            self.nesn = saved
+
+
+async def flush_timeout(tester, *, central):
+    """Flush queued ACL data while preserving an existing transmission.
+
+    Initial Condition:
+        An unencrypted LE ACL with a 10 ms interval and 32 s supervision timeout.
+
+    Test Case Configuration:
+        LL/CON/CEN/BV-176-C: Central IUT.
+        LL/CON/PER/BV-180-C: Peripheral IUT.
+
+    Test Steps:
+        1. Set the automatic flush timeout to one second. Queue a non-flushable
+           L2CAP PDU, a flushable PDU, and a second non-flushable PDU.
+        2. Withhold acknowledgment of the first PDU for 150 connection events.
+           Then acknowledge it and observe the next transmission.
+        3. Send a flushable PDU, wait for its first transmission, and withhold
+           acknowledgment for another 150 events before acknowledging it.
+
+    Expected Outcome:
+        The timeout discards the queued flushable PDU. The non-flushable PDUs and
+        the already-transmitted flushable PDU are delivered. The Host receives
+        exactly four completed-packet credits.
+
+    Reference:
+        LL.TS.p28, 4.3.7.53, Table 4.3-137, Figure 4.3-265;
+        Core Vol 6, Part B, 4.5.17.1 and Vol 4, Part E, 7.3.30.
+    """
+    link = await establish(
+        tester,
+        central=central,
+        interval=8,
+        timeout=LL_SUPERVISION_TIMEOUT_MAX,
+        peer_factory=_FlushTimeoutPeer,
+    )
+    await tester.command(
+        hci.HCI_Write_Automatic_Flush_Timeout_Command(link.handle, 0x640)
+    )
+    await tester.wait(0)
+    first, dropped, third, retry = (
+        struct.pack('<HHB', 1, 4, marker) for marker in range(1, 5)
+    )
+
+    def enqueue(data, *, flushable=False):
+        boundary = (
+            hci.HCI_ACL_PB_FIRST_FLUSHABLE
+            if flushable
+            else hci.HCI_ACL_PB_FIRST_NON_FLUSHABLE
+        )
+        tester.send(
+            bytes(hci.HCI_AclDataPacket(link.handle, boundary, 0, len(data), data))
+        )
+
+    async def check_data(expected, *, attempts=1):
+        for _ in range(attempts):
+            packet = await link.exchange()
+            if packet.pdu[1]:
+                assert packet.pdu[0] & PDU_DATA_LLID_MASK == LlId.START
+                assert packet.pdu[PDU_HEADER_SIZE:] == expected
+                return
+            assert packet.pdu[0] & PDU_DATA_LLID_MASK == LlId.CONTINUATION
+        raise AssertionError('expected an ACL PDU')
+
+    async def withhold_and_release(data):
+        link.withheld_payload = data
+        await check_data(data, attempts=4)
+        sn = link.nesn
+        for _ in range(149):
+            await check_data(data)
+            assert link.nesn == sn
+        link.withheld_payload = None
+        await check_data(data)
+        assert link.nesn != sn
+
+    enqueue(first)
+    enqueue(dropped, flushable=True)
+    enqueue(third)
+    await withhold_and_release(first)
+    await check_data(third, attempts=4)
+    await link.exchange()
+
+    await tester.wait(0)
+    enqueue(retry, flushable=True)
+    await withhold_and_release(retry)
+    await link.exchange()
+    await tester.wait(0)
+
+    credits = 0
+    while event := tester.take(
+        lambda packet: isinstance(packet, hci.HCI_Number_Of_Completed_Packets_Event)
+    ):
+        assert event.connection_handles == [link.handle]
+        credits += sum(event.num_completed_packets)
+    assert credits == 4
+    await link.disconnect()
+
+
+# Verify the queue deadline and the ARQ boundary in both connection roles.
+PROCEDURES |= procedure_cases(
+    flush_timeout,
+    {
+        'LL/CON/CEN/BV-176-C': (
+            'Flush Timeout for flushable and non-flushable ACL Data packets, Central',
+            {'central': True},
+        ),
+        'LL/CON/PER/BV-180-C': (
+            (
+                'Flush Timeout for flushable and non-flushable ACL Data packets, '
+                'Peripheral'
+            ),
+            {'central': False},
         ),
     },
 )

@@ -42,6 +42,7 @@ from bscontroller.radio.base import Received
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.connection import Connection
+    from bscontroller.linklayer.connection_rate import ConnectionRateParameters
     from bscontroller.linklayer.subrating import SubrateRequest
     from bscontroller.linklayer.transfer import TrainSource
 
@@ -86,12 +87,14 @@ LL_CONTROL_PDU_SENDER_ROLES: dict[int, Role] = {
     Opcode.LL_PAUSE_ENC_REQ: Role.CENTRAL,
     Opcode.LL_PHY_UPDATE_IND: Role.CENTRAL,
     Opcode.LL_SUBRATE_IND: Role.CENTRAL,
+    Opcode.LL_CONNECTION_RATE_IND: Role.CENTRAL,
     Opcode.LL_ENC_RSP: Role.PERIPHERAL,
     Opcode.LL_START_ENC_REQ: Role.PERIPHERAL,
     Opcode.LL_PERIPHERAL_FEATURE_REQ: Role.PERIPHERAL,
     Opcode.LL_PHY_RSP: Role.PERIPHERAL,
     Opcode.LL_MIN_USED_CHANNELS_IND: Role.PERIPHERAL,
     Opcode.LL_SUBRATE_REQ: Role.PERIPHERAL,
+    Opcode.LL_CONNECTION_RATE_REQ: Role.PERIPHERAL,
 }
 
 
@@ -149,6 +152,8 @@ class LlcpCoordinator:
             return self.encryption.busy
         if kind == 'subrate':
             return controls.subrating.pending
+        if kind == 'connection_rate':
+            return controls.rate.in_progress
         if kind == 'frame_space':
             return controls.frame_space.pending
         return bool(controls.data_length.pending)
@@ -207,9 +212,14 @@ class LlcpCoordinator:
         self.controls.power.received(packet)
 
     def can_send(self, llid: int, payload: bytes) -> bool:
-        """PDUs allowed while an encryption procedure is in progress (Core Vol 6, Part
-        B, 5.1.3.1, 5.1.3.2).
-        """
+        """Apply procedure transmit exclusions (Core Vol 6, Part B, 5.1.3 and 5.3)."""
+        if (
+            llid == LlId.CONTROL
+            and payload
+            and payload[0] == Opcode.LL_CONNECTION_RATE_REQ
+            and not self.controls.rate.can_send_request
+        ):
+            return False
         if not self.encryption.busy:
             return True
         return (
@@ -384,6 +394,7 @@ class LlcpCoordinator:
             if procedure.cancel is not None:
                 procedure.cancel(reason)
         self.controls.subrating.close(reason)
+        self.controls.rate.close(reason)
         self.controls.frame_space.close(reason)
         self.controls.features.finish(reason)
         self.controls.finish_version(None)
@@ -448,12 +459,26 @@ class LlcpCoordinator:
             )
 
     def prepare_subrate(self, request: SubrateRequest) -> PreparedProcedure:
+        if self._duplicate('connection_rate'):
+            return PreparedProcedure(DISALLOWED)
         subrating = self.controls.subrating
         if not subrating.peer_supported:
             return PreparedProcedure(ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
         return self._prepare(
             DeferredProcedure(
                 'subrate', lambda: subrating.request(request), subrating.report
+            )
+        )
+
+    def prepare_connection_rate(
+        self, parameters: ConnectionRateParameters
+    ) -> PreparedProcedure:
+        rate = self.controls.rate
+        if status := rate.validate(parameters):
+            return PreparedProcedure(status)
+        return self._prepare(
+            DeferredProcedure(
+                'connection_rate', lambda: rate.request(parameters), rate.report
             )
         )
 
@@ -530,7 +555,7 @@ class LlcpCoordinator:
         *,
         valid_ce_lengths: bool,
     ) -> PreparedProcedure:
-        if self._duplicate('parameters'):
+        if self._duplicate('parameters') or self._duplicate('connection_rate'):
             return PreparedProcedure(DISALLOWED)
 
         def valid_request() -> bool:

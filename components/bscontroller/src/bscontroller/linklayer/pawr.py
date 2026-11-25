@@ -26,7 +26,7 @@ from bscontroller.linklayer import (
     AdvertisingPduType,
 )
 from bscontroller.linklayer.advertising import ExtendedPdu
-from bscontroller.radio.base import Phy
+from bscontroller.radio.base import PHY_CODED_S8_FACTOR, Phy
 
 # Bluetooth Assigned Numbers, Common Data Types: Periodic Advertising Response
 # Timing Information, carried in the ACAD of AUX_ADV_IND (Core Vol 6, Part B,
@@ -163,12 +163,12 @@ def acad_timing(acad: bytes) -> tuple[int, PawrTiming] | None:
     return None
 
 
-def fits(pdu: ExtendedPdu, phy: Phy, limit_us: int) -> bool:
-    """A PDU whose airtime is below ``limit_us``; S=8 on LE Coded (Vol 4, Part E,
-    7.8.125, 7.8.126).
-    """
+def fits(
+    pdu: ExtendedPdu, phy: Phy, limit_us: int, *, coding: int = PHY_CODED_S8_FACTOR
+) -> bool:
+    """Whether the encoded PDU fits before the next slot (Vol 4, Part E, 7.8.125)."""
     try:
-        return phy.airtime_us(len(pdu.encode())) < limit_us
+        return phy.airtime_us(len(pdu.encode()), coding) < limit_us
     except ValueError:
         return False
 

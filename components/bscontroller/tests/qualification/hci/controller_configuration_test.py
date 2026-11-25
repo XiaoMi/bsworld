@@ -11,14 +11,21 @@ import pytest
 from bscontroller import hci
 from bscontroller.linklayer import (
     LL_ADV_PRIMARY_CHANNEL_MAP_ALL,
+    LL_EVENT_COUNTER_MASK,
+    LL_IFS_US,
     LL_PERIODIC_INTERVAL_MIN,
+    PDU_DATA_EMPTY_TIME_CODED_S8_US,
+    PDU_DATA_OCTET_TIME_CODED_S8_US,
     PDU_DATA_PAYLOAD_SIZE_MAX,
     PDU_DATA_PAYLOAD_SIZE_MIN,
     PDU_DATA_PAYLOAD_TIME_CODED_MAX_US,
+    PDU_DATA_PAYLOAD_TIME_CODED_MIN_US,
     PDU_DATA_PAYLOAD_TIME_MIN_US,
+    PDU_DATA_PAYLOAD_TIME_UNCODED_MAX_US,
     ControlOpcode,
     LlId,
 )
+from bscontroller.radio.base import Phy
 from tests.qualification import pawr as pawr_peer
 from tests.qualification.cases import (
     ProcedureMap,
@@ -27,7 +34,13 @@ from tests.qualification.cases import (
     verify_case,
 )
 from tests.qualification.hci.power_control_test import expect_remote_power_read_error
-from tests.qualification.peer import establish, exchange_features
+from tests.qualification.peer import (
+    PEER_FEATURES,
+    change_phy,
+    establish,
+    exchange_feature_page,
+    exchange_features,
+)
 from tests.qualification.tester import (
     PEER_ADDRESS,
     create_connection,
@@ -1704,6 +1717,7 @@ RADIO_CASES = (
     'HCI/CCO/BI-11-C',
     'HCI/CCO/BI-12-C',
     'HCI/CCO/BI-13-C',
+    *(f'HCI/CCO/BI-{number}-C' for number in (*range(135, 141), *range(143, 148))),
 )
 
 
@@ -2012,9 +2026,8 @@ async def unsupported_host_feature(tester, *, bit):
         The IUT has no connection and the selected FeatureSet bit is clear.
 
     Test Case Configuration:
-        BI-44 selects bit 32 (CIS Host Support), BI-121 bit 41 (Advertising
-        Coding Selection Host Support), BI-122 bit 47 (Channel Sounding Host
-        Support), and BI-133 bit 72 (Shorter Connection Intervals).
+        BI-44 selects bit 32 (CIS Host Support) and BI-122 bit 47 (Channel
+        Sounding Host Support).
 
     Test Steps:
         1. Send LE Set Host Feature with the selected bit number and value 1.
@@ -2027,10 +2040,6 @@ async def unsupported_host_feature(tester, *, bit):
     Reference:
         HCI.TS.p39, 4.10.8, Table 4.47 and Figure 4.107, PDF pages 192-193;
         Core Vol 4, Part E, 7.8.115 and Vol 6, Part B, 4.6.
-
-    Source Correction:
-        Table 4.47 lists bit 72 for BI-133. The current Core assigns bit 72
-        to the Controller feature and bit 73 to its Host Support bit.
     """
     await tester.command(
         hci.HCI_LE_Set_Host_Feature_Command(bit, 1),
@@ -2074,7 +2083,7 @@ PROCEDURES |= procedure_cases(
             'Unsupported Feature on Controller',
             {'bit': bit},
         )
-        for number, bit in ((44, 32), (121, 41), (122, 47), (133, 72))
+        for number, bit in ((44, 32), (122, 47))
     },
 )
 
@@ -2182,6 +2191,397 @@ PROCEDURES |= procedure_cases(
 PROCEDURES |= procedure_cases(
     frame_space_update_requires_cis_support,
     {'HCI/CCO/BI-78-C': ('LE Frame Space Update, CIS not supported', {})},
+)
+
+
+RATE_HOST_FEATURE = hci.LeFeature.SHORTER_CONNECTION_INTERVALS_HOST_SUPPORT
+RATE_CHANGE = hci.HCI_LE_Connection_Rate_Change_Event
+# The test preamble uses a 10 ms ACL, 6 s supervision timeout and no subrating.
+RATE_PARAMETERS = {
+    'connection_interval_min': 80,
+    'connection_interval_max': 80,
+    'subrate_min': 1,
+    'subrate_max': 1,
+    'max_latency': 0,
+    'continuation_number': 0,
+    'supervision_timeout': 600,
+    'min_ce_length': 1,
+    'max_ce_length': 80,
+}
+
+
+def _rate_request(link, **changes):
+    return hci.HCI_LE_Connection_Rate_Request_Command(
+        link.handle, **(RATE_PARAMETERS | changes)
+    )
+
+
+async def _connect_for_rate(tester, *, central=False, peer_host=True, dle=True):
+    await tester.command(hci.HCI_LE_Set_Host_Feature_V2_Command(RATE_HOST_FEATURE, 1))
+    await tester.command(
+        hci.HCI_LE_Set_Host_Feature_Command(
+            hci.LeFeature.CONNECTION_SUBRATING_HOST_SUPPORT, 1
+        )
+    )
+    link = await establish(tester, central=central, interval=8, timeout=600)
+    features = (
+        PEER_FEATURES
+        | hci.LeFeatureMask.LL_EXTENDED_FEATURE_SET
+        | hci.LeFeatureMask.CONNECTION_PARAMETERS_REQUEST_PROCEDURE
+        | hci.LeFeatureMask.CONNECTION_SUBRATING
+        | hci.LeFeatureMask.CONNECTION_SUBRATING_HOST_SUPPORT
+    )
+    if not dle:
+        features &= ~hci.LeFeatureMask.LE_DATA_PACKET_LENGTH_EXTENSION
+    await exchange_features(link, int(features))
+    controller_bit = int(hci.LeFeatureMask.SHORTER_CONNECTION_INTERVALS) >> 64
+    host_bit = int(hci.LeFeatureMask.SHORTER_CONNECTION_INTERVALS_HOST_SUPPORT) >> 64
+    remote_bits = controller_bit | (host_bit if peer_host else 0)
+    local_bits = await exchange_feature_page(link, remote_bits)
+    assert local_bits & (controller_bit | host_bit) == controller_bit | host_bit
+    return link
+
+
+async def _expect_rate_error(tester, command, status):
+    result = await tester.command(command, (ErrorCode.SUCCESS, status))
+    if result.status == ErrorCode.SUCCESS:
+        event = await tester.event(RATE_CHANGE)
+        assert (event.connection_handle, event.status) == (
+            command.connection_handle,
+            status,
+        )
+
+
+async def rate_request_requires_peer_host_support(tester, *, central):
+    """Reject a Connection Rate Request when the peer Host has not enabled SCI.
+
+    Initial Condition:
+        The ACL is established and the Lower Tester publishes the SCI Controller
+        bit with the SCI Host Support bit clear in feature page 1.
+
+    Test Case Configuration:
+        BI-135 selects the Peripheral IUT and BI-136 selects the Central IUT.
+
+    Test Steps:
+        1. Send LE Connection Rate Request with valid timing and subrate values.
+        2. Check Command Status or the subsequent Connection Rate Change event.
+
+    Expected Outcome:
+        The request fails with Unsupported Remote Feature (0x1A).
+
+    Reference:
+        HCI.TS.p39, 4.10.26, Table 4.80; Core Vol 4, Part E, 7.8.154.
+    """
+    link = await _connect_for_rate(tester, central=central, peer_host=False)
+    await _expect_rate_error(
+        tester, _rate_request(link), ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
+    )
+    await link.disconnect()
+
+
+async def invalid_rate_parameters(tester, *, default):
+    """Validate the interval, subrate, latency, timeout and event length fields.
+
+    Initial Condition:
+        The ACL is established and both Hosts enable SCI.
+
+    Test Case Configuration:
+        BI-137 sends LE Connection Rate Request. BI-138 sends LE Set Default
+        Rate Parameters.
+
+    Test Steps:
+        1. Send the command with each invalid parameter from Table 4.82.
+        2. Read the controller's minimum supported interval. If it exceeds
+           375 µs, request the exact interval one step below it.
+
+    Expected Outcome:
+        Malformed values fail with 0x12. A valid but wholly unsupported range
+        fails with 0x20.
+
+    Source Correction:
+        Step 4 refers to itself and omits the subtraction sign. Step 3 supplies
+        the lower limit, so use that limit minus 125 µs for both interval bounds.
+
+    Reference:
+        HCI.TS.p39, 4.10.27, Tables 4.81–82;
+        Core Vol 4, Part E, 7.8.154–7.8.156.
+    """
+    link = await _connect_for_rate(tester)
+
+    async def reject(status, **changes):
+        if default:
+            await tester.command(
+                hci.HCI_LE_Set_Default_Rate_Parameters_Command(
+                    **(RATE_PARAMETERS | changes)
+                ),
+                status,
+            )
+        else:
+            await _expect_rate_error(tester, _rate_request(link, **changes), status)
+        await link.exchange()
+
+    for changes in (
+        {'connection_interval_min': 0x7D01},
+        {'connection_interval_max': 2},
+        {'connection_interval_max': 0x7D01},
+        {'connection_interval_min': 4, 'connection_interval_max': 3},
+        {'subrate_min': 0},
+        {'subrate_min': 0x01F5},
+        {'subrate_max': 0},
+        {'subrate_max': 0x01F5},
+        {'subrate_min': 2, 'subrate_max': 1},
+        {'max_latency': 0x01F4},
+        {'continuation_number': 0x01F4},
+        {'supervision_timeout': 9},
+        {'supervision_timeout': 0x0C81},
+        {'min_ce_length': 2, 'max_ce_length': 1},
+        {'min_ce_length': 0x7D00},
+        {'max_ce_length': 0x7D00},
+    ):
+        await reject(ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR, **changes)
+
+    rates = await tester.command(
+        hci.HCI_LE_Read_Minimum_Supported_Connection_Interval_Command()
+    )
+    minimum = rates.minimum_supported_connection_interval
+    assert 3 <= minimum <= 10
+    if minimum > 3:
+        await reject(
+            ErrorCode.UNSUPPORTED_LMP_OR_LL_PARAMETER_VALUE_ERROR,
+            connection_interval_min=minimum - 1,
+            connection_interval_max=minimum - 1,
+        )
+    await link.disconnect()
+
+
+async def rate_request_during_legacy_procedure(tester, *, subrate):
+    """Reject a Connection Rate Request during a conflicting legacy procedure.
+
+    Initial Condition:
+        The IUT is Peripheral and both Hosts enable SCI on a 10 ms ACL.
+
+    Test Case Configuration:
+        BI-139 starts the Connection Parameters Request procedure. BI-140
+        starts the Connection Subrate Request procedure.
+
+    Test Steps:
+        1. Start the legacy procedure with Max_Latency = 0x0100.
+        2. Observe its LL request and withhold the LL response.
+        3. Send LE Connection Rate Request with Max_Latency = 1.
+
+    Expected Outcome:
+        The new command fails with Command Disallowed (0x0C).
+
+    Reference:
+        HCI.TS.p39, 4.10.27, BI-139-C and BI-140-C, pages 250–251;
+        Core Vol 4, Part E, 7.8.154.
+    """
+    link = await _connect_for_rate(tester)
+    latency = 0x0100
+    if subrate:
+        await tester.command(
+            hci.HCI_LE_Subrate_Request_Command(link.handle, 1, 1, latency, 0, 600)
+        )
+        parameters = await link.control(Opcode.LL_SUBRATE_REQ)
+    else:
+        await tester.command(
+            hci.HCI_LE_Connection_Update_Command(link.handle, 8, 8, latency, 600, 0, 0)
+        )
+        parameters = await link.control(Opcode.LL_CONNECTION_PARAM_REQ)
+    assert struct.unpack_from('<H', parameters, 5)[0] == latency
+    await _expect_rate_error(
+        tester, _rate_request(link, max_latency=1), ErrorCode.COMMAND_DISALLOWED_ERROR
+    )
+    await link.disconnect()
+
+
+async def rate_request_interval_too_short(tester, *, phy, dle):
+    """Reject a proposed interval shorter than connIntervalRequired.
+
+    Initial Condition:
+        The IUT is Peripheral on a 10 ms ACL. Both Hosts enable SCI and
+        the inter-frame and minimum connection event spacing are 150 µs.
+
+    Test Case Configuration:
+        BI-143 and BI-144 use LE 1M. BI-145 and BI-146 use LE Coded.
+        BI-144 and BI-146 establish the maximum Data Length parameters.
+
+    Test Steps:
+        1. If selected, exchange LL_LENGTH_REQ/RSP with the maximum values
+           for the PHY and observe changed effective limits.
+        2. Request an interval equal to the greatest 125 µs multiple strictly
+           below connIntervalRequired.
+
+    Expected Outcome:
+        The IUT rejects the command with 0x11. Without DLE, 0x20 also applies
+        if the interval is below the IUT's globally supported minimum.
+
+    Reference:
+        HCI.TS.p39, 4.10.29, Table 4.84; Core Vol 4, Part E, 7.8.154 and
+        Vol 6, Part B, 4.5.10.
+    """
+    link = await _connect_for_rate(tester, dle=dle)
+    if phy != Phy.LE_1M:
+        await change_phy(tester, link, phy, local=True)
+    coded = phy == Phy.LE_CODED
+    octets = PDU_DATA_PAYLOAD_SIZE_MIN
+    time = PDU_DATA_PAYLOAD_TIME_CODED_MIN_US if coded else PDU_DATA_PAYLOAD_TIME_MIN_US
+    if dle:
+        maximum = PDU_DATA_PAYLOAD_SIZE_MAX
+        max_time = (
+            PDU_DATA_PAYLOAD_TIME_CODED_MAX_US
+            if coded
+            else PDU_DATA_PAYLOAD_TIME_UNCODED_MAX_US
+        )
+        request = struct.pack(
+            '<BHHHH', Opcode.LL_LENGTH_REQ, maximum, max_time, maximum, max_time
+        )
+        received = await link.control(Opcode.LL_LENGTH_RSP, request)
+        rx_octets, rx_time, _, _ = struct.unpack('<HHHH', received[1:])
+        octets, time = min(maximum, rx_octets), min(max_time, rx_time)
+        event = await tester.expect(
+            lambda event: isinstance(event, hci.HCI_LE_Data_Length_Change_Event)
+            and (event.connection_handle, event.max_rx_octets, event.max_rx_time)
+            == (link.handle, octets, time)
+        )
+        assert (event.connection_handle, event.max_rx_octets, event.max_rx_time) == (
+            link.handle,
+            octets,
+            time,
+        )
+
+    required = 2 * LL_IFS_US + min(
+        time, octets * PDU_DATA_OCTET_TIME_CODED_S8_US + PDU_DATA_EMPTY_TIME_CODED_S8_US
+    )
+    interval = (required - 1) // 125
+    reason = ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR
+    await tester.command(
+        _rate_request(
+            link, connection_interval_min=interval, connection_interval_max=interval
+        ),
+        reason
+        if dle
+        else (reason, ErrorCode.UNSUPPORTED_LMP_OR_LL_PARAMETER_VALUE_ERROR),
+    )
+    await link.disconnect()
+
+
+async def legacy_update_during_rate_request(tester):
+    """Reject LE Connection Update while a Connection Rate Request is pending.
+
+    Initial Condition:
+        The IUT is Peripheral and both Hosts enable SCI on an established ACL.
+
+    Test Steps:
+        1. Send LE Connection Rate Request with Max_Latency = 0x0100 and
+           observe the LL_CONNECTION_RATE_REQ.
+        2. Withhold LL_CONNECTION_RATE_IND and send LE Connection Update.
+        3. Send a valid LL_CONNECTION_RATE_IND and run to its Instant.
+
+    Expected Outcome:
+        LE Connection Update returns 0x0C. The original rate request completes
+        with a successful Connection Rate Change event.
+
+    Source Correction:
+        The title names a Connection Parameters Request. Steps 1–3 instead
+        start the Connection Rate Request, as required by Core 7.8.18.
+
+    Reference:
+        HCI.TS.p39, BI-147-C, page 255; Core Vol 4, Part E, 7.8.18 and
+        Vol 6, Part B, 5.1.32–5.1.33.
+    """
+    link = await _connect_for_rate(tester)
+    await tester.command(_rate_request(link, max_latency=0x0100))
+    request = await link.control(Opcode.LL_CONNECTION_RATE_REQ)
+    assert struct.unpack_from('<H', request, 9)[0] == 0x0100
+    await tester.command(
+        hci.HCI_LE_Connection_Update_Command(link.handle, 8, 8, 0x0101, 600, 0, 0),
+        ErrorCode.COMMAND_DISALLOWED_ERROR,
+    )
+    instant = (link.counter + 7) & LL_EVENT_COUNTER_MASK
+    indication = struct.pack(
+        '<B7H', Opcode.LL_CONNECTION_RATE_IND, 0, 80, instant, 1, 0, 0, 600
+    )
+    await link.exchange(indication, llid=LlId.CONTROL)
+    while link.counter != (instant + 1) & LL_EVENT_COUNTER_MASK:
+        await link.exchange()
+    result = await tester.event(RATE_CHANGE)
+    assert (result.connection_handle, result.status, result.connection_interval) == (
+        link.handle,
+        ErrorCode.SUCCESS,
+        80,
+    )
+    await link.disconnect()
+
+
+# Verify local and peer SCI support gating in both connection roles.
+PROCEDURES |= procedure_cases(
+    rate_request_requires_peer_host_support,
+    {
+        f'HCI/CCO/BI-{number}-C': (
+            f'Reject LE Connection Rate Request without peer SCI Host Support, {role}',
+            {'central': role == 'Central'},
+        )
+        for number, role in ((135, 'Peripheral'), (136, 'Central'))
+    },
+)
+
+# Apply the invalid parameter matrix to the active and default rate commands.
+PROCEDURES |= procedure_cases(
+    invalid_rate_parameters,
+    {
+        'HCI/CCO/BI-137-C': (
+            'LE Connection Rate Request, Invalid Parameters',
+            {'default': False},
+        ),
+        'HCI/CCO/BI-138-C': (
+            'LE Set Default Rate Parameters, Invalid Parameters',
+            {'default': True},
+        ),
+    },
+)
+
+# Keep the legacy request pending while the Host submits the SCI command.
+PROCEDURES |= procedure_cases(
+    rate_request_during_legacy_procedure,
+    {
+        'HCI/CCO/BI-139-C': (
+            'Reject LE Connection Rate Request during Connection Parameters Request',
+            {'subrate': False},
+        ),
+        'HCI/CCO/BI-140-C': (
+            'Reject LE Connection Rate Request during Connection Subrate Request',
+            {'subrate': True},
+        ),
+    },
+)
+
+# Check the active PHY packet budget with and without Data Length Update.
+PROCEDURES |= procedure_cases(
+    rate_request_interval_too_short,
+    {
+        f'HCI/CCO/BI-{number}-C': (
+            f'Reject LE Connection Rate Request below the packet budget, {phy.name}',
+            {'phy': phy, 'dle': dle},
+        )
+        for number, phy, dle in (
+            (143, Phy.LE_1M, False),
+            (144, Phy.LE_1M, True),
+            (145, Phy.LE_CODED, False),
+            (146, Phy.LE_CODED, True),
+        )
+    },
+)
+
+# Reject the legacy update and allow the pending rate request to finish.
+PROCEDURES |= procedure_cases(
+    legacy_update_during_rate_request,
+    {
+        'HCI/CCO/BI-147-C': (
+            'Reject LE Connection Update during Connection Rate Request',
+            {},
+        )
+    },
 )
 
 

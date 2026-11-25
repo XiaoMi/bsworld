@@ -28,6 +28,7 @@ from bscontroller.linklayer.advertising import ExtendedPdu
 from bscontroller.linklayer.api import SyncTransferConfig
 from bscontroller.linklayer.bitstream import generate_access_address
 from bscontroller.linklayer.connection import Connection
+from bscontroller.linklayer.connection_rate import ConnectionRateParameters
 from bscontroller.linklayer.decision import DecisionProgram
 from bscontroller.linklayer.discovery import (
     Advertising,
@@ -89,6 +90,7 @@ class RadioLink:
         # Host default transfer mode for subsequent connections (7.8.92).
         self.sync_transfer = SyncTransferConfig()
         self.default_subrate = SubrateRequest()
+        self.default_rate = ConnectionRateParameters()
         self.default_tx_octets = PDU_DATA_PAYLOAD_SIZE_MIN
         self.default_tx_time = PDU_DATA_PAYLOAD_TIME_MIN_US
         self.rf_tx_path_compensation = 0
@@ -138,7 +140,12 @@ class RadioLink:
         self.periodic_advertiser_list.clear()
         self.sync_transfer = SyncTransferConfig()
         self.default_subrate = SubrateRequest()
-        self.features &= ~int(LeFeatureMask.CONNECTION_SUBRATING_HOST_SUPPORT)
+        self.default_rate = ConnectionRateParameters()
+        self.features &= ~int(
+            LeFeatureMask.CONNECTION_SUBRATING_HOST_SUPPORT
+            | LeFeatureMask.ADVERTISING_CODING_SELECTION_HOST_SUPPORT
+            | LeFeatureMask.SHORTER_CONNECTION_INTERVALS_HOST_SUPPORT
+        )
         self.default_tx_octets = PDU_DATA_PAYLOAD_SIZE_MIN
         self.default_tx_time = PDU_DATA_PAYLOAD_TIME_MIN_US
         self.rf_tx_path_compensation = 0
@@ -260,13 +267,25 @@ class RadioLink:
         operations.extend(self.roles.broadcast.prepare())
         return operations, self.roles.synchronization.contexts()
 
+    async def advance_idle_to_us(self, target_us: int) -> None:
+        """Pause an idle wait at the first software ACL flush deadline."""
+        connections = self.roles.connections
+        deadline = connections.next_acl_flush_us
+        if deadline is None or target_us < deadline:
+            await self.radio.advance_to_us(target_us)
+        else:
+            await self.radio.advance_to_us(max(self.now_us, deadline))
+            connections.expire_acl()
+
     async def advance_to_us(self, target_us: int) -> int:
         """Dispatch role-prepared events on one radio and one simulation timeline."""
         iso = self.roles.iso
+        connections = self.roles.connections
         while self.now_us < target_us:
             iso.flush(self.now_us)
             self.monitoring.expire()
             self.roles.synchronization.expire()
+            connections.expire_acl()
             operations, contexts = self._pending_operations(target_us)
             if operations:
                 operation = self.resource.select(operations)
@@ -286,10 +305,12 @@ class RadioLink:
                     end = min(end, context.deadline_us)
             scan = self.roles.scanning.next_context()
             if scan:
+                # Address acquisition can span a software ACL flush deadline.
                 await self.roles.scanning.run(scan, end)
             else:
-                await self.radio.advance_to_us(end)
+                await self.advance_idle_to_us(end)
         self.monitoring.expire()
         self.roles.broadcast.expire()
         iso.flush(self.now_us)
+        connections.expire_acl()
         return self.now_us

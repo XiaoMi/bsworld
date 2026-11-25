@@ -35,7 +35,7 @@ from bscontroller.linklayer.api import (
     PeriodicSyncSnapshot,
 )
 from bscontroller.linklayer.state import AdvertisingProperties, DataStatus
-from bscontroller.radio.base import Phy
+from bscontroller.radio.base import PHY_CODED_S2_FACTOR, Phy
 
 if TYPE_CHECKING:
     from bscontroller.hci.controller import Controller
@@ -200,6 +200,29 @@ class LeControllerEvents:
         self._emit_hci_packet(
             hci.HCI_LE_Subrate_Change_Event(
                 status, connection.handle, factor, latency, continuation, timeout
+            )
+        )
+
+    def on_connection_rate_changed(
+        self,
+        connection: ConnectionSnapshot,
+        status: int,
+        interval: int,
+        factor: int,
+        latency: int,
+        continuation: int,
+        timeout: int,
+    ) -> None:
+        """Report the Connection Rate result (Core Vol 4, Part E, 7.7.65.50)."""
+        self._emit_hci_packet(
+            hci.HCI_LE_Connection_Rate_Change_Event(
+                status,
+                connection.handle,
+                interval,
+                factor,
+                latency,
+                continuation,
+                timeout,
             )
         )
 
@@ -526,6 +549,20 @@ class LeControllerEvents:
             )
             return
         if self.extended_scan:
+            if (
+                self.ll.features
+                & hci.LeFeatureMask.ADVERTISING_CODING_SELECTION_HOST_SUPPORT
+            ):
+                if (
+                    primary_phy == Phy.LE_CODED
+                    and report.primary_coding == PHY_CODED_S2_FACTOR
+                ):
+                    primary_phy = AdvertisingReport.LE_CODED_S2
+                if (
+                    secondary_phy == Phy.LE_CODED
+                    and report.secondary_coding == PHY_CODED_S2_FACTOR
+                ):
+                    secondary_phy = AdvertisingReport.LE_CODED_S2
             for offset in range(
                 0, max(1, len(data)), HCI_LE_EXT_ADV_REPORT_DATA_SIZE_MAX
             ):

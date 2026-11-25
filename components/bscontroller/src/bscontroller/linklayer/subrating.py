@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING
 
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
-    LL_CONN_INTERVAL_UNIT_US,
     LL_CONN_LATENCY_MAX,
     LL_EVENT_COUNTER_MASK,
     LL_RESPONSE_TIMEOUT_US,
@@ -36,25 +35,18 @@ EVENT_COUNTER_QUARTER = EVENT_COUNTER_PERIOD // 4
 UNSUPPORTED = ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
 
 
-def valid_event_spacing(interval: int, factor: int, latency: int, timeout: int) -> bool:
+def valid_event_spacing(
+    interval_us: int, factor: int, latency: int, timeout: int
+) -> bool:
     return (
-        LL_SUPERVISION_TIMEOUT_INTERVAL_FACTOR
-        * interval
-        * LL_CONN_INTERVAL_UNIT_US
-        * factor
-        * (latency + 1)
+        LL_SUPERVISION_TIMEOUT_INTERVAL_FACTOR * interval_us * factor * (latency + 1)
         < timeout * LL_SUPERVISION_TIMEOUT_UNIT_US
     )
 
 
-def maximum_latency(interval: int, factor: int, timeout: int) -> int:
+def maximum_latency(interval_us: int, factor: int, timeout: int) -> int:
     """Largest valid latency at this subrate and supervision timeout."""
-    spacing = (
-        LL_SUPERVISION_TIMEOUT_INTERVAL_FACTOR
-        * interval
-        * LL_CONN_INTERVAL_UNIT_US
-        * factor
-    )
+    spacing = LL_SUPERVISION_TIMEOUT_INTERVAL_FACTOR * interval_us * factor
     budget = timeout * LL_SUPERVISION_TIMEOUT_UNIT_US - 1
     return min(MAX_SUBRATE_FACTOR // factor, budget // spacing) - 1
 
@@ -81,8 +73,10 @@ class SubrateRequest:
     def valid_host_parameters(self) -> bool:
         return self.valid_fields and self.continuation < self.maximum
 
-    def fits_connection(self, interval: int) -> bool:
-        return valid_event_spacing(interval, self.maximum, self.latency, self.timeout)
+    def fits_connection(self, interval_us: int) -> bool:
+        return valid_event_spacing(
+            interval_us, self.maximum, self.latency, self.timeout
+        )
 
     def pack(self) -> bytes:
         return PARAMETERS.pack(
@@ -137,7 +131,7 @@ class SubrateUpdate:
             timeout,
         )
 
-    def valid_for(self, interval: int) -> bool:
+    def valid_for(self, interval_us: int) -> bool:
         request = SubrateRequest(
             self.schedule.factor,
             self.schedule.factor,
@@ -145,7 +139,7 @@ class SubrateUpdate:
             self.schedule.continuation,
             self.timeout,
         )
-        return request.valid_host_parameters and request.fits_connection(interval)
+        return request.valid_host_parameters and request.fits_connection(interval_us)
 
 
 @dataclass(eq=False, kw_only=True)
@@ -244,7 +238,7 @@ class Subrating:
         self.owner.enqueue(bytes([opcode]) + body)
 
     def request(self, request: SubrateRequest) -> None:
-        if not request.fits_connection(self.connection.parameters.interval):
+        if not request.fits_connection(self.connection.parameters.interval_us):
             self.report(ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR)
         elif not self.peer_supported:
             self.report(UNSUPPORTED)
@@ -291,7 +285,7 @@ class Subrating:
             return
         request, self.peer_request = self.peer_request, None
         limits = self.limits
-        interval = self.connection.parameters.interval
+        interval_us = self.connection.parameters.interval_us
         factor = max(request.minimum, limits.minimum)
         if not self.peer_supported:
             self.owner.reject(Opcode.LL_SUBRATE_REQ, UNSUPPORTED)
@@ -301,9 +295,9 @@ class Subrating:
             and request.timeout <= limits.timeout
             and factor <= min(request.maximum, limits.maximum)
             and valid_event_spacing(
-                interval, request.minimum, request.latency, request.timeout
+                interval_us, request.minimum, request.latency, request.timeout
             )
-            and valid_event_spacing(interval, factor, 0, request.timeout)
+            and valid_event_spacing(interval_us, factor, 0, request.timeout)
         ):
             self.owner.reject(
                 Opcode.LL_SUBRATE_REQ,
@@ -316,7 +310,7 @@ class Subrating:
                     factor,
                     min(
                         request.latency,
-                        maximum_latency(interval, factor, request.timeout),
+                        maximum_latency(interval_us, factor, request.timeout),
                     ),
                     max(limits.continuation, request.continuation),
                     request.timeout,
@@ -400,7 +394,7 @@ class Subrating:
 
     def _receive_update(self, payload: bytes) -> None:
         update = SubrateUpdate.unpack(payload[1:], self.connection.event_index)
-        if not update.valid_for(self.connection.parameters.interval):
+        if not update.valid_for(self.connection.parameters.interval_us):
             self.owner.reject(
                 Opcode.LL_SUBRATE_IND, ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR
             )
@@ -433,6 +427,10 @@ class Subrating:
                 ):
                     self.owner.reject(
                         opcode, ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
+                    )
+                elif self.owner.rate.instant_pending:
+                    self.owner.reject(
+                        opcode, ErrorCode.DIFFERENT_TRANSACTION_COLLISION_ERROR
                     )
                 elif self.peer_request is not None:
                     self.owner.reject(

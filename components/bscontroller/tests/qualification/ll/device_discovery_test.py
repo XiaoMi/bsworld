@@ -160,6 +160,8 @@ SyncOptions = hci.HCI_LE_Periodic_Advertising_Create_Sync_Command.Options
 LegacyEventType = hci.HCI_LE_Advertising_Report_Event.EventType
 PERIODIC_RESPONSE_TIMING_INFORMATION = AD_PERIODIC_RESPONSE_TIMING_INFORMATION
 Operation = hci.HCI_LE_Set_Extended_Advertising_Data_Command.Operation
+# PHY_Options values for mandatory coding in Core Vol 4, Part E, 7.8.53.
+REQUIRED_ADV_CODING = {0x03: PHY_CODED_S2_FACTOR, 0x04: PHY_CODED_S8_FACTOR}
 # Endpoint jitter in the common advertising timing notes, 16 us at each endpoint.
 ADVERTISING_INTERVAL_JITTER_US = 32
 # The LL test suite permits a deviation of 2 us from the response T_IFS.
@@ -1214,18 +1216,22 @@ async def extended_legacy_undirected(tester, *, extended=False, connectable=Fals
         )
 
 
-async def extended_nonconnectable(tester, *, phy):
+async def extended_nonconnectable(tester, *, phy, coding_options=None):
     """Extended Advertising, Non-Connectable.
 
     Initial Condition:
         Advertising parameters are selected within the supported interval range,
         with a supported own-address type and all supported primary channels.
         This implementation selects a public own address and a 200-ms interval.
-        Tables 4.2-12/13 select primary/secondary PHYs 1M/1M (BV-47), Coded/Coded
-        (BV-48), or 1M/2M (BV-49). All three selected cases have no additional
-        Host feature initial condition and both coding options are zero.
+        Tables 4.2-12/13 select the APIs' primary/secondary PHYs. BV-47, BV-48
+        and BV-49 use 1M/1M, Coded/Coded and 1M/2M, with no coding preference
+        and no Host coding-selection bit. BV-81–85 use Coded/Coded and set that
+        bit before configuring advertising parameters.
 
     Test Case Configuration:
+        BV-81–85 use primary/secondary coding options (0,0), (1,2), (2,1),
+        (3,4) and (4,3). Only options 3 (require S=2) and 4 (require S=8)
+        constrain the lower tester's air encoding verdict.
         Table 4.2-14 rows 1-6: undirected data lengths 0, 31, 474, 711, 948,
         capacity; row 7: capacity with fragmentation preference 1. Rows 8-10:
         directed lengths 0, 251, capacity. Rows 11/12: undirected/directed, no
@@ -1241,8 +1247,8 @@ async def extended_nonconnectable(tester, *, phy):
            otherwise skip this row and continue with the next row.
         3. Set the row's properties, all primary channels, selected interval and
            the case's primary/secondary PHYs and coding options. Directed rows
-           use the Lower Tester's public peer address. Both options are zero, so
-           v1 parameters are permitted; nonzero options would require v2.
+           use the Lower Tester's public peer address. BV-81–85 use v2 for the
+           configured coding options. The other cases use v1 defaults.
         4. Submit the row's data and fragmentation preference, using seeded random
            octets 1..254. Lengths above 251 use FIRST, zero or more INTERMEDIATE,
            and LAST fragments. Round 2 uses FIRST with one octet, 29 one-octet
@@ -1252,8 +1258,8 @@ async def extended_nonconnectable(tester, *, phy):
         6. Receive ADV_EXT_IND with AdvMode 00 and no SuppInfo, SyncInfo, TxPower,
            ACAD or AdvData. Nonempty data requires AuxPtr; empty data permits it.
            With AuxPtr, require ADI and the configured SID; without it, forbid ADI.
-           Check the configured primary PHY. These cases allow either Coded coding;
-           options 3/4 in unselected cases would require the specified coding.
+           Check the configured primary PHY. Options 0–2 permit either coding
+           on Coded PHY. Options 3 and 4 require S=2 and S=8, respectively.
         7. If AuxPtr is absent, continue at Step 10.
         8. Follow AuxPtr to AUX_ADV_IND, checking pointer timing, AdvMode 00,
            matching ADI, the selected secondary PHY and no SuppInfo, SyncInfo or
@@ -1305,12 +1311,20 @@ async def extended_nonconnectable(tester, *, phy):
         the capacity-exceeded branch as skipping the current table row, not as
         sending commands for an unsupported length. Amber confirms this reading;
         this is a local correction, not an adopted SIG erratum.
+        Step 3 assigns both PHY and both PHY Options to one table. Read primary
+        fields from Table 4.2-12 and secondary fields from Table 4.2-13.
 
     Reference:
         LL.TS.p28.pdf, Section 4.2.3.4, LL/DDI/ADV/BV-47-C,
-        LL/DDI/ADV/BV-48-C and LL/DDI/ADV/BV-49-C; PDF pages 139-146,
+        LL/DDI/ADV/BV-48-C, LL/DDI/ADV/BV-49-C and LL/DDI/ADV/BV-81-C through
+        LL/DDI/ADV/BV-85-C; PDF pages 139-146,
         printed pages 4.2-46 through 4.2-53, Tables 4.2-12 through 4.2-14.
     """
+    if coding_options is not None:
+        await tester.command(hci.HCI_LE_Set_Host_Feature_Command(41, 1))
+    primary_option, secondary_option = coding_options or (0, 0)
+    primary_coding = REQUIRED_ADV_CODING.get(primary_option)
+    secondary_coding = REQUIRED_ADV_CODING.get(secondary_option)
     capacity = (
         await tester.command(hci.HCI_LE_Read_Maximum_Advertising_Data_Length_Command())
     ).max_advertising_data_length
@@ -1337,6 +1351,7 @@ async def extended_nonconnectable(tester, *, phy):
             continue
         await tester.command(
             extended_parameters(
+                coding_options=coding_options,
                 advertising_event_properties=properties,
                 peer_address=LOWER_CENTRAL_PUBLIC_ADDRESS,
                 peer_address_type=hci.AddressType.PUBLIC_DEVICE,
@@ -1393,6 +1408,8 @@ async def extended_nonconnectable(tester, *, phy):
                 assert duration or maximum
                 break
             first = _nonconnectable_extended_packet(primary, primary_phy)
+            if primary_coding is not None:
+                assert primary.coding == primary_coding
             assert first['data'] == b'' and all(
                 field not in first for field in forbidden[2:]
             )
@@ -1432,7 +1449,12 @@ async def extended_nonconnectable(tester, *, phy):
                     assert 'address' not in first and 'target' not in first
                 assert (
                     await chain(
-                        tester, packet, fields, forbidden=forbidden, expected_phy=phy
+                        tester,
+                        packet,
+                        fields,
+                        forbidden=forbidden,
+                        expected_phy=phy,
+                        expected_coding=secondary_coding,
                     )
                     == data
                 )
@@ -1469,6 +1491,71 @@ async def extended_nonconnectable(tester, *, phy):
                 await tester.receive(37, duration_us=2 * interval_us, phy=primary_phy)
                 is None
             )
+        await tester.command(extended_enable(0))
+
+
+async def extended_advertising_change_coding(tester):
+    """Extended Advertising, Non-Connectable, Advertising Coding Selection.
+
+    Initial Condition:
+        Start with the public own address, all primary channels, a 200-ms
+        interval and the Advertising Coding Selection Host Support bit set.
+
+    Test Steps:
+        1. Read the supported maximum advertising data length.
+        2. Configure an undirected Coded/Coded set to require S=2 on both
+           channels. Set the maximum-length data and enable advertising.
+        3. Follow ADV_EXT_IND to AUX_ADV_IND and any AUX_CHAIN_IND PDUs.
+           Check that every PDU uses S=2 and the chain reproduces the payload.
+        4. Disable advertising and reconfigure the same set to require S=8.
+           Enable without resending the data. Repeat the air checks for S=8.
+
+    Expected Outcome:
+        Reconfiguration changes the coding of the primary and every auxiliary
+        PDU while preserving the complete, maximum-length payload.
+
+    Reference:
+        LL.TS.p28, LL/DDI/ADV/BV-86-C, Figures 4.2-61 and 4.2-62, Steps 1-13,
+        printed pages 4.2-141 through 4.2-144.
+    """
+    await tester.command(hci.HCI_LE_Set_Host_Feature_Command(41, 1))
+    capacity = (
+        await tester.command(hci.HCI_LE_Read_Maximum_Advertising_Data_Length_Command())
+    ).max_advertising_data_length
+    assert PDU_ADV_LEGACY_DATA_SIZE_MAX <= capacity <= hci.HCI_LE_ADV_DATA_SIZE_MAX
+    data = random.Random(0).randbytes(capacity)
+    for option, coding in REQUIRED_ADV_CODING.items():
+        await tester.command(
+            extended_parameters(
+                coding_options=(option, option),
+                primary_advertising_phy=Phy.LE_CODED,
+                secondary_advertising_phy=Phy.LE_CODED,
+                primary_advertising_interval_min=320,
+                primary_advertising_interval_max=320,
+                primary_advertising_channel_map=LL_ADV_PRIMARY_CHANNEL_MAP_ALL,
+            )
+        )
+        if coding == PHY_CODED_S2_FACTOR:
+            await set_extended_data(tester, data)
+        await tester.command(extended_enable())
+        primary = await tester.expect_pdu(
+            kind=AdvertisingPduType.ADV_EXT_IND, duration_us=400_000, phy=Phy.LE_CODED
+        )
+        fields = _nonconnectable_extended_packet(primary, Phy.LE_CODED)
+        assert primary.coding == coding and 'aux' in fields
+        _, packet, auxiliary = await follow_auxiliary(tester, primary, fields)
+        assert _nonconnectable_extended_packet(packet, Phy.LE_CODED) == auxiliary
+        assert auxiliary['adi'] == fields['adi']
+        assert (
+            await chain(
+                tester,
+                packet,
+                auxiliary,
+                expected_phy=Phy.LE_CODED,
+                expected_coding=coding,
+            )
+            == data
+        )
         await tester.command(extended_enable(0))
 
 
@@ -5867,7 +5954,9 @@ async def passive_scanning_discoverable_events(tester):
     _check_scan_reports(tester, peer, AdvertisingPduType.ADV_SCAN_IND, set(), False)
 
 
-async def extended_scanning_passive(tester, *, primary_phy, secondary_phy):
+async def extended_scanning_passive(
+    tester, *, primary_phy, secondary_phy, coding_selection=False
+):
     """Extended Scanning, Passive.
 
     Initial Condition:
@@ -5876,13 +5965,11 @@ async def extended_scanning_passive(tester, *, primary_phy, secondary_phy):
         a different device, as specified by the round. Scan_Max_Data is 1650
         octets for this implementation.
 
-        The selected Table 4.2-51 cases do not enable Advertising Coding Selection
-        (Host Support). Execute rounds 1-18 for the 1M/1M pair and rounds 10-18
-        for the other selected primary/secondary PHY pairs. Legacy PDUs occur
-        only in the 1M/1M case. Coded transmissions use S=2 in odd-numbered
-        rounds and S=8 in even-numbered rounds.
-
     Test Case Configuration:
+        BV-91 additionally enables Advertising Coding Selection (Host Support).
+        Execute rounds 1-18 for the 1M/1M pair and rounds 10-18 for the other
+        PHY pairs. Legacy PDUs occur only in the 1M/1M case. Coded transmissions
+        use S=2 in odd-numbered rounds and S=8 in even-numbered rounds.
         Table 4.2-52: rounds 1/2 use ADV_IND with 0/31 data octets; 3/4 use
         ADV_DIRECT_IND targeting IUT/Not IUT; 5/6 use ADV_NONCONN_IND with 0/31
         octets; 7/8/9 use primary-only ADV_EXT_IND, undirected/IUT/Not IUT.
@@ -5914,8 +6001,9 @@ async def extended_scanning_passive(tester, *, primary_phy, secondary_phy):
         4. Check every received report's event properties, address/type, PHYs,
            SID, TargetA, zero periodic interval, unavailable TxPower, data order,
            and fragment status for undirected or IUT-directed advertising. Coded
-           PHY is reported as 0x03 without Host coding-selection support. Reject
-           reports for another TargetA and any passive-scanner RF response.
+           PHY is reported as 0x04 for S=2 if Host coding-selection support is
+           set, and 0x03 otherwise. Reject reports for another TargetA and any
+           passive-scanner RF response.
         5. Follow the branch selected by Duration:
            5A.1. With Duration zero, repeat Step 4 until ten logical results have
                  been reported for accepted advertisements. Change AdvData, if
@@ -5934,9 +6022,10 @@ async def extended_scanning_passive(tester, *, primary_phy, secondary_phy):
             Extended Advertising Report events with the correct properties,
             public advertiser identity, PHYs, SID, and directed-address fields.
             SID matches meaningful ADI in auxiliary events and is 0xFF for
-            primary-only or legacy events. Without Host
-            coding-selection support, Coded PHY is reported as 0x03 for both
-            S=2 and S=8. Advertisements directed elsewhere produce no reports.
+            primary-only or legacy events. With Host coding-selection support,
+            Coded S=2 reports PHY 0x04 and Coded S=8 reports 0x03. With that bit
+            clear, both report PHY 0x03. Advertisements directed elsewhere
+            produce no reports.
 
             Data match the transmitted bytes in order. Intermediate fragments
             have Data_Status 0b01; the final fragment is complete (0b00) or
@@ -5963,7 +6052,7 @@ async def extended_scanning_passive(tester, *, primary_phy, secondary_phy):
         support these corrections. Apply the ten-report loop only to accepted
         advertisements, since the wrong-target verdict explicitly forbids reports.
         Table 4.2-51 includes round 17 for Coded primary PHY cases BV-43-C,
-        BV-134-C, and BV-135-C, but Table 4.2-52 puts AdvA only in ADV_EXT_IND.
+        BV-91-C, BV-134-C and BV-135-C, but Table 4.2-52 puts AdvA only in ADV_EXT_IND.
         This contradicts Core Vol 6, Part B, Section 2.3.1.5, Table 2.4 C.1:
         primary AdvA with AuxPtr is RFU on LE Coded and must be ignored.
         These variants instead put AdvA in AUX_ADV_IND and retain the
@@ -5977,13 +6066,15 @@ async def extended_scanning_passive(tester, *, primary_phy, secondary_phy):
     Reference:
         LL.TS.p28.pdf, Section 4.2.4.4, Tables 4.2-51 and 4.2-52; PDF pages
         294-299, printed pages 4.2-201 through 4.2-206. Selected cases:
-        LL/DDI/SCN/BV-19-C, LL/DDI/SCN/BV-42-C, LL/DDI/SCN/BV-43-C,
+        LL/DDI/SCN/BV-19-C, LL/DDI/SCN/BV-42-C, LL/DDI/SCN/BV-43-C, LL/DDI/SCN/BV-91-C,
         LL/DDI/SCN/BV-133-C, LL/DDI/SCN/BV-134-C, and LL/DDI/SCN/BV-135-C.
         Steps 1-5, including 5A.1/5A.2/5B.1 and the complete pass verdict.
         The round 17 source row is on PDF page 298, printed page 4.2-205.
         Core Vol 6, Part B, Section 2.3.1.5, Table 2.4 C.1 defines the primary
         address restriction; Section 2.3.1.6, Table 2.5 defines auxiliary fields.
     """
+    if coding_selection:
+        await tester.command(hci.HCI_LE_Set_Host_Feature_Command(41, 1))
     generator = random.Random(0)
     rounds = ROUNDS if primary_phy == secondary_phy == Phy.LE_1M else ROUNDS[9:]
     for round_ in rounds:
@@ -6003,6 +6094,13 @@ async def extended_scanning_passive(tester, *, primary_phy, secondary_phy):
         )
         deadline = enabled_at + round_.duration * hci.HCI_LE_DURATION_UNIT_US
         coding = PHY_CODED_S2_FACTOR if round_.number % 2 else PHY_CODED_S8_FACTOR
+        report_phys = (
+            (0x04 if phy == Phy.LE_CODED else phy)
+            if coding_selection and coding == PHY_CODED_S2_FACTOR
+            else phy
+            for phy in (primary_phy, secondary_phy)
+        )
+        report_primary, report_secondary = report_phys
         data = generator.randbytes(round_.length)
         did = reports = complete = 0
         start = tester.radio.now_us + REPORT_DELIVERY_US
@@ -6031,7 +6129,7 @@ async def extended_scanning_passive(tester, *, primary_phy, secondary_phy):
                 is None
             ), f'round{round_.number}: passive scanner transmitted a response'
             seen, full = _scanning_check_reports(
-                tester, round_, data, adi, primary_phy, secondary_phy, boundaries
+                tester, round_, data, adi, report_primary, report_secondary, boundaries
             )
             reports += seen
             complete += full
@@ -12134,6 +12232,42 @@ PROCEDURES |= procedure_cases(
             'Extended Advertising, Non-Connectable – LE 2M PHY',
             {'phy': Phy.LE_2M},
         ),
+        'LL/DDI/ADV/BV-81-C': (
+            'Extended Advertising, Non-Connectable – LE Coded PHY, No Coding '
+            'Preference',
+            {'phy': Phy.LE_CODED, 'coding_options': (0, 0)},
+        ),
+        'LL/DDI/ADV/BV-82-C': (
+            'Extended Advertising, Non-Connectable – LE Coded PHY, Recommended, '
+            'Primary S=2, Secondary S=8',
+            {'phy': Phy.LE_CODED, 'coding_options': (1, 2)},
+        ),
+        'LL/DDI/ADV/BV-83-C': (
+            'Extended Advertising, Non-Connectable – LE Coded PHY, Recommended, '
+            'Primary S=8, Secondary S=2',
+            {'phy': Phy.LE_CODED, 'coding_options': (2, 1)},
+        ),
+        'LL/DDI/ADV/BV-84-C': (
+            'Extended Advertising, Non-Connectable – LE Coded PHY, Required, '
+            'Primary S=2, Secondary S=8',
+            {'phy': Phy.LE_CODED, 'coding_options': (3, 4)},
+        ),
+        'LL/DDI/ADV/BV-85-C': (
+            'Extended Advertising, Non-Connectable – LE Coded PHY, Required, '
+            'Primary S=8, Secondary S=2',
+            {'phy': Phy.LE_CODED, 'coding_options': (4, 3)},
+        ),
+    },
+)
+
+# Verify reconfiguring an existing set changes coding without discarding AdvData.
+PROCEDURES |= procedure_cases(
+    extended_advertising_change_coding,
+    {
+        'LL/DDI/ADV/BV-86-C': (
+            'Extended Advertising, Non-Connectable, Advertising Coding Selection',
+            {},
+        ),
     },
 )
 
@@ -12566,6 +12700,15 @@ PROCEDURES |= procedure_cases(
         'LL/DDI/SCN/BV-43-C': (
             'Extended Scanning, Passive – LE Coded PHY/LE Coded PHY',
             {'primary_phy': Phy.LE_CODED, 'secondary_phy': Phy.LE_CODED},
+        ),
+        'LL/DDI/SCN/BV-91-C': (
+            'Extended Scanning, Passive – LE Coded PHY/LE Coded PHY, '
+            'Advertising Coding Selection (Host Support) bit set',
+            {
+                'primary_phy': Phy.LE_CODED,
+                'secondary_phy': Phy.LE_CODED,
+                'coding_selection': True,
+            },
         ),
     },
 )

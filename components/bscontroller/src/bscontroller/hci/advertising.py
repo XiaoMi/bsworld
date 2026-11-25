@@ -37,6 +37,7 @@ from bscontroller.linklayer import (
     AdvertisingMode,
     AdvertisingPduType,
 )
+from bscontroller.linklayer.advertising import AdvertisingCoding
 from bscontroller.linklayer.api import AdvertisingConfig
 from bscontroller.linklayer.pawr import (
     LL_PAWR_RESPONSE_SLOT_DELAY_MAX,
@@ -259,7 +260,10 @@ class LeAdvertisingCommands(LeControllerContext):
         properties = command.advertising_event_properties
         status = self.ll.advertising.configuration_status(
             command.advertising_handle,
-            bool(properties & PERIODIC_INCOMPATIBLE_ADVERTISING_PROPERTIES),
+            command.secondary_advertising_phy,
+            incompatible_periodic=bool(
+                properties & PERIODIC_INCOMPATIBLE_ADVERTISING_PROPERTIES
+            ),
         )
         if status != SUCCESS:
             return status
@@ -349,7 +353,11 @@ class LeAdvertisingCommands(LeControllerContext):
         return status
 
     def _extended_advertising_configuration(
-        self, command, tx_power_dbm: int
+        self,
+        command,
+        tx_power_dbm: int,
+        primary_coding: AdvertisingCoding,
+        secondary_coding: AdvertisingCoding,
     ) -> AdvertisingConfig:
         """Translate decoded HCI fields; LL retains payloads and runtime state."""
         properties = command.advertising_event_properties
@@ -391,6 +399,8 @@ class LeAdvertisingCommands(LeControllerContext):
             ),
             primary_phy=Phy(command.primary_advertising_phy),
             secondary_phy=Phy(command.secondary_advertising_phy),
+            primary_coding=primary_coding,
+            secondary_coding=secondary_coding,
             notify_scan_request=bool(command.scan_request_notification_enable),
             filter_policy=command.advertising_filter_policy,
             anonymous=bool(properties & Properties.ANONYMOUS_ADVERTISING),
@@ -411,10 +421,37 @@ class LeAdvertisingCommands(LeControllerContext):
         See Bluetooth spec Vol 4, Part E - 7.8.53 LE Set Extended Advertising Parameters
         Command
         '''
+        return self._set_extended_advertising_parameters(command)
+
+    def on_hci_le_set_extended_advertising_parameters_v2_command(self, command):
+        """Configure LE Coded preferences for primary and secondary channels."""
+        return self._set_extended_advertising_parameters(
+            command,
+            command.primary_advertising_phy_options,
+            command.secondary_advertising_phy_options,
+        )
+
+    def _set_extended_advertising_parameters(
+        self, command, primary_option: int = 0, secondary_option: int = 0
+    ):
         status = self._extended_advertising_status(command)
         if status != SUCCESS:
             return hci.HCI_LE_Set_Extended_Advertising_Parameters_ReturnParameters(
                 status, 0
+            )
+        try:
+            primary_coding, secondary_coding = (
+                AdvertisingCoding(option)
+                if phy == Phy.LE_CODED
+                else AdvertisingCoding.NO_PREFERENCE
+                for phy, option in (
+                    (command.primary_advertising_phy, primary_option),
+                    (command.secondary_advertising_phy, secondary_option),
+                )
+            )
+        except ValueError:
+            return hci.HCI_LE_Set_Extended_Advertising_Parameters_ReturnParameters(
+                INVALID, 0
             )
         requested_power = command.advertising_tx_power
         tx_power_dbm = (
@@ -430,7 +467,9 @@ class LeAdvertisingCommands(LeControllerContext):
             return hci.HCI_LE_Set_Extended_Advertising_Parameters_ReturnParameters(
                 UNSUPPORTED, 0
             )
-        config = self._extended_advertising_configuration(command, tx_power_dbm)
+        config = self._extended_advertising_configuration(
+            command, tx_power_dbm, primary_coding, secondary_coding
+        )
         # Parameter validity alone is insufficient: changing mode or PHY can make
         # previously accepted data illegal or too long for the interval.
         status = self.ll.advertising.configure(command.advertising_handle, config)

@@ -66,7 +66,7 @@ if TYPE_CHECKING:
 async def receive_scan_event(link: RadioLink, event: ScanEvent) -> None:
     """Execute a prepared window without deciding the scanning role's lifetime."""
     if event.channel is None:
-        await link.radio.advance_to_us(event.end_us)
+        await link.advance_idle_to_us(event.end_us)
         return
     packet = await link.radio.receive(event.channel, event.end_us, phy=event.phy)
     if packet:

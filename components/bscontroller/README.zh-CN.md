@@ -217,13 +217,15 @@ other = RadioController("x", "F0:F1:F2:F3:F4:03", config=ControllerConfig(max_co
 | 5.3 | LE Channel Classification |  |
 | 5.3 | Connection Subrating | * |
 | 5.4 | Periodic Advertising with Responses | * |
+| 5.4 | Advertising Coding Selection | * |
 | 6.0 | Channel Sounding |  |
 | 6.0 | Decision-Based Advertising Filtering | * |
 | 6.0 | LL Extended Feature Set | * |
 | 6.0 | Monitoring Advertisers | * |
 | 6.0 | Frame Space Update | * |
 | 6.1 | Randomized RPA Updates | * |
-| 6.2 | Shorter Connection Intervals |  |
+| 6.2 | Shorter Connection Intervals | * |
+| 6.2 | LE Flushable ACL Data | * |
 | 6.2 | Channel Sounding Amplitude-based Attack Resilience |  |
 | 6.3 | Channel Sounding Inline Phase Correction Term Transfer |  |
 

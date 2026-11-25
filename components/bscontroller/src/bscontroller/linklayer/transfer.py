@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Protocol
 
 from bscontroller.address import Address, AddressType
 from bscontroller.linklayer import (
-    LL_CONN_INTERVAL_UNIT_US,
     LL_EVENT_COUNTER_MASK,
     LL_PERIODIC_INTERVAL_UNIT_US,
     LL_PERIODIC_SYNC_CONN_EVENT_SPAN,
@@ -308,7 +307,7 @@ def transfer_indication(
     this event's received packet (4.5.7).
     """
     interval_us = train.interval * LL_PERIODIC_INTERVAL_UNIT_US
-    connection_us = connection.parameters.interval * LL_CONN_INTERVAL_UNIT_US
+    connection_us = connection.parameters.interval_us
     anchor = connection.anchor_us
     events = -((train.anchor_us - anchor) // interval_us)
     target = (train.counter + events) & LL_EVENT_COUNTER_MASK
@@ -385,7 +384,7 @@ def transfer_timing(
     or the future. Listen first for the train's next event after now.
     """
     interval_us = info.interval * LL_PERIODIC_INTERVAL_UNIT_US
-    connection_us = connection.parameters.interval * LL_CONN_INTERVAL_UNIT_US
+    connection_us = connection.parameters.interval_us
     current = connection.event_counter
     anchor = (
         connection.anchor_us

@@ -96,9 +96,11 @@ class FeatureExchangeProcedure:
         """
         self._request(pages, None)
 
-    def discover(self, completion: Callable[[int], None]) -> None:
-        """Fetch the peer's page zero for another LL procedure."""
-        self._request(None, completion)
+    def discover(
+        self, completion: Callable[[int], None], *, pages: int | None = None
+    ) -> None:
+        """Fetch peer features for another LL procedure."""
+        self._request(pages, completion)
 
     def _request(
         self, pages: int | None, completion: Callable[[int], None] | None

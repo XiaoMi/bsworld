@@ -115,7 +115,7 @@ def check_access_address(value):
     )
 
 
-def extended_parameters(**changes):
+def extended_parameters(*, coding_options=None, **changes):
     values = {
         'advertising_handle': 0,
         'advertising_event_properties': 0,
@@ -133,7 +133,15 @@ def extended_parameters(**changes):
         'advertising_sid': 3,
         'scan_request_notification_enable': 0,
     }
-    return hci.HCI_LE_Set_Extended_Advertising_Parameters_Command(**(values | changes))
+    if coding_options is None:
+        return hci.HCI_LE_Set_Extended_Advertising_Parameters_Command(
+            **(values | changes)
+        )
+    return hci.HCI_LE_Set_Extended_Advertising_Parameters_V2_Command(
+        **(values | changes),
+        primary_advertising_phy_options=coding_options[0],
+        secondary_advertising_phy_options=coding_options[1],
+    )
 
 
 def create_connection(*, extended=False, **changes):

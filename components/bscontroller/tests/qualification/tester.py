@@ -357,7 +357,7 @@ def legacy_parameters(**changes):
     return hci.HCI_LE_Set_Advertising_Parameters_Command(**(values | changes))
 
 
-def extended_parameters(**changes):
+def extended_parameters(*, coding_options=None, **changes):
     values = {
         'advertising_handle': 0,
         'advertising_event_properties': 0,
@@ -375,7 +375,15 @@ def extended_parameters(**changes):
         'advertising_sid': 3,
         'scan_request_notification_enable': 0,
     }
-    return hci.HCI_LE_Set_Extended_Advertising_Parameters_Command(**(values | changes))
+    if coding_options is None:
+        return hci.HCI_LE_Set_Extended_Advertising_Parameters_Command(
+            **(values | changes)
+        )
+    return hci.HCI_LE_Set_Extended_Advertising_Parameters_V2_Command(
+        **(values | changes),
+        primary_advertising_phy_options=coding_options[0],
+        secondary_advertising_phy_options=coding_options[1],
+    )
 
 
 def scan_parameters(*, extended=False, **changes):
@@ -760,17 +768,22 @@ async def chain(
     *,
     forbidden=('address', 'target', 'sync'),
     expected_phy=None,
+    expected_coding=None,
     **parameters,
 ):
     """Reassemble a raw auxiliary chain and check ADI and every AuxPtr timing bound."""
     if expected_phy is not None:
         assert packet.phy == expected_phy
+    if expected_coding is not None:
+        assert packet.coding == expected_coding
     data = fields['data']
     adi = None if 'adi' in forbidden else fields.get('adi')
     while 'aux' in fields:
         _, packet, fields = await follow_auxiliary(tester, packet, fields, **parameters)
         if expected_phy is not None:
             assert packet.phy == expected_phy
+        if expected_coding is not None:
+            assert packet.coding == expected_coding
         assert packet.pdu[0] & PDU_ADV_TYPE_MASK == AdvertisingPduType.ADV_EXT_IND
         assert fields.get('adi') == adi
         assert (
