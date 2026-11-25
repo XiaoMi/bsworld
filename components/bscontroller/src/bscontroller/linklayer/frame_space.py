@@ -1,7 +1,7 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-"""ACL Frame Space Update (Core Vol 6, Part B, 4.1 and 5.1.30)."""
+"""ACL and CIS Frame Space Update (Core Vol 6, Part B, 4.1 and 5.1.30)."""
 
 from __future__ import annotations
 
@@ -31,7 +31,6 @@ Opcode = ControlOpcode
 REQUEST = struct.Struct('<HHBH')
 RESPONSE = struct.Struct('<HBH')
 MAX_SPACE_US = 10_000
-CIS_SPACINGS = 0x18
 INVALID = ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
 INVALID_LL = ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR
 UNSUPPORTED = ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
@@ -43,11 +42,15 @@ class Spacing(IntFlag):
     CENTRAL_TO_PERIPHERAL = 1
     PERIPHERAL_TO_CENTRAL = 2
     EVENT = 4
+    ISO_INTER_FRAME = 8
+    ISO_SUBEVENT = 16
 
 
 ACL_SPACINGS = int(
     Spacing.CENTRAL_TO_PERIPHERAL | Spacing.PERIPHERAL_TO_CENTRAL | Spacing.EVENT
 )
+CIS_SPACINGS = int(Spacing.ISO_INTER_FRAME | Spacing.ISO_SUBEVENT)
+SUPPORTED_SPACINGS = ACL_SPACINGS | CIS_SPACINGS
 
 
 def phy_bit(phy: Phy) -> int:
@@ -138,6 +141,13 @@ class FrameSpaceProcedure:
 
     def space(self, phy: Phy, spacing: Spacing) -> int:
         return self.spaces.get((phy, spacing), LL_IFS_US)
+
+    def cis_spaces(self, central_phy: Phy, peripheral_phy: Phy) -> tuple[int, int]:
+        """Snapshot T_IFS_CIS and T_MSS_CIS when creating a CIS (5.1.30)."""
+        return (
+            self.space(peripheral_phy, Spacing.ISO_INTER_FRAME),
+            self.space(central_phy, Spacing.ISO_SUBEVENT),
+        )
 
     def _planned_response(self, opcode: int | None) -> FrameSpaceChange | None:
         change = self.response
@@ -247,7 +257,7 @@ class FrameSpaceProcedure:
             return INVALID
         if (
             request.phys & ~CONTROLLER_SUPPORTED_PHY_MASK
-            or request.spacing & ~ACL_SPACINGS
+            or request.spacing & ~SUPPORTED_SPACINGS
         ):
             return ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR
         features = self.connection.peer_features
@@ -262,6 +272,12 @@ class FrameSpaceProcedure:
             and not features & LeFeatureMask.LE_2M_PHY
             or request.phys & phy_bit(Phy.LE_CODED)
             and not features & LeFeatureMask.LE_CODED_PHY
+            or request.spacing & CIS_SPACINGS
+            and not features
+            & (
+                LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_CENTRAL
+                | LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_PERIPHERAL
+            )
         ):
             return UNSUPPORTED
         minimum = max(request.minimum, RADIO_SWITCH_TIME_US)
@@ -371,11 +387,8 @@ class FrameSpaceProcedure:
         if not request.valid_fields:
             reject(INVALID_LL)
             return
-        if request.spacing & CIS_SPACINGS:
-            reject(UNSUPPORTED)
-            return
         phys = request.phys & CONTROLLER_SUPPORTED_PHY_MASK
-        spacing = request.spacing & ACL_SPACINGS
+        spacing = request.spacing & SUPPORTED_SPACINGS
         if not phys or not spacing:
             reject(INVALID_LL)
             return
@@ -424,7 +437,7 @@ class FrameSpaceProcedure:
             change = FrameSpaceChange(
                 space,
                 phys & CONTROLLER_SUPPORTED_PHY_MASK,
-                spacing & (ACL_SPACINGS | CIS_SPACINGS),
+                spacing & SUPPORTED_SPACINGS,
             )
             if not self.local_request.accepts(change) or not self._fits_link(change):
                 self._finish(INVALID_LL)

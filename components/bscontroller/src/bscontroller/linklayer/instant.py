@@ -34,3 +34,9 @@ class InstantUpdate:
         if self.parameters is not None:
             return self.parameters.interval_us
         return self.rate.interval_us if self.rate is not None else None
+
+    @property
+    def supervision_timeout(self) -> int | None:
+        if self.parameters is not None:
+            return self.parameters.timeout
+        return self.rate.timeout if self.rate is not None else None

@@ -119,7 +119,7 @@ When managing the simulation from Python, keep the PHY running for the lifetime 
 - To run the Host on simulation time, use a `RadioEventLoop` and give its clock a `clock_dev_id` distinct from the Controller device IDs.
 - Exiting `RadioSession` stops the Controllers before closing its Host clock connection. Exit `PhyProcess` after the session ends.
 
-For runnable examples of advertising, scanning, GATT, periodic synchronization and concurrent roles, see the [Bumble Host samples](samples/README.md).
+For runnable examples of LE advertising, connection management, ISO data and concurrent roles, see the [Bumble Host samples](samples/README.md).
 
 ## Configuration
 
@@ -200,6 +200,7 @@ The table groups Link Layer features by the Bluetooth Core version that introduc
 | 5.0 | Minimum Number of Used Channels Procedure | * |
 | 5.0 | Extended Advertising | * |
 | 5.0 | Periodic Advertising | * |
+| 5.1 | Remote Public Key Validation | * |
 | 5.1 | Connection CTE Request |  |
 | 5.1 | Connection CTE Response |  |
 | 5.1 | Connectionless CTE Transmitter |  |
@@ -209,7 +210,7 @@ The table groups Link Layer features by the Bluetooth Core version that introduc
 | 5.1 | Initiating Periodic Advertising Sync Transfer for Remote Periodic Advertising | * |
 | 5.2 | Isochronous Broadcaster | * |
 | 5.2 | Synchronized Receiver | * |
-| 5.2 | Connected Isochronous Stream (CIS) |  |
+| 5.2 | Connected Isochronous Stream (CIS) | * |
 | 5.2 | LE Power Control Request | * |
 | 5.2 | LE Path Loss Monitoring | * |
 | 5.2 | Sleep Clock Accuracy Updates | * |
@@ -235,7 +236,7 @@ The HCI layer exchanges packets with the Host. The Link Layer implements the con
 
 <div align="center"><img src="docs/images/radio_controller_arch.svg" alt="Multiple Controllers sharing a BabbleSim PHY" width="80%"><br><em>Figure 1: Controllers on a shared PHY</em></div>
 
-The Link Layer has separate managers for advertising, scanning, initiating connections, synchronization and connections. Each ACL connection keeps its own control-procedure state, encryption state and event executor. A single scheduler coordinates radio use across the roles.
+The Link Layer has separate managers for advertising, scanning, initiating connections, synchronization, ACL connections, and isochronous groups. Each ACL connection keeps its own control-procedure state, encryption state and event executor. A single scheduler coordinates radio use across the roles.
 
 Each Controller thread has its own event loop and PHY connection. The Host and Controller exchange complete H4 packets. The PHY advances simulation time in integer microseconds as the Controllers and any Host clock synchronize with it.
 

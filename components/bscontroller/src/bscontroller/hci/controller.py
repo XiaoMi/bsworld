@@ -49,6 +49,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Core Vol 4, Part E, 7.8.97–99: offset of CIS_Count and width of a CIS record.
+CIS_COMMAND_ARRAYS = {
+    hci.HCI_LE_SET_CIG_PARAMETERS_COMMAND: (14, 9),
+    hci.HCI_LE_SET_CIG_PARAMETERS_TEST_COMMAND: (14, 14),
+    hci.HCI_LE_CREATE_CIS_COMMAND: (0, 4),
+}
+
+# Core Vol 4, Part E, 7.8.36–37: parameter sizes for the asynchronous P-256 commands.
+P256_COMMAND_SIZES = {
+    hci.HCI_LE_READ_LOCAL_P_256_PUBLIC_KEY_COMMAND: 0,
+    hci.HCI_LE_GENERATE_DHKEY_COMMAND: 64,
+    hci.HCI_LE_GENERATE_DHKEY_V2_COMMAND: 65,
+}
+
 
 class Controller:
     """One LE Controller's Lower HCI endpoint."""
@@ -155,6 +169,33 @@ class Controller:
                 )
                 self.on_hci_packet(generic(packet[4:], op_code=opcode))
                 return
+            if opcode in P256_COMMAND_SIZES and (
+                size != P256_COMMAND_SIZES[opcode] or len(packet) != size + 4
+            ):
+                self._send_hci_command_status(
+                    hci.HCI_ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR, opcode
+                )
+                return
+            if opcode in CIS_COMMAND_ARRAYS and len(packet) == size + 4:
+                offset, record_size = CIS_COMMAND_ARRAYS[opcode]
+                if (
+                    size <= offset
+                    or size != offset + 1 + packet[4 + offset] * record_size
+                ):
+                    status = hci.HCI_ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
+                    if opcode == hci.HCI_LE_CREATE_CIS_COMMAND:
+                        self._send_hci_command_status(status, opcode)
+                    else:
+                        self.send_hci_packet(
+                            hci.HCI_Command_Complete_Event(
+                                num_hci_command_packets=1,
+                                command_opcode=opcode,
+                                return_parameters=hci.HCI_StatusReturnParameters(
+                                    status
+                                ),
+                            )
+                        )
+                    return
         self.on_hci_packet(hci.HCI_Packet.from_bytes(packet))
 
     def on_hci_packet(self, packet: hci.HCI_Packet) -> None:

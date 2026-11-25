@@ -1814,6 +1814,20 @@ class HCI_Reset_Command(HCI_SyncCommand[HCI_StatusReturnParameters]):
 
 
 # -----------------------------------------------------------------------------
+@dataclasses.dataclass
+class HCI_Read_Connection_Accept_Timeout_ReturnParameters(HCI_StatusReturnParameters):
+    connection_accept_timeout: int = field(metadata=metadata(2))
+
+
+@HCI_SyncCommand.sync_command(HCI_Read_Connection_Accept_Timeout_ReturnParameters)
+@dataclasses.dataclass
+class HCI_Read_Connection_Accept_Timeout_Command(
+    HCI_SyncCommand[HCI_Read_Connection_Accept_Timeout_ReturnParameters]
+):
+    """Core Vol 4, Part E, 7.3.13: Read Connection Accept Timeout."""
+
+
+# -----------------------------------------------------------------------------
 @HCI_SyncCommand.sync_command(HCI_StatusReturnParameters)
 @dataclasses.dataclass
 class HCI_Write_Connection_Accept_Timeout_Command(
@@ -2654,6 +2668,28 @@ class HCI_LE_Read_Local_P_256_Public_Key_Command(HCI_AsyncCommand):
     '''
     See Bluetooth spec @ 7.8.36 LE Read Local P-256 Public Key command
     '''
+
+
+# -----------------------------------------------------------------------------
+@HCI_Command.command
+@dataclasses.dataclass
+class HCI_LE_Generate_DHKey_Command(HCI_AsyncCommand):
+    """Core Vol 4, Part E, 7.8.37: LE Generate DHKey [v1]."""
+
+    key_x_coordinate: bytes = field(metadata=metadata(32))
+    key_y_coordinate: bytes = field(metadata=metadata(32))
+
+
+# -----------------------------------------------------------------------------
+@HCI_Command.command
+@dataclasses.dataclass
+class HCI_LE_Generate_DHKey_V2_Command(HCI_LE_Generate_DHKey_Command):
+    """Core Vol 4, Part E, 7.8.37: LE Generate DHKey [v2]."""
+
+    name = 'HCI_LE_GENERATE_DHKEY_V2_COMMAND'
+    op_code = HCI_LE_GENERATE_DHKEY_V2_COMMAND
+
+    key_type: int = field(metadata=metadata(1))
 
 
 # -----------------------------------------------------------------------------
@@ -4108,6 +4144,35 @@ class HCI_LE_Set_CIG_Parameters_Command(
 
 
 # -----------------------------------------------------------------------------
+@HCI_SyncCommand.sync_command(HCI_LE_Set_CIG_Parameters_ReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_Set_CIG_Parameters_Test_Command(
+    HCI_SyncCommand[HCI_LE_Set_CIG_Parameters_ReturnParameters]
+):
+    """Core Vol 4, Part E, 7.8.98: LE Set CIG Parameters Test."""
+
+    cig_id: int = field(metadata=metadata(1))
+    sdu_interval_c_to_p: int = field(metadata=metadata(3))
+    sdu_interval_p_to_c: int = field(metadata=metadata(3))
+    ft_c_to_p: int = field(metadata=metadata(1))
+    ft_p_to_c: int = field(metadata=metadata(1))
+    iso_interval: int = field(metadata=metadata(2))
+    worst_case_sca: int = field(metadata=metadata(1))
+    packing: int = field(metadata=metadata(1))
+    framing: int = field(metadata=metadata(1))
+    cis_id: Sequence[int] = field(metadata=metadata(1, list_begin=True))
+    nse: Sequence[int] = field(metadata=metadata(1))
+    max_sdu_c_to_p: Sequence[int] = field(metadata=metadata(2))
+    max_sdu_p_to_c: Sequence[int] = field(metadata=metadata(2))
+    max_pdu_c_to_p: Sequence[int] = field(metadata=metadata(2))
+    max_pdu_p_to_c: Sequence[int] = field(metadata=metadata(2))
+    phy_c_to_p: Sequence[int] = field(metadata=metadata(1))
+    phy_p_to_c: Sequence[int] = field(metadata=metadata(1))
+    bn_c_to_p: Sequence[int] = field(metadata=metadata(1))
+    bn_p_to_c: Sequence[int] = field(metadata=metadata(1, list_end=True))
+
+
+# -----------------------------------------------------------------------------
 @HCI_Command.command
 @dataclasses.dataclass
 class HCI_LE_Create_CIS_Command(HCI_AsyncCommand):
@@ -4364,6 +4429,30 @@ class HCI_LE_Set_Host_Feature_V2_Command(HCI_SyncCommand[HCI_StatusReturnParamet
 
     bit_number: int = field(metadata=metadata(2))
     bit_value: int = field(metadata=metadata(1))
+
+
+# -----------------------------------------------------------------------------
+@dataclasses.dataclass
+class HCI_LE_Read_ISO_Link_Quality_ReturnParameters(
+    HCI_StatusAndConnectionHandleReturnParameters
+):
+    tx_unacked_packets: int = field(metadata=metadata(4))
+    tx_flushed_packets: int = field(metadata=metadata(4))
+    tx_last_subevent_packets: int = field(metadata=metadata(4))
+    retransmitted_packets: int = field(metadata=metadata(4))
+    crc_error_packets: int = field(metadata=metadata(4))
+    rx_unreceived_packets: int = field(metadata=metadata(4))
+    duplicate_packets: int = field(metadata=metadata(4))
+
+
+@HCI_SyncCommand.sync_command(HCI_LE_Read_ISO_Link_Quality_ReturnParameters)
+@dataclasses.dataclass
+class HCI_LE_Read_ISO_Link_Quality_Command(
+    HCI_SyncCommand[HCI_LE_Read_ISO_Link_Quality_ReturnParameters]
+):
+    """Core Vol 4, Part E, 7.8.116: LE Read ISO Link Quality."""
+
+    connection_handle: int = field(metadata=metadata(2))
 
 
 # -----------------------------------------------------------------------------
@@ -5401,6 +5490,27 @@ class HCI_LE_Data_Length_Change_Event(HCI_LE_Meta_Event):
 # -----------------------------------------------------------------------------
 @HCI_LE_Meta_Event.event
 @dataclasses.dataclass
+class HCI_LE_Read_Local_P_256_Public_Key_Complete_Event(HCI_LE_Meta_Event):
+    """Core Vol 4, Part E, 7.7.65.8: LE Read Local P-256 Public Key Complete."""
+
+    status: int = field(metadata=metadata(STATUS_SPEC))
+    key_x_coordinate: bytes = field(metadata=metadata(32))
+    key_y_coordinate: bytes = field(metadata=metadata(32))
+
+
+# -----------------------------------------------------------------------------
+@HCI_LE_Meta_Event.event
+@dataclasses.dataclass
+class HCI_LE_Generate_DHKey_Complete_Event(HCI_LE_Meta_Event):
+    """Core Vol 4, Part E, 7.7.65.9: LE Generate DHKey Complete."""
+
+    status: int = field(metadata=metadata(STATUS_SPEC))
+    dh_key: bytes = field(metadata=metadata(32))
+
+
+# -----------------------------------------------------------------------------
+@HCI_LE_Meta_Event.event
+@dataclasses.dataclass
 class HCI_LE_Enhanced_Connection_Complete_Event(HCI_LE_Meta_Event):
     '''
     See Bluetooth spec @ 7.7.65.10 LE Enhanced Connection Complete Event
@@ -5788,9 +5898,8 @@ class HCI_LE_Periodic_Advertising_Response_Report_Event(HCI_LE_Meta_Event):
 
 
 # -----------------------------------------------------------------------------
-@HCI_LE_Meta_Event.event
 @dataclasses.dataclass
-class HCI_LE_CIS_Established_Event(HCI_LE_Meta_Event):
+class _CisEstablishedParameters(HCI_LE_Meta_Event):
     '''
     See Bluetooth spec @ 7.7.65.25 LE CIS Established Event
     '''
@@ -5811,6 +5920,27 @@ class HCI_LE_CIS_Established_Event(HCI_LE_Meta_Event):
     max_pdu_c_to_p: int = field(metadata=metadata(2))
     max_pdu_p_to_c: int = field(metadata=metadata(2))
     iso_interval: int = field(metadata=metadata(2))
+
+
+# -----------------------------------------------------------------------------
+@HCI_LE_Meta_Event.event
+@dataclasses.dataclass
+class HCI_LE_CIS_Established_Event(_CisEstablishedParameters):
+    """Core Vol 4, Part E, 7.7.65.25: LE CIS Established [v1]."""
+
+
+# -----------------------------------------------------------------------------
+@HCI_LE_Meta_Event.event
+@dataclasses.dataclass
+class HCI_LE_CIS_Established_V2_Event(_CisEstablishedParameters):
+    """Core Vol 4, Part E, 7.7.65.25: LE CIS Established [v2]."""
+
+    sub_interval: int = field(metadata=metadata(3))
+    max_sdu_c_to_p: int = field(metadata=metadata(2))
+    max_sdu_p_to_c: int = field(metadata=metadata(2))
+    sdu_interval_c_to_p: int = field(metadata=metadata(3))
+    sdu_interval_p_to_c: int = field(metadata=metadata(3))
+    framing: int = field(metadata=metadata(1))
 
 
 # -----------------------------------------------------------------------------

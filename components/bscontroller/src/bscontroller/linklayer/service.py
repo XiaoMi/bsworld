@@ -71,6 +71,7 @@ from bscontroller.linklayer.extended import (
 )
 from bscontroller.linklayer.features import FEATURE_MAX_PAGE, LeFeature, LeFeatureMask
 from bscontroller.linklayer.frame_space import FrameSpaceRequest
+from bscontroller.linklayer.iso import IsoTestCounters
 from bscontroller.linklayer.llcp import PreparedProcedure
 from bscontroller.linklayer.pawr import (
     LL_PAWR_SUBEVENT_INTERVAL_MAX,
@@ -96,7 +97,8 @@ from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
     from bscontroller.address import Address
-    from bscontroller.linklayer.iso import IsoTestCounters, IsoTxSync
+    from bscontroller.linklayer.api import CigConfig
+    from bscontroller.linklayer.iso import IsoTxSync
     from bscontroller.linklayer.link import RadioLink
 
 SUCCESS = ErrorCode.SUCCESS
@@ -1064,6 +1066,34 @@ class LinkLayerService:
     def terminate_big_sync(self, handle: int) -> int:
         return self.link.roles.broadcast.terminate_sync(handle)
 
+    def set_cig_parameters(self, config: CigConfig) -> tuple[int, tuple[int, ...]]:
+        return self.link.roles.cig.set_cig_parameters(config)
+
+    def create_cis(self, pairs: tuple[tuple[int, int], ...]) -> int:
+        return self.link.roles.cig.create_cis(pairs)
+
+    def remove_cig(self, cig_id: int) -> int:
+        return self.link.roles.cig.remove_cig(cig_id)
+
+    def accept_cis(self, handle: int) -> int:
+        return self.link.roles.cig.accept_cis(handle)
+
+    def reject_cis(self, handle: int, reason: int) -> int:
+        return self.link.roles.cig.reject_cis(handle, reason)
+
+    @property
+    def connection_accept_timeout(self) -> int:
+        return self.link.roles.cig.connection_accept_timeout
+
+    def set_connection_accept_timeout(self, timeout: int) -> None:
+        self.link.roles.cig.connection_accept_timeout = timeout
+
+    def iso_link_quality(self, handle: int) -> tuple[int, tuple[int, ...]]:
+        roles = self.link.roles
+        if roles.cig.contains(handle):
+            return roles.cig.iso_link_quality(handle)
+        return roles.broadcast.iso_link_quality(handle)
+
     def has_iso_handle(self, handle: int) -> bool:
         return self.link.roles.iso.contains(handle)
 
@@ -1076,22 +1106,38 @@ class LinkLayerService:
         configuration: bytes,
         controller_delay_us: int,
     ) -> int:
+        if self.link.roles.cig.contains(handle) and not self.link.roles.iso.contains(
+            handle
+        ):
+            return DISALLOWED
         return self.link.roles.iso.setup(
             handle, direction, path_id, codec, configuration, controller_delay_us
         )
 
     def remove_iso_data_path(self, handle: int, direction: int) -> int:
-        return self.link.roles.iso.remove(handle, direction)
+        roles = self.link.roles
+        if roles.cig.contains(handle) and not roles.iso.contains(handle):
+            return DISALLOWED
+        return roles.iso.remove(handle, direction)
 
     def iso_tx_sync(self, handle: int) -> tuple[int, IsoTxSync | None]:
         return self.link.roles.iso.read_tx_sync(handle)
 
+    def _is_unestablished_cis(self, handle: int) -> bool:
+        cig = self.link.roles.cig
+        event = cig.event_for_handle(handle)
+        return (not event.established) if event is not None else cig.contains(handle)
+
     def set_iso_test(self, handle: int, transmit: bool, payload_type: int) -> int:
+        if self._is_unestablished_cis(handle):
+            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
         return self.link.roles.iso.test(handle, transmit, payload_type)
 
     def iso_test_counters(
         self, handle: int, *, end: bool = False
     ) -> tuple[int, IsoTestCounters]:
+        if self._is_unestablished_cis(handle):
+            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR, IsoTestCounters()
         return self.link.roles.iso.counters(handle, end=end)
 
     def receive_iso_packet(
@@ -1433,7 +1479,7 @@ class LinkLayerService:
     def disconnect(self, handle: int, reason: int) -> int:
         connection = self._connection(handle)
         if connection is None:
-            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+            return self.link.roles.cig.disconnect(handle, reason)
         connection.terminate(reason)
         return SUCCESS
 

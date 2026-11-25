@@ -113,7 +113,12 @@ async def run_big_event(link: RadioLink, manager: BroadcastManager, group: Big) 
             )
             if not manager.owns(group):
                 return
-            if packet is None or not packet.valid_crc or len(packet.pdu) < 2:
+            if packet is None:
+                continue
+            if not packet.valid_crc:
+                manager.crc_error(group, number)
+                continue
+            if len(packet.pdu) < 2:
                 continue
             header, length = packet.pdu[:2]
             if (

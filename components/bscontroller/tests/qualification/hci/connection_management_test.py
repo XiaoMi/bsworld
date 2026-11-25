@@ -19,7 +19,7 @@ from tests.qualification.cases import (
     procedure_cases,
     verify_case,
 )
-from tests.qualification.peer import PeerLink, establish
+from tests.qualification.peer import PeerLink, establish, exchange_iut_features
 from tests.qualification.tester import (
     PEER_ADDRESS,
     LinkParameters,
@@ -329,6 +329,41 @@ async def privacy_timeout_during_connection_response(tester):
     raise AssertionError('AUX_CONNECT_REQ absent after twenty advertising events')
 
 
+async def peer_sca_unsupported(tester):
+    """Request Sleep Clock Accuracy from a peer without SCA Updates.
+
+    Initial Condition:
+        The IUT has an ACL connection and has exchanged features with a
+        Lower Tester that does not support Sleep Clock Accuracy Updates.
+
+    Test Steps:
+        1. Send LE Request Peer SCA with the current ACL handle.
+        2. Observe Command Status. After a successful Command Status,
+           observe LE Request Peer SCA Complete.
+
+    Expected Outcome:
+        Command Status or the completion event reports Unsupported Remote
+        Feature (0x1A). The completion, if present, identifies the ACL.
+
+    Reference:
+        HCI.TS.p39, HCI/CM/BV-07-C, Section 4.13, Figure 4.140.
+    """
+    rejected = ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
+    await tester.masks()
+    link = await establish(tester, central=True)
+    await exchange_iut_features(tester, link)
+    status = await tester.command(
+        hci.HCI_LE_Request_Peer_SCA_Command(link.handle),
+        (ErrorCode.SUCCESS, rejected),
+    )
+    if status.status == ErrorCode.SUCCESS:
+        completion = await tester.event(hci.HCI_LE_Request_Peer_SCA_Complete_Event)
+        assert (completion.status, completion.connection_handle) == (
+            rejected,
+            link.handle,
+        )
+
+
 PROCEDURES: ProcedureMap = {}
 
 # Verify the connection handle and current transmit/receive PHY from Read PHY.
@@ -393,6 +428,17 @@ PROCEDURES |= procedure_cases(
             'RPA Timeout During Connection Initiation',
             {},
         ),
+    },
+)
+
+# Confirm the peer's missing SCA Updates capability is reported to the Host.
+PROCEDURES |= procedure_cases(
+    peer_sca_unsupported,
+    {
+        'HCI/CM/BV-07-C': (
+            'Request Sleep Clock Accuracy, unsupported SCA Update Feature',
+            {},
+        )
     },
 )
 RADIO_CASES = tuple(

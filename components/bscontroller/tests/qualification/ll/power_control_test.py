@@ -23,12 +23,19 @@ from tests.qualification.cases import (
     procedure_cases,
     verify_case,
 )
+from tests.qualification.cis import (
+    PEER_CIS_FEATURES,
+    disconnect_cis,
+    enable_cis,
+    establish_peer_cis,
+)
 from tests.qualification.peer import (
     PEER_FEATURES,
     change_phy,
     establish,
     exchange_iut_features,
 )
+from tests.support import LE_EVENT_MASK_V1
 
 Opcode = ControlOpcode
 ErrorCode = hci.HCI_ErrorCode
@@ -45,6 +52,8 @@ POWER_LEVELS = (-24, -16, -8, 0, 4)
 # Bounds for the Lower Tester's apparent RF power in the autonomous test.
 PEER_MIN_DBM, PEER_MAX_DBM = -32, 18
 PEER_START_DBM = max(PEER_MAX_DBM - 10, (PEER_MIN_DBM + PEER_MAX_DBM) // 2)
+CIS_PEER_START_DBM = min(PEER_MIN_DBM + 10, (PEER_MIN_DBM + PEER_MAX_DBM) // 2)
+CIS_ISO_INTERVAL_US = (20_000, 20_000, 40_000, 40_000)
 PEER_RF_STEP_US = 5_000_000
 PATH_LOSS_LOW_DB, PATH_LOSS_HIGH_DB = 34, 56
 # Link preamble for the PCL procedures uses 7.5 ms, zero latency, and 1 s timeout.
@@ -350,6 +359,156 @@ async def initiate_power_control(tester, *, central, mode):
     await _continuous_data(link, PEER_RF_STEP_US)
     increase = await _pursue_power_request(link, direction=-1, mode=mode)
     await _acknowledge_adjustment(link, increase)
+    await link.disconnect()
+
+
+async def _cis_power_link(tester, *, central, acl_mode, cis_mode):
+    await tester.masks(le=LE_EVENT_MASK_V1)
+    await enable_cis(tester)
+    interval = 10 * CIS_ISO_INTERVAL_US[cis_mode] // LL_CONN_INTERVAL_UNIT_US
+    link = await establish(tester, central=central, interval=interval, csa2=True)
+    await exchange_iut_features(
+        tester, link, PEER_FEATURES | PEER_CIS_FEATURES | POWER_FEATURES
+    )
+    await _set_phy(tester, link, acl_mode, local=True)
+    link.tx_power_dbm = CIS_PEER_START_DBM
+    return link
+
+
+async def _start_power_cis(link, mode):
+    _, _, phy, coding = PHY_VALUES[mode]
+    coded = phy == Phy.LE_CODED
+    _, air, event = await establish_peer_cis(
+        link.tester,
+        central=link.central,
+        link=link,
+        test_nse=2 if coded else 3,
+        sdu_sizes=(50, 50) if coded else None,
+        interval_us=CIS_ISO_INTERVAL_US[mode],
+        offset_us=5000,
+        phys=(phy, phy),
+        coding=coding,
+    )
+    return air, event.connection_handle
+
+
+async def _cis_power_exchange(air, power_dbm):
+    while air.nominal_us <= air.link.tester.radio.now_us:
+        air.step()
+    payload = bytes([air.counter & 0xFF]) * 32
+    return await air.exchange(
+        payload, header=(air.counter & 1) << 3, power_dbm=power_dbm
+    )
+
+
+async def initiate_cis_power_control(tester, *, central, acl_mode, cis_mode=0):
+    """Request peer power on the PHY of an active CIS.
+
+    Initial Condition:
+        The Lower Tester starts at the lower of its transmit-power midpoint
+        and 10 dB above its minimum. The ACL interval is ten ISO intervals.
+
+    Test Case Configuration:
+        Select the ACL PHY, CIS PHY and coding, and IUT role from Table 4.13-8.
+
+    Test Steps:
+        Query the IUT power on the ACL PHY and establish the CIS. During
+        continuous CIS data, decrease the Lower Tester's CIS transmit level
+        by 2 dB at five-second intervals. Reply to the IUT request with zero
+        applied delta.
+
+    Expected Outcome:
+        The IUT requests a positive power delta for the selected CIS PHY.
+
+    Reference:
+        LL.TS.p28 4.13.4.8, Table 4.13-8, Figure 4.13-9.
+    """
+    link = await _cis_power_link(
+        tester, central=central, acl_mode=acl_mode, cis_mode=cis_mode
+    )
+    _, applied, power, _ = await _adjust_power(link, acl_mode, 0)
+    assert applied == 0 and power != POWER_NOT_MANAGED
+    air, handle = await _start_power_cis(link, cis_mode)
+    cis_phy = PHY_VALUES[cis_mode][1]
+    positive = []
+    level = CIS_PEER_START_DBM
+
+    def receive(packet):
+        payload = _control_payload(packet)
+        if payload[:1] != bytes([Opcode.LL_POWER_CONTROL_REQ]):
+            return None
+        _, phy, delta, power = struct.unpack('<BBbb', payload)
+        if level < CIS_PEER_START_DBM and phy == cis_phy and delta > 0:
+            assert power != POWER_NOT_MANAGED
+            positive.append(delta)
+        return _response(0, 0, level if phy == cis_phy else link.tx_power_dbm)
+
+    link.on_receive = receive
+    for level in range(CIS_PEER_START_DBM, PEER_MIN_DBM - 1, -2):
+        deadline = air.nominal_us + PEER_RF_STEP_US
+        while air.nominal_us < deadline and not positive:
+            await _cis_power_exchange(air, level)
+        if positive:
+            break
+    assert positive, 'CIS power increase was not requested before the IXIT minimum'
+    # Complete a queued Lower Tester response while the CIS stays active.
+    while link.control_responses:
+        await _cis_power_exchange(air, level)
+    link.on_receive = None
+    await disconnect_cis(tester, link, handle)
+    await link.disconnect()
+
+
+async def respond_to_cis_power_requests(tester, *, central, acl_mode, cis_mode=0):
+    """Reflect a peer's CIS power adjustment in the ACL HCI readback.
+
+    Initial Condition:
+        An ACL supports Power Control on the selected role and PHY.
+
+    Test Case Configuration:
+        Select the ACL PHY, CIS PHY and coding, and IUT role from Table 4.13-9.
+
+    Test Steps:
+        Establish the CIS, then query its current power over the ACL. Request
+        -6 dB and +6 dB in sequence, reading the CIS PHY's power via HCI
+        after each response. Observe CIS packets at the resulting levels.
+
+    Expected Outcome:
+        HCI and LL levels agree and each reported delta equals the change
+        from the previous level. CIS packets using that PHY and coding
+        reflect the change.
+
+    Reference:
+        LL.TS.p28 4.13.4.9, Table 4.13-9, Figure 4.13-10.
+    """
+    link = await _cis_power_link(
+        tester, central=central, acl_mode=acl_mode, cis_mode=cis_mode
+    )
+    air, handle = await _start_power_cis(link, cis_mode)
+    _, applied, previous, _ = await _adjust_power(link, cis_mode, 0)
+    assert applied == 0
+    assert await _current_power(link, cis_mode) == (previous, POWER_LEVELS[-1])
+
+    async def read_rssi():
+        readings = []
+        _, _, phy, coding = PHY_VALUES[cis_mode]
+        for _ in range(6):
+            packet = await _cis_power_exchange(air, CIS_PEER_START_DBM)
+            if phy != Phy.LE_CODED or packet.coding == coding:
+                readings.append(packet.rssi)
+        return mean(readings) if readings else None
+
+    last_rssi = await read_rssi()
+    for delta in (-6, 6):
+        _, applied, actual, _ = await _adjust_power(link, cis_mode, delta)
+        assert actual == previous + applied
+        assert actual in POWER_LEVELS
+        assert await _current_power(link, cis_mode) == (actual, POWER_LEVELS[-1])
+        rssi = await read_rssi()
+        if rssi is not None and last_rssi is not None:
+            assert rssi - last_rssi == pytest.approx(applied, abs=3)
+        previous, last_rssi = actual, rssi
+    await disconnect_cis(tester, link, handle)
     await link.disconnect()
 
 
@@ -863,6 +1022,48 @@ PROCEDURES |= procedure_cases(
 PROCEDURES |= procedure_cases(
     initiate_power_control, _phy_cases((3, 4, 5, 47), 'Power Control Request')
 )
+
+# Negotiate on the ACL while measuring or adjusting the separate CIS radio PHY.
+for procedure, numbers, title in (
+    (initiate_cis_power_control, (20, 45), 'Power Control Request, CIS, Initiate'),
+    (respond_to_cis_power_requests, (25, 46), 'Power Control Response, CIS'),
+):
+    PROCEDURES |= procedure_cases(
+        procedure,
+        {
+            identifier: case
+            for acl_mode, number in enumerate(numbers)
+            for identifier, case in _role_cases(
+                f'BV-{number:02}',
+                f'{title}, {PHY_VALUES[acl_mode][0]} ACL',
+                acl_mode=acl_mode,
+            ).items()
+        },
+    )
+
+# Coded CIS variants use a 1M ACL, and the case IDs differ by role and coding.
+for procedure, cases, title in (
+    (
+        initiate_cis_power_control,
+        ((True, 23, 2), (False, 22, 2), (True, 48, 3), (False, 48, 3)),
+        'Power Control Request, CIS, Initiate',
+    ),
+    (
+        respond_to_cis_power_requests,
+        ((True, 27, 2), (False, 28, 3)),
+        'Power Control Response, CIS',
+    ),
+):
+    PROCEDURES |= procedure_cases(
+        procedure,
+        {
+            f'LL/PCL/{"CEN" if central else "PER"}/BV-{number:02}-C': (
+                f'{title}, {PHY_VALUES[cis_mode][0]}',
+                {'central': central, 'acl_mode': 0, 'cis_mode': cis_mode},
+            )
+            for central, number, cis_mode in cases
+        },
+    )
 
 # Verify the responder's advertised power steps with and without compensation.
 PROCEDURES |= procedure_cases(

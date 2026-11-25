@@ -1,19 +1,22 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared PHY, Controller, Host and simulation-clock ownership for examples."""
+"""Start a BabbleSim PHY and connect each sample Host to its Controller."""
 
 import argparse
 import asyncio
-import inspect
 import json
+import sys
 import uuid
 from contextlib import AsyncExitStack, ExitStack
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from bumble.device import Device
+from bumble.hci import Address
+from bumble.transport import open_transport
+
 from bscontroller import EllisysCapture, RadioController, RadioEventLoop, RadioSession
-from bscontroller.hosts.bumble import open_device
 from bscontroller.runtime import PhyProcess
 
 
@@ -52,26 +55,24 @@ async def _run(scenario, names, args, sim_id, log_dir, socket_dir, capture):
         )
         for index, name in enumerate(names, 1)
     ]
-    (log_dir / 'devices.json').write_text(
-        json.dumps(
+    if capture:
+        devices_info = [
             {
-                'sim_id': sim_id,
-                'clock_dev_id': len(names),
-                'devices': [
-                    {
-                        'dev_id': index,
-                        'name': name,
-                        'address': controller.public_address,
-                        'hci': f'{name}.snoop',
-                        'radio': f'{name}.pcapng' if capture else None,
-                    }
-                    for index, (name, controller) in enumerate(zip(names, controllers))
-                ],
-            },
-            indent=2,
+                'dev_id': index,
+                'name': name,
+                'address': controller.public_address,
+                'hci': f'{name}.snoop',
+                'radio': f'{name}.pcapng',
+            }
+            for index, (name, controller) in enumerate(zip(names, controllers))
+        ]
+        (log_dir / 'devices.json').write_text(
+            json.dumps(
+                {'sim_id': sim_id, 'clock_dev_id': len(names), 'devices': devices_info},
+                indent=2,
+            )
+            + '\n'
         )
-        + '\n'
-    )
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(
             RadioSession(sim_id, list(enumerate(controllers)), clock_dev_id=len(names))
@@ -79,21 +80,29 @@ async def _run(scenario, names, args, sim_id, log_dir, socket_dir, capture):
         async with asyncio.timeout(args.timeout):
             devices = {}
             for name, controller in zip(names, controllers):
-                devices[name] = await stack.enter_async_context(
-                    open_device(
-                        name, str(controller.public_address), controller.hci_socket
-                    )
+                transport = await stack.enter_async_context(
+                    await open_transport(f'unix:{controller.hci_socket}')
                 )
+                device = Device.with_hci(
+                    name,
+                    Address(controller.public_address),
+                    transport.source,
+                    transport.sink,
+                )
+                stack.push_async_callback(device.power_off)
+                await device.power_on()
+                devices[name] = device
             result = await scenario(devices)
-            (log_dir / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+            if capture:
+                (log_dir / 'result.json').write_text(
+                    json.dumps(result, indent=2) + '\n'
+                )
             print(json.dumps(result, sort_keys=True))
 
 
 def run(scenario, names, args):
     """Run one finite example with actual Hosts and radios; clean up on failure."""
-    sim_id = (
-        f'bscontroller_{Path(inspect.getfile(scenario)).stem}_{uuid.uuid4().hex[:12]}'
-    )
+    sim_id = f'bscontroller_{Path(sys.argv[0]).stem}_{uuid.uuid4().hex[:12]}'
     with ExitStack() as resources:
         temporary = Path(
             resources.enter_context(TemporaryDirectory(prefix='bsc-sample-'))

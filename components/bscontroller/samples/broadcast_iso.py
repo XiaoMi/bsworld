@@ -5,41 +5,21 @@
 
 import asyncio
 from contextlib import AsyncExitStack
+from functools import partial
 
 from bumble.device import (
+    AdvertisingEventProperties,
+    AdvertisingParameters,
     BigParameters,
     BigSyncParameters,
-    BisLink,
-    PeriodicAdvertisingSync,
+    PeriodicAdvertisingParameters,
 )
-
-from bscontroller.hosts.bumble import advertising, scanning
+from bumble.hci import OwnAddressType, Phy
 
 from . import runtime
 
-SDU_INTERVAL_US = 20000
+SDU_INTERVAL_US = 20_000
 SDU_COUNT = 20
-
-
-class IsoReceiver:
-    def __init__(self, number):
-        self.number = number
-        self.count = 0
-        self.completed = asyncio.Event()
-
-    def receive(self, packet):
-        # The sample uses complete SDUs smaller than one HCI ISO buffer.
-        if packet.packet_status_flag or not packet.iso_sdu_fragment:
-            return
-        data = packet.iso_sdu_fragment
-        assert packet.pb_flag == 2 and len(data) == 64
-        assert data[0] == self.number
-        sequence = int.from_bytes(data[1:3], 'little')
-        assert data[3:] == bytes((sequence + n) & 255 for n in range(61))
-        assert sequence == self.count
-        self.count += 1
-        if self.count == SDU_COUNT:
-            self.completed.set()
 
 
 async def run(devices, *, encrypted=False, framed=False, phy=2):
@@ -47,9 +27,22 @@ async def run(devices, *, encrypted=False, framed=False, phy=2):
     sinks = [device for name, device in devices.items() if name != 'broadcaster']
     code = b'broadcast-sample' if encrypted else None
     async with AsyncExitStack() as stack:
-        advertiser = await stack.enter_async_context(
-            advertising(source, legacy=False, sid=1, periodic_interval=80)
+        advertiser = await source.create_advertising_set(
+            advertising_parameters=AdvertisingParameters(
+                advertising_event_properties=AdvertisingEventProperties(
+                    is_connectable=False
+                ),
+                own_address_type=OwnAddressType.PUBLIC,
+                advertising_sid=1,
+                primary_advertising_interval_min=40,
+                primary_advertising_interval_max=60,
+            ),
+            periodic_advertising_parameters=PeriodicAdvertisingParameters(80, 80),
         )
+        stack.push_async_callback(advertiser.remove)
+        stack.push_async_callback(advertiser.stop)
+        await advertiser.start_periodic()
+        stack.push_async_callback(advertiser.stop_periodic)
         big = await source.create_big(
             advertiser,
             BigParameters(
@@ -66,17 +59,25 @@ async def run(devices, *, encrypted=False, framed=False, phy=2):
             ),
         )
         stack.push_async_callback(big.terminate)
-        receivers = []
+
+        received = []
         for sink in sinks:
-            await stack.enter_async_context(scanning(sink))
+            await sink.start_scanning(
+                active=False,
+                own_address_type=OwnAddressType.PUBLIC,
+                scan_interval=60,
+                scan_window=30,
+                scanning_phys=[Phy.LE_1M],
+            )
+            stack.push_async_callback(sink.stop_scanning)
             sync = await sink.create_periodic_advertising_sync(
                 source.public_address, sid=1, sync_timeout=5
             )
             stack.push_async_callback(sync.terminate)
-            synchronized = asyncio.Event()
-            sync.once(PeriodicAdvertisingSync.EVENT_ESTABLISHMENT, synchronized.set)
-            if sync.state != PeriodicAdvertisingSync.State.ESTABLISHED:
-                await synchronized.wait()
+            if sync.state != sync.State.ESTABLISHED:
+                ready = asyncio.Event()
+                sync.once(sync.EVENT_ESTABLISHMENT, ready.set)
+                await ready.wait()
             big_sync = await sink.create_big_sync(
                 sync,
                 BigSyncParameters(
@@ -84,25 +85,37 @@ async def run(devices, *, encrypted=False, framed=False, phy=2):
                 ),
             )
             stack.push_async_callback(big_sync.terminate)
-            for number, link in enumerate(big_sync.bis_links, 1):
-                receiver = IsoReceiver(number)
-                link.sink = receiver.receive
-                await link.setup_data_path(BisLink.Direction.CONTROLLER_TO_HOST)
-                receivers.append(receiver)
+            queues = []
+            for link in big_sync.bis_links:
+                queue = asyncio.Queue()
+                link.sink = queue.put_nowait
+                await link.setup_data_path(link.Direction.CONTROLLER_TO_HOST)
+                queues.append(queue)
+            received.append(queues)
+
         for link in big.bis_links:
-            await link.setup_data_path(BisLink.Direction.HOST_TO_CONTROLLER)
-        for sequence in range(SDU_COUNT):
-            for number, link in enumerate(big.bis_links, 1):
-                link.write(
-                    bytes([number])
-                    + sequence.to_bytes(2, 'little')
-                    + bytes((sequence + n) & 255 for n in range(61))
-                )
-            await asyncio.sleep(SDU_INTERVAL_US / 1000000)
-        await asyncio.gather(*(receiver.completed.wait() for receiver in receivers))
-        await asyncio.gather(*(link.drain() for link in big.bis_links))
+            await link.setup_data_path(link.Direction.HOST_TO_CONTROLLER)
+        streams = [
+            [bytes([bis, sequence]) + bytes(range(62)) for sequence in range(SDU_COUNT)]
+            for bis in (1, 2)
+        ]
+        for frame in zip(*streams, strict=True):
+            for link, payload in zip(big.bis_links, frame, strict=True):
+                link.write(payload)
+            await asyncio.sleep(SDU_INTERVAL_US / 1_000_000)
+        for queues in received:
+            for queue, stream in zip(queues, streams, strict=True):
+                for expected in stream:
+                    packet = await queue.get()
+                    # An unused transmission slot can yield an empty report.
+                    while not packet.iso_sdu_fragment:
+                        packet = await queue.get()
+                    assert packet.pb_flag == 2 and packet.packet_status_flag == 0
+                    assert packet.iso_sdu_fragment == expected
+        for link in big.bis_links:
+            await link.drain()
         return {
-            'bis': 2,
+            'bis': len(big.bis_links),
             'receivers': len(sinks),
             'sdus_per_stream': SDU_COUNT,
             'encrypted': encrypted,
@@ -124,14 +137,8 @@ def main():
     )
     parser.add_argument('--receivers', type=runtime.positive_int, default=2)
     args = parser.parse_args()
-
-    async def scenario(devices):
-        return await run(
-            devices, encrypted=args.encrypted, framed=args.framed, phy=args.phy
-        )
-
     runtime.run(
-        scenario,
+        partial(run, encrypted=args.encrypted, framed=args.framed, phy=args.phy),
         ('broadcaster', *(f'receiver-{n}' for n in range(args.receivers))),
         args,
     )

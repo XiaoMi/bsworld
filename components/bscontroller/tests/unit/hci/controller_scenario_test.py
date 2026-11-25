@@ -29,6 +29,12 @@ INQUIRY = hci.hci_command_op_code(0x01, 0x0001)
 CREATE_CONNECTION = hci.hci_command_op_code(0x01, 0x0005)
 READ_LOCAL_EXTENDED_FEATURES = hci.hci_command_op_code(0x04, 0x0004)
 
+# Core Vol 2, Part H, 7.6: the P-256 generator is the public key for scalar 1.
+P256_GENERATOR_X = 0x6B17D1F2E12C4247F8BCE6E563A440F277037D812DEB33A0F4A13945D898C296
+P256_GENERATOR_Y = 0x4FE342E2FE1A7F9B8EE7EB4A7C0F9E162BCE33576B315ECECBB6406837BF51F5
+P256_FIELD_PRIME = 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF
+P256_Y_AT_ZERO_X = 0x66485C780E2F83D72433BD5D84A06BB6541C2AF31DAE871728BF856A174F93F4
+
 
 # ---------------------------------------------------------------------------
 # Dispatch and framing (4.5)
@@ -64,8 +70,8 @@ def test_command_complete_framing_on_the_wire(host):
         # Command Complete with Unknown HCI Command is a valid response (4.5).
         (CREATE_CONNECTION, b'\xff', False),
         (INQUIRY, bytes(5), False),
-        (hci.HCI_LE_SET_CIG_PARAMETERS_COMMAND, b'', False),
-        (hci.HCI_LE_CREATE_CIS_COMMAND, bytes(1), True),
+        (hci.HCI_LE_CS_READ_LOCAL_SUPPORTED_CAPABILITIES_COMMAND, b'\xff', False),
+        (hci.HCI_LE_CS_READ_REMOTE_SUPPORTED_CAPABILITIES_COMMAND, b'', True),
     ],
 )
 def test_unsupported_command_is_rejected_before_decoding(
@@ -261,15 +267,17 @@ def test_read_supported_commands_matches_dispatch(host):
         2. Check each supported opcode's bit and one unsupported opcode's bit.
 
     Expected:
-        - Every supported opcode with a defined mask bit is set; the LE Create
-          CIS bit is clear.
+        - Every supported opcode with a defined mask bit is set; the LE CS
+          Read Local Supported Capabilities bit is clear.
     """
     result = host.cmd(hci.HCI_Read_Local_Supported_Commands_Command())
     mask = int.from_bytes(result.supported_commands, 'little')
     for opcode in host.controller.supported_commands:
         bit = hci.HCI_SUPPORTED_COMMANDS_MASKS.get(opcode, 0)
         assert not bit or mask & bit, hex(opcode)
-    unsupported = hci.HCI_SUPPORTED_COMMANDS_MASKS[hci.HCI_LE_CREATE_CIS_COMMAND]
+    unsupported = hci.HCI_SUPPORTED_COMMANDS_MASKS[
+        hci.HCI_LE_CS_READ_LOCAL_SUPPORTED_CAPABILITIES_COMMAND
+    ]
     assert not mask & unsupported
 
 
@@ -322,6 +330,7 @@ def test_read_le_features_and_states(host):
         hci.LeFeatureMask.LE_2M_PHY,
         hci.LeFeatureMask.LE_CODED_PHY,
         hci.LeFeatureMask.MINIMUM_NUMBER_OF_USED_CHANNELS_PROCEDURE,
+        hci.LeFeatureMask.REMOTE_PUBLIC_KEY_VALIDATION,
         hci.LeFeatureMask.LE_POWER_CONTROL_REQUEST,
         hci.LeFeatureMask.LE_POWER_CONTROL_REQUEST_DUP,
         hci.LeFeatureMask.LE_PATH_LOSS_MONITORING,
@@ -329,6 +338,93 @@ def test_read_le_features_and_states(host):
         assert features & bit, bit
     states = host.cmd(hci.HCI_LE_Read_Supported_States_Command()).le_states
     assert len(states) == 8 and any(states)
+
+
+def test_le_p256_key_generation_and_reset(host):
+    """Exercise the generated key lifecycle and both HCI DHKey command versions.
+
+    Core Vol 4, Part E, 7.8.36–37 and Vol 3, Part H, 2.3.5.6.1. The peer's
+    scalar of 1 makes the expected secret the Controller's public X coordinate.
+    The debug-key command must use the independently specified debug key.
+    """
+    peer = (
+        P256_GENERATOR_X.to_bytes(32, 'little'),
+        P256_GENERATOR_Y.to_bytes(32, 'little'),
+    )
+    read = hci.HCI_LE_Read_Local_P_256_Public_Key_Command()
+    public_event = hci.HCI_LE_Read_Local_P_256_Public_Key_Complete_Event
+    dhkey_event = hci.HCI_LE_Generate_DHKey_Complete_Event
+    v1 = hci.HCI_LE_Generate_DHKey_Command(*peer)
+    v2_debug = hci.HCI_LE_Generate_DHKey_V2_Command(*peer, 1)
+    debug_x = 0x20B003D2F297BE2C5E2C83A7E9F9A5B9EFF49111ACF4FDDBCC0301480E359DE6
+
+    host.cmd_status(v1, ErrorCode.COMMAND_DISALLOWED_ERROR)
+    host.ut_rx_q_is_empty()
+    host.cmd_status(v2_debug)
+    host.ut_rx(dhkey_event, status=0, dh_key=debug_x.to_bytes(32, 'little'))
+
+    host.cmd_status(read)
+    first = host.ut_rx(public_event, status=0)
+    host.cmd_status(v1)
+    host.ut_rx(dhkey_event, status=0, dh_key=first.key_x_coordinate)
+
+    host.cmd_status(read)
+    second = host.ut_rx(public_event, status=0)
+    assert second.key_x_coordinate != first.key_x_coordinate
+    host.cmd_status(hci.HCI_LE_Generate_DHKey_V2_Command(*peer, 0))
+    host.ut_rx(dhkey_event, status=0, dh_key=second.key_x_coordinate)
+    host.cmd_status(
+        hci.HCI_LE_Generate_DHKey_V2_Command(*peer, 2),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    host.ut_rx_q_is_empty()
+
+    host.cmd(hci.HCI_Reset_Command())
+    host.cmd_status(v1, ErrorCode.COMMAND_DISALLOWED_ERROR)
+    host.ut_rx_q_is_empty()
+
+
+@pytest.mark.parametrize(
+    'x,y',
+    [
+        pytest.param(0, 0, id='zero-point'),
+        pytest.param(P256_GENERATOR_X, P256_GENERATOR_Y ^ 1, id='off-curve'),
+        pytest.param(P256_FIELD_PRIME, P256_Y_AT_ZERO_X, id='x-out-of-range'),
+    ],
+)
+def test_le_dhkey_rejects_invalid_remote_key(host, x, y):
+    """Reject invalid P-256 public keys and return the all-ones DHKey sentinel.
+
+    Core Vol 3, Part H, 2.3.5.6.1 and Vol 4, Part E, 7.8.37/7.7.65.9.
+    The range vector would be valid if its X coordinate were reduced modulo p.
+    """
+    coordinates = (x.to_bytes(32, 'little'), y.to_bytes(32, 'little'))
+    host.cmd_status(hci.HCI_LE_Read_Local_P_256_Public_Key_Command())
+    host.ut_rx(hci.HCI_LE_Read_Local_P_256_Public_Key_Complete_Event, status=0)
+    for command in (
+        hci.HCI_LE_Generate_DHKey_Command(*coordinates),
+        hci.HCI_LE_Generate_DHKey_V2_Command(*coordinates, 1),
+    ):
+        host.cmd_status(command)
+        host.ut_rx(
+            hci.HCI_LE_Generate_DHKey_Complete_Event,
+            status=ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+            dh_key=b'\xff' * 32,
+        )
+    host.ut_rx_q_is_empty()
+
+
+def test_le_p256_rejects_incorrect_parameter_lengths(host):
+    """Reject malformed key commands before starting P-256 work (7.8.36–37)."""
+    for opcode, parameters in (
+        (hci.HCI_LE_READ_LOCAL_P_256_PUBLIC_KEY_COMMAND, b'\x00'),
+        (hci.HCI_LE_GENERATE_DHKEY_COMMAND, bytes(63)),
+        (hci.HCI_LE_GENERATE_DHKEY_V2_COMMAND, bytes(64)),
+    ):
+        reply = host.reply(hci.HCI_Command(parameters, op_code=opcode))
+        assert isinstance(reply, hci.HCI_Command_Status_Event)
+        assert reply.status == ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
+    host.ut_rx_q_is_empty()
 
 
 def test_host_subrating_feature_updates_both_hci_feature_reads(host):

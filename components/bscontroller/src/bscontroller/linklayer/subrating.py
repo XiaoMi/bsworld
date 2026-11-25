@@ -238,11 +238,14 @@ class Subrating:
         self.owner.enqueue(bytes([opcode]) + body)
 
     def request(self, request: SubrateRequest) -> None:
-        if not request.fits_connection(self.connection.parameters.interval_us):
+        connection = self.connection
+        if not request.fits_connection(
+            connection.parameters.interval_us
+        ) or not connection.fits_cis_supervision_timeout(request.timeout):
             self.report(ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR)
         elif not self.peer_supported:
             self.report(UNSUPPORTED)
-        elif self.connection.role == Role.CENTRAL:
+        elif connection.role == Role.CENTRAL:
             self.limits = request
             self._start_update(request, host=True)
         else:
@@ -293,6 +296,7 @@ class Subrating:
             request.valid_fields
             and request.latency <= limits.latency
             and request.timeout <= limits.timeout
+            and self.connection.fits_cis_supervision_timeout(request.timeout)
             and factor <= min(request.maximum, limits.maximum)
             and valid_event_spacing(
                 interval_us, request.minimum, request.latency, request.timeout
@@ -393,8 +397,11 @@ class Subrating:
         self.report_after_ack = None
 
     def _receive_update(self, payload: bytes) -> None:
-        update = SubrateUpdate.unpack(payload[1:], self.connection.event_index)
-        if not update.valid_for(self.connection.parameters.interval_us):
+        connection = self.connection
+        update = SubrateUpdate.unpack(payload[1:], connection.event_index)
+        if not update.valid_for(
+            connection.parameters.interval_us
+        ) or not connection.fits_cis_supervision_timeout(update.timeout):
             self.owner.reject(
                 Opcode.LL_SUBRATE_IND, ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR
             )

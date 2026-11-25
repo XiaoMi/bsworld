@@ -322,3 +322,60 @@ class BigSnapshot:
     handle: int
     info: BigInfo | None
     stream_handles: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class CisConfig:
+    cis_id: int
+    max_sdu_c_to_p: int
+    max_sdu_p_to_c: int
+    phy_c_to_p: int
+    phy_p_to_c: int
+    rtn_c_to_p: int = 0
+    rtn_p_to_c: int = 0
+    nse: int | None = None
+    max_pdu_c_to_p: int = 0
+    max_pdu_p_to_c: int = 0
+    bn_c_to_p: int = 0
+    bn_p_to_c: int = 0
+
+
+@dataclass(frozen=True)
+class CigConfig:
+    cig_id: int
+    sdu_interval_c_to_p: int
+    sdu_interval_p_to_c: int
+    worst_case_sca: int
+    packing: int
+    framing: int
+    max_transport_latency_c_to_p: int
+    max_transport_latency_p_to_c: int
+    cis_parameters: tuple[CisConfig, ...]
+    iso_interval: int | None = None
+    ft_c_to_p: int = 1
+    ft_p_to_c: int = 1
+
+
+@dataclass(frozen=True)
+class CisEstablished:
+    connection_handle: int
+    cig_sync_delay: int = 0
+    cis_sync_delay: int = 0
+    transport_latency_c_to_p: int = 0
+    transport_latency_p_to_c: int = 0
+    phy_c_to_p: int = 0
+    phy_p_to_c: int = 0
+    nse: int = 0
+    bn_c_to_p: int = 0
+    bn_p_to_c: int = 0
+    ft_c_to_p: int = 0
+    ft_p_to_c: int = 0
+    max_pdu_c_to_p: int = 0
+    max_pdu_p_to_c: int = 0
+    iso_interval: int = 0
+    sub_interval: int = 0
+    max_sdu_c_to_p: int = 0
+    max_sdu_p_to_c: int = 0
+    sdu_interval_c_to_p: int = 0
+    sdu_interval_p_to_c: int = 0
+    framing: int = 0

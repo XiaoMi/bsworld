@@ -19,6 +19,8 @@ from bscontroller.linklayer.service import LinkLayerService
 from bscontroller.radio.base import Radio
 
 if TYPE_CHECKING:
+    from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
+
     from bscontroller.hci.controller import Controller
 
 
@@ -55,6 +57,7 @@ class LeControllerContext(LeControllerEvents):
         self.fragments: dict[tuple[int, str], bytes] = {}
         self.period_duplicate_reset = False
         self.extended_commands: bool | None = None
+        self._p256_private_key: EllipticCurvePrivateKey | None = None
 
     def _run_ll_request(self, command, request):
         # Cached results can complete synchronously, after Command Status is visible.

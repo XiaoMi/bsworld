@@ -367,6 +367,9 @@ class Connection:
     ) -> int:
         return await self.event.advance_to_us(target_us, radio_until_us=radio_until_us)
 
+    def fits_cis_supervision_timeout(self, timeout: int) -> bool:
+        return self.link.roles.cig.fits_supervision_timeout(self, timeout)
+
     @property
     def supervision_deadline_us(self) -> int:
         """Core Vol 6, Part B, 4.5.2: connSupervisionTimeout, or six intervals before

@@ -43,6 +43,8 @@ from bscontroller.linklayer.timing import LL_RESPONSE_START_TOLERANCE_US
 from bscontroller.radio.base import Phy, Received
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from bscontroller.linklayer.connection import Connection
 
 
@@ -93,6 +95,7 @@ class ConnectionEvent:
         self.host_flush: AclFlush | None = None
         self.flush_timers: set[AclFlush] = set()
         self.retries = 0
+        self._acknowledgment_callback: Callable[[], None] | None = None
 
     def enqueue_acl(
         self, continuation: bool, payload: bytes, *, flushable: bool = False
@@ -156,6 +159,18 @@ class ConnectionEvent:
             self.queue.appendleft(item)
         else:
             self.queue.append(item)
+
+    def cancel_queued_control(self, payload: bytes) -> bool:
+        """Withdraw a control PDU before it becomes the outstanding ARQ packet."""
+        item = Outbound(LlId.CONTROL, payload)
+        if item not in self.queue:
+            return False
+        self.queue.remove(item)
+        return True
+
+    def after_acknowledgment(self, callback: Callable[[], None]) -> None:
+        """Run when the next TX carries the acknowledgment for this RX."""
+        self._acknowledgment_callback = callback
 
     def accept(self, pdu: bytes, valid_crc: bool) -> bool:
         """Validate RX, then process its ACK independently of new peer data.
@@ -350,6 +365,9 @@ class ConnectionEvent:
             length=len(self.pending_wire),
         )
         self.sent_pending = True
+        if (callback := self._acknowledgment_callback) is not None:
+            self._acknowledgment_callback = None
+            callback()
         self.expire_acl()
         return bool(header & PDU_DATA_MD_MASK), end_us
 
@@ -594,8 +612,13 @@ class ConnectionEvent:
             await self.connection.link.advance_idle_to_us(min(target_us, deadline))
             self.connection.check_timeout()
             return self.connection.radio.now_us
+        previous_anchor = self.connection.anchor_us
         exchange = self.control.event_prepare()
         if self.connection.closed:
+            return self.connection.radio.now_us
+        if self.connection.anchor_us != previous_anchor and radio_until_us is not None:
+            # An Instant can move this same ACL event beyond the current
+            # radio grant. Let the intervening event run before retrying it.
             return self.connection.radio.now_us
         self.connection.unmapped_channel = (
             self.connection.unmapped_channel + self.connection.parameters.hop

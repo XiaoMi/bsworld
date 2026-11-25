@@ -119,7 +119,7 @@ with asyncio.Runner(loop_factory=RadioEventLoop) as runner:
 - 让 Host 按仿真时间运行时，选择 `RadioEventLoop`，并为 Host 时钟设置一个与 Controller 设备编号不同的 `clock_dev_id`。
 - 退出 `RadioSession` 时，会先停止 Controller，再关闭会话的 Host 时钟连接。会话结束后再退出 `PhyProcess`。
 
-广播、扫描、GATT、周期同步和多角色共存的运行方式见 [Bumble Host 示例](samples/README.zh-CN.md)。
+LE 广播、连接管理、ISO 数据和多角色共存的运行方式见 [Bumble Host 示例](samples/README.zh-CN.md)。
 
 ## 配置
 
@@ -200,6 +200,7 @@ other = RadioController("x", "F0:F1:F2:F3:F4:03", config=ControllerConfig(max_co
 | 5.0 | Minimum Number of Used Channels Procedure | * |
 | 5.0 | Extended Advertising | * |
 | 5.0 | Periodic Advertising | * |
+| 5.1 | Remote Public Key Validation | * |
 | 5.1 | Connection CTE Request |  |
 | 5.1 | Connection CTE Response |  |
 | 5.1 | Connectionless CTE Transmitter |  |
@@ -209,7 +210,7 @@ other = RadioController("x", "F0:F1:F2:F3:F4:03", config=ControllerConfig(max_co
 | 5.1 | Initiating Periodic Advertising Sync Transfer for Remote Periodic Advertising | * |
 | 5.2 | Isochronous Broadcaster | * |
 | 5.2 | Synchronized Receiver | * |
-| 5.2 | Connected Isochronous Stream (CIS) |  |
+| 5.2 | Connected Isochronous Stream (CIS) | * |
 | 5.2 | LE Power Control Request | * |
 | 5.2 | LE Path Loss Monitoring | * |
 | 5.2 | Sleep Clock Accuracy Updates | * |
@@ -235,7 +236,7 @@ HCI 层与 Host 交换报文，Link Layer 执行 Controller 侧的协议流程�
 
 <div align="center"><img src="docs/images/radio_controller_arch.svg" alt="多个 Controller 共享 BabbleSim PHY" width="80%"><br><em>图 1：共享同一 PHY 的多个 Controller</em></div>
 
-Link Layer 分别管理广播、扫描、发起连接、同步和已建立的连接。每条 ACL 连接独立维护控制流程状态、加密状态和连接事件执行器。各角色由同一个调度器协调射频使用。
+Link Layer 分别管理广播、扫描、发起连接、同步、ACL 连接和等时组。每条 ACL 连接独立维护控制流程状态、加密状态和连接事件执行器。各角色由同一个调度器协调射频使用。
 
 每个 Controller 线程有自己的事件循环和 PHY 连接，通过完整的 H4 报文与 Host 通信。各 Controller 和 Host 时钟（如有）与 PHY 同步，PHY 以整数微秒为单位推进仿真时间。
 

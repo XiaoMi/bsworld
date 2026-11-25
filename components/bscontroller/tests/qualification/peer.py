@@ -485,8 +485,10 @@ class PeerLink:
             await self.exchange(
                 bytes([Opcode.LL_TERMINATE_IND, reason]), llid=LlId.CONTROL
             )
-        event = await self.tester.event(hci.HCI_Disconnection_Complete_Event)
-        assert event.connection_handle == self.handle
+        event = await self.tester.expect(
+            lambda event: isinstance(event, hci.HCI_Disconnection_Complete_Event)
+            and event.connection_handle == self.handle
+        )
         assert event.reason == (
             ErrorCode.CONNECTION_TERMINATED_BY_LOCAL_HOST_ERROR if local else reason
         )

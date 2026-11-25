@@ -1,7 +1,7 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-"""ACL transmit power and path loss (Core Vol 6, Part B, 4.5.16 and 5.1.17–18)."""
+"""ACL and CIS power control (Core Vol 6, Part B, 4.5.15–16 and 5.1.17–18)."""
 
 from __future__ import annotations
 
@@ -234,6 +234,7 @@ class PowerControl:
     def __init__(self, owner: ControlProcedures):
         self.owner = owner
         self.active_phy = self.tx_phy
+        self.managed_phys = frozenset(self.active_phy.managed)
         self.local_levels = dict.fromkeys(PowerPhy, DEFAULT_TX_POWER_DBM)
         self.remote_levels: dict[PowerPhy, int] = {}
         self.remote_flags: dict[PowerPhy, int] = {}
@@ -281,6 +282,9 @@ class PowerControl:
                 return level
         return self._local_power(self.active_phy)
 
+    def transmit_iso_power_dbm(self, phy: PowerPhy) -> int:
+        return self._local_power(phy)
+
     @property
     def pending(self) -> bool:
         return self.context is not None and self.context.active
@@ -297,9 +301,7 @@ class PowerControl:
 
     def read_local(self, phy: PowerPhy) -> tuple[int, int]:
         level = (
-            self._local_power(phy)
-            if phy in self.active_phy.managed
-            else POWER_UNAVAILABLE
+            self._local_power(phy) if phy in self.managed_phys else POWER_UNAVAILABLE
         )
         return level, self._radiative(TX_POWER_LEVELS_DBM[-1])
 
@@ -345,31 +347,53 @@ class PowerControl:
     def update_transmitter(self) -> None:
         """Apply the committed PHY and pending RF compensation at the next event."""
         phy, compensation = self.tx_phy, self.connection.link.rf_tx_path_compensation
-        if phy == self.active_phy and compensation == self.tx_compensation:
+        managed = frozenset(phy.managed).union(
+            *(event.tx_power_phy.managed for event in self._iso_events())
+        )
+        if (
+            phy == self.active_phy
+            and compensation == self.tx_compensation
+            and managed == self.managed_phys
+        ):
             return
         previous = {
-            managed: self._local_power(managed) for managed in self.active_phy.managed
+            member: self._local_power(member) for member in sorted(self.managed_phys)
         }
         self.active_phy, self.tx_compensation = phy, compensation
-        for managed in phy.managed:
-            level = self._local_power(managed)
-            if managed not in previous:
-                self._indicate(managed, level, 0)
-            elif level != previous[managed]:
-                delta = level - previous[managed]
+        self.managed_phys = managed
+        for member in sorted(managed):
+            level = self._local_power(member)
+            if member not in previous:
+                self._indicate(member, level, 0)
+            elif level != previous[member]:
+                delta = level - previous[member]
                 if not -128 <= delta < DELTA_UNAVAILABLE:
                     delta = DELTA_UNAVAILABLE
-                self._indicate(managed, level, delta)
-                self._local_changed(managed, level, delta)
-        for managed in previous:
-            if managed not in phy.managed:
-                self._indicate(managed, NOT_MANAGED, 0)
+                self._indicate(member, level, delta)
+                self._local_changed(member, level, delta)
+        for member in previous:
+            if member not in managed:
+                self._indicate(member, NOT_MANAGED, 0)
 
-    def received(self, packet: Received) -> None:
+    def _iso_events(self):
+        connection = self.connection
+        return (
+            event
+            for event in connection.link.roles.cig.events()
+            if event.connection is connection and event.established
+        )
+
+    def _observe_rssi(self, packet: Received) -> PowerPhy:
         phy = PowerPhy.from_radio(packet.phy, packet.coding)
-        self.last_rx_phy = phy
         rssi = self.connection.link.reported_rssi(packet.rssi)
         self.rssi[phy] = (3 * self.rssi.get(phy, rssi) + rssi) / 4
+        return phy
+
+    def received_iso(self, packet: Received) -> None:
+        self._observe_rssi(packet)
+
+    def received(self, packet: Received) -> None:
+        phy = self.last_rx_phy = self._observe_rssi(packet)
         if (power := self.remote_levels.get(phy, POWER_UNAVAILABLE)) >= NOT_MANAGED:
             if self.path_loss.unavailable():
                 # The Host ignores Zone_Entered when the path loss is unavailable.
@@ -417,11 +441,24 @@ class PowerControl:
         ):
             self._request(phy, 0)
             return
-        if features is not None or self.peer_requested or phy in self.remote_levels:
-            delta = self._peer_adjustment(phy)
-            # A neutral query recovers loss monitoring even at steady RSSI.
-            if delta or (self.path_loss.enabled and peer_power == POWER_UNAVAILABLE):
-                self._request(phy, delta)
+        candidates = tuple(
+            dict.fromkeys((phy, *(event.rx_power_phy for event in self._iso_events())))
+        )
+        for candidate in candidates:
+            if (
+                features is not None
+                or self.peer_requested
+                or candidate in self.remote_levels
+            ):
+                delta = self._peer_adjustment(candidate)
+                # A neutral query recovers ACL loss monitoring at steady RSSI.
+                if delta or (
+                    candidate == phy
+                    and self.path_loss.enabled
+                    and peer_power == POWER_UNAVAILABLE
+                ):
+                    self._request(candidate, delta)
+                    return
 
     def _peer_adjustment(self, phy: PowerPhy) -> int:
         rssi = self.rssi.get(phy)
@@ -447,9 +484,7 @@ class PowerControl:
             deadline_us=now + LL_RESPONSE_TIMEOUT_US,
         )
         tx_power = (
-            self._local_power(phy)
-            if phy in self.active_phy.managed
-            else POWER_UNAVAILABLE
+            self._local_power(phy) if phy in self.managed_phys else POWER_UNAVAILABLE
         )
         self.owner.enqueue(
             REQUEST.pack(Opcode.LL_POWER_CONTROL_REQ, phy.mask, delta, tx_power)
@@ -530,7 +565,7 @@ class PowerControl:
         self.peer_requested = True
         if peer_power != POWER_UNAVAILABLE:
             self._peer_changed(phy, peer_power, None, None)
-        if phy not in self.active_phy.managed:
+        if phy not in self.managed_phys:
             response = RESPONSE.pack(
                 Opcode.LL_POWER_CONTROL_RSP, 0, 0, NOT_MANAGED, APR_UNAVAILABLE
             )
