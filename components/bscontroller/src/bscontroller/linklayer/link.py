@@ -142,7 +142,8 @@ class RadioLink:
         self.default_subrate = SubrateRequest()
         self.default_rate = ConnectionRateParameters()
         self.features &= ~int(
-            LeFeatureMask.CONNECTION_SUBRATING_HOST_SUPPORT
+            LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM
+            | LeFeatureMask.CONNECTION_SUBRATING_HOST_SUPPORT
             | LeFeatureMask.ADVERTISING_CODING_SELECTION_HOST_SUPPORT
             | LeFeatureMask.SHORTER_CONNECTION_INTERVALS_HOST_SUPPORT
         )
@@ -161,10 +162,14 @@ class RadioLink:
         # Other ACLs may still rely on the advertised clock bound.
         return len(self.connections) <= 1 and self.initiating is None
 
-    def new_access_address(self, *, exclude: Iterable[int] = ()) -> int:
+    def new_access_address(
+        self, *, exclude: Iterable[int] = (), minimum_distance: int = 1
+    ) -> int:
         used = self.used_access_addresses()
         used.update(exclude)
-        return generate_access_address(self.random, used)
+        return generate_access_address(
+            self.random, used, minimum_distance=minimum_distance
+        )
 
     def used_access_addresses(self) -> set[int]:
         used = {
@@ -181,6 +186,7 @@ class RadioLink:
                 used.update(
                     group.info.access_address(n) for n in range(group.info.num_bis + 1)
                 )
+        used.update(self.roles.cig.access_addresses())
         return used
 
     def connection_parameters(
@@ -265,6 +271,7 @@ class RadioLink:
         operations.extend(self.roles.advertising.prepare())
         operations.extend(self.roles.synchronization.prepare())
         operations.extend(self.roles.broadcast.prepare())
+        operations.extend(self.roles.cig.prepare())
         return operations, self.roles.synchronization.contexts()
 
     async def advance_idle_to_us(self, target_us: int) -> None:

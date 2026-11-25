@@ -1,133 +1,193 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-"""Two Centrals, multiple Peripheral links, advertising, scanning and PA/SYNC.
-
-hub-a and hub-b each connect to both leaves; hub-a also accepts a connection
-from hub-b. Both hubs transmit a periodic train while scanning and synchronizing
-with the other hub. An independent observer scans and synchronizes with both.
-GATT notifications, reads, scan reports and periodic reports must all progress
-with all five ACL links still connected.
-"""
+"""Run five ACL links while devices scan, advertise and receive periodic data."""
 
 import asyncio
+from collections import Counter
 from contextlib import AsyncExitStack
 
-from bscontroller.hosts.bumble import advertising, scanning
+from bumble.core import AdvertisingData
+from bumble.device import (
+    AdvertisingEventProperties,
+    AdvertisingParameters,
+    Peer,
+    PeriodicAdvertisingParameters,
+)
+from bumble.hci import OwnAddressType, Phy
+from bumble.profiles.battery_service import BatteryService, BatteryServiceProxy
 
 from . import runtime
-from .common import BatterySensor, Reports, battery_connection, synchronization
 
 NAMES = ('hub-a', 'hub-b', 'leaf-a', 'leaf-b', 'observer')
+LOCAL_NAME = AdvertisingData.Type.COMPLETE_LOCAL_NAME
 
 
 async def run(devices):
-    servers = {
-        name: BatterySensor(devices[name]) for name in ('hub-a', 'leaf-a', 'leaf-b')
-    }
-    edges = [(hub, leaf) for hub in ('hub-a', 'hub-b') for leaf in ('leaf-a', 'leaf-b')]
+    # Each hub connects to both leaves, and hub-b also connects to hub-a.
+    edges = [(hub, leaf) for hub in NAMES[:2] for leaf in NAMES[2:4]]
     edges.append(('hub-b', 'hub-a'))
-    expected_connections = {
-        'hub-a': 3,
-        'hub-b': 3,
-        'leaf-a': 2,
-        'leaf-b': 2,
-        'observer': 0,
-    }
+    expected_connections = dict(zip(NAMES, (3, 3, 2, 2, 0), strict=True))
     wanted = {
-        'hub-a': ('hub-b-pa', 'leaf-a', 'leaf-b'),
-        'hub-b': ('hub-a-pa', 'leaf-a', 'leaf-b'),
-        'observer': ('hub-a-pa', 'hub-b-pa', 'leaf-a', 'leaf-b'),
+        'hub-a': {'hub-b-pa', 'leaf-a', 'leaf-b'},
+        'hub-b': {'hub-a-pa', 'leaf-a', 'leaf-b'},
+        'observer': {'hub-a-pa', 'hub-b-pa', 'leaf-a', 'leaf-b'},
     }
+    level = 100
     async with AsyncExitStack() as stack:
-        connectable = {
-            name: await stack.enter_async_context(
-                advertising(devices[name], connectable=True)
+        services = {}
+        connectable = {}
+        for name in ('hub-a', 'leaf-a', 'leaf-b'):
+            device = devices[name]
+            service = BatteryService(lambda _: level)
+            device.add_service(service)
+            services[name] = service
+            advertiser = await device.create_advertising_set(
+                advertising_parameters=AdvertisingParameters(
+                    advertising_event_properties=AdvertisingEventProperties(
+                        is_connectable=True, is_scannable=True, is_legacy=True
+                    ),
+                    own_address_type=OwnAddressType.PUBLIC,
+                    primary_advertising_interval_min=40,
+                    primary_advertising_interval_max=60,
+                ),
+                advertising_data=bytes(AdvertisingData([(LOCAL_NAME, name.encode())])),
             )
-            for name in servers
-        }
-        links = []
-        for central, peripheral in edges:
-            link = await stack.enter_async_context(
-                battery_connection(devices[central], devices[peripheral])
-            )
-            links.append(link)
-            # A successful connection ends that advertising set. Re-enable it
-            # to admit the next Central and keep advertising during ACL traffic.
-            if not connectable[peripheral].enabled:
-                await connectable[peripheral].start()
+            stack.push_async_callback(advertiser.remove)
+            stack.push_async_callback(advertiser.stop)
+            connectable[name] = advertiser
 
-        periodic = []
-        for sid, name in enumerate(('hub-a', 'hub-b'), 1):
-            periodic.append(
-                await stack.enter_async_context(
-                    advertising(
-                        devices[name],
-                        name=f'{name}-pa',
-                        legacy=False,
-                        sid=sid,
-                        periodic_interval=80 + sid * 20,
-                    )
-                )
+        subscriptions = []
+        for central, peripheral in edges:
+            link = await devices[central].connect(
+                devices[peripheral].public_address,
+                own_address_type=OwnAddressType.PUBLIC,
             )
-        scans = {name: stack.enter_context(Reports(devices[name])) for name in wanted}
+            stack.push_async_callback(link.disconnect)
+            proxy = await Peer(link).discover_service_and_create_proxy(
+                BatteryServiceProxy
+            )
+            assert proxy is not None
+            initial_level = await proxy.battery_level.read_value()
+            assert initial_level == level
+            notifications = asyncio.Queue()
+            await proxy.battery_level.subscribe(notifications.put_nowait)
+            subscriptions.append((proxy.battery_level, notifications))
+            # The connection consumes the advertising set. Restart it for scanning
+            # and for the next Central to connect.
+            await connectable[peripheral].start()
+
+        # Each hub advertises a periodic train and listens to the other hub's train.
+        periodic = []
+        for sid, name in enumerate(NAMES[:2], 1):
+            interval = 80 + sid * 20
+            data = bytes(AdvertisingData([(LOCAL_NAME, f'{name}-pa'.encode())]))
+            advertiser = await devices[name].create_advertising_set(
+                advertising_parameters=AdvertisingParameters(
+                    advertising_event_properties=AdvertisingEventProperties(
+                        is_connectable=False
+                    ),
+                    own_address_type=OwnAddressType.PUBLIC,
+                    advertising_sid=sid,
+                    primary_advertising_interval_min=40,
+                    primary_advertising_interval_max=60,
+                ),
+                advertising_data=data,
+                periodic_advertising_parameters=PeriodicAdvertisingParameters(
+                    interval, interval
+                ),
+                periodic_advertising_data=data,
+            )
+            stack.push_async_callback(advertiser.remove)
+            stack.push_async_callback(advertiser.stop)
+            await advertiser.start_periodic()
+            stack.push_async_callback(advertiser.stop_periodic)
+            periodic.append(advertiser)
+
+        scans = {}
         for name in wanted:
-            await stack.enter_async_context(scanning(devices[name]))
-        await asyncio.gather(
-            *(scans[name].wait(names) for name, names in wanted.items())
-        )
+            device = devices[name]
+            queue = asyncio.Queue()
+            device.on(device.EVENT_ADVERTISEMENT, queue.put_nowait)
+            stack.callback(
+                device.remove_listener, device.EVENT_ADVERTISEMENT, queue.put_nowait
+            )
+            await device.start_scanning(
+                active=False,
+                own_address_type=OwnAddressType.PUBLIC,
+                scan_interval=60,
+                scan_window=30,
+                scanning_phys=[Phy.LE_1M],
+            )
+            stack.push_async_callback(device.stop_scanning)
+            scans[name] = queue
 
         syncs = {}
+        periodic_reports = Counter()
         for observer, advertiser, sid in (
             ('hub-a', 'hub-b', 2),
             ('hub-b', 'hub-a', 1),
             ('observer', 'hub-a', 1),
             ('observer', 'hub-b', 2),
         ):
-            name = f'{advertiser}-pa'
-            syncs[(observer, name)] = await stack.enter_async_context(
-                synchronization(
-                    devices[observer],
-                    devices[advertiser],
-                    sid=sid,
-                    name=name,
-                )
+            sync = await devices[observer].create_periodic_advertising_sync(
+                devices[advertiser].public_address, sid, sync_timeout=5
             )
+            stack.push_async_callback(sync.terminate)
+            queue = asyncio.Queue()
+            sync.on(sync.EVENT_PERIODIC_ADVERTISEMENT, queue.put_nowait)
+            name = f'{advertiser}-pa'
+            report = await queue.get()
+            assert report.data.get(LOCAL_NAME) == name
+            syncs[(observer, name)] = queue
+            periodic_reports[f'{observer}/{name}'] += 1
 
-        scan_before = {name: reports.counts.copy() for name, reports in scans.items()}
-        sync_before = {key: reports.counts.copy() for key, reports in syncs.items()}
+        # Check that fresh radio reports arrive while all links carry GATT data.
+        for queue in (*scans.values(), *syncs.values()):
+            while not queue.empty():
+                queue.get_nowait()
         level = 42
-        await asyncio.gather(*(sensor.publish(level) for sensor in servers.values()))
         await asyncio.gather(
-            *(link.expect(level) for link in links),
             *(
-                scans[name].wait(names, after=scan_before[name])
-                for name, names in wanted.items()
-            ),
-            *(
-                reports.wait([key[1]], after=sync_before[key])
-                for key, reports in syncs.items()
-            ),
+                devices[name].notify_subscribers(
+                    service.battery_level_characteristic, level
+                )
+                for name, service in services.items()
+            )
         )
+        for battery_level, notifications in subscriptions:
+            notification = await notifications.get()
+            current_level = await battery_level.read_value()
+            assert notification == level
+            assert current_level == level
+
+        scan_reports = {}
+        for observer, names in wanted.items():
+            counts = Counter()
+            while names - counts.keys():
+                report = await scans[observer].get()
+                name = report.data.get(LOCAL_NAME)
+                if name:
+                    counts[name] += 1
+            scan_reports[observer] = dict(counts)
+        for (observer, name), queue in syncs.items():
+            report = await queue.get()
+            assert report.data.get(LOCAL_NAME) == name
+            periodic_reports[f'{observer}/{name}'] += 1
+
         assert {
             name: len(device.connections) for name, device in devices.items()
         } == expected_connections
         assert all(item.enabled and item.periodic_enabled for item in periodic)
         assert all(item.enabled for item in connectable.values())
-
         return {
-            'connections': len(links),
+            'connections': len(subscriptions),
             'connections_per_device': expected_connections,
             'periodic_syncs': len(syncs),
-            'notifications': len(links),
-            'gatt_reads': len(links) * 2,
-            'scan_reports': {
-                name: dict(reports.counts) for name, reports in scans.items()
-            },
-            'periodic_reports': {
-                f'{observer}/{name}': reports.counts[name]
-                for (observer, name), reports in syncs.items()
-            },
+            'notifications': len(subscriptions),
+            'gatt_reads': len(subscriptions) * 2,
+            'scan_reports': scan_reports,
+            'periodic_reports': dict(periodic_reports),
         }
 
 

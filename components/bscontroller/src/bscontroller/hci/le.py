@@ -109,6 +109,7 @@ class LeControllerProcedures(
         self.controller.le_event_mask = HCI_LE_EVENT_MASK_DEFAULT
         self.period_duplicate_reset = False
         self.extended_commands = None
+        self._p256_private_key = None
         return hci.HCI_StatusReturnParameters(SUCCESS)
 
     def on_hci_le_set_random_address_command(self, command):

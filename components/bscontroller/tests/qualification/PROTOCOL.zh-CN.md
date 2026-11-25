@@ -6,22 +6,23 @@
 
 ## 测试范围
 
-测试覆盖设备发现、广播、连接、定时、报文编码、跳频、安全和数据传输。选取的用例也覆盖隐私、基于决策的广播过滤（DBAF）、BIS 广播和同步接收。
+测试覆盖设备发现、广播、连接、定时、报文编码、跳频、安全和数据传输。选取的用例也覆盖隐私、基于决策的广播过滤（DBAF）、BIS 广播与同步接收，以及 CIS。
 
-下表按测试规范章节列出 27 个文件中的 1070 个协议用例，其中 HCI 196 个、LL 874 个。可按测试规范编号查找和运行用例。
+下表按测试规范章节列出 33 个文件中的 1188 个协议用例，其中 HCI 223 个、LL 965 个。可按测试规范编号查找和运行用例。
 
 | 目录 | 来源章节 | 测试文件 | 选取用例数 |
 |---|---|---|---:|
 | `hci/` | 4.3 Generic Events | [generic_events_test.py](hci/generic_events_test.py) | 5 |
 | `hci/` | 4.4 Device Setup | [device_setup_test.py](hci/device_setup_test.py) | 5 |
 | `hci/` | 4.5 Controller Flow Control | [controller_flow_control_test.py](hci/controller_flow_control_test.py) | 1 |
-| `hci/` | 4.6 Controller Information | [controller_information_test.py](hci/controller_information_test.py) | 6 |
+| `hci/` | 4.6 Controller Information | [controller_information_test.py](hci/controller_information_test.py) | 7 |
 | `hci/` | 4.7 Device Discovery | [device_discovery_test.py](hci/device_discovery_test.py) | 75 |
 | `hci/` | 4.8 Host Flow Control | [host_flow_control_test.py](hci/host_flow_control_test.py) | 1 |
-| `hci/` | 4.10 Controller Configuration | [controller_configuration_test.py](hci/controller_configuration_test.py) | 68 |
+| `hci/` | 4.10 Controller Configuration | [controller_configuration_test.py](hci/controller_configuration_test.py) | 66 |
 | `hci/` | 4.11 Controller Setup | [controller_setup_test.py](hci/controller_setup_test.py) | 2 |
-| `hci/` | 4.13 LE Connection Management | [connection_management_test.py](hci/connection_management_test.py) | 7 |
+| `hci/` | 4.13 LE Connection Management | [connection_management_test.py](hci/connection_management_test.py) | 8 |
 | `hci/` | 4.14 LE Power Control | [power_control_test.py](hci/power_control_test.py) | 3 |
+| `hci/` | 4.15.1 Connected Isochronous Streams | [connected_isochronous_test.py](hci/connected_isochronous_test.py) | 27 |
 | `hci/` | 4.15.2 Broadcast Isochronous Streams | [broadcast_isochronous_test.py](hci/broadcast_isochronous_test.py) | 17 |
 | `hci/` | 4.17 Event Versioning | [event_versioning_test.py](hci/event_versioning_test.py) | 6 |
 | `ll/` | 4.2 Device Discovery | [device_discovery_test.py](ll/device_discovery_test.py) | 183 |
@@ -30,21 +31,26 @@
 | `ll/` | 4.3 Connection Rate | [connection_rate_test.py](ll/connection_rate_test.py) | 10 |
 | `ll/` | 4.3.7 Periodic Advertising Sync Transfer | [sync_transfer_test.py](ll/sync_transfer_test.py) | 84 |
 | `ll/` | 4.4 Timing | [timing_test.py](ll/timing_test.py) | 29 |
-| `ll/` | 4.4 Frame Space Update | [frame_space_test.py](ll/frame_space_test.py) | 94 |
+| `ll/` | 4.4 Frame Space Update | [frame_space_test.py](ll/frame_space_test.py) | 99 |
 | `ll/` | 4.5 Encoding | [encoding_test.py](ll/encoding_test.py) | 7 |
 | `ll/` | 4.6 Frequency Hopping | [frequency_hopping_test.py](ll/frequency_hopping_test.py) | 6 |
 | `ll/` | 4.7 Packet Handling | [packet_handling_test.py](ll/packet_handling_test.py) | 6 |
 | `ll/` | 4.8 Security | [security_test.py](ll/security_test.py) | 67 |
 | `ll/` | 4.9 Data Flow | [data_flow_test.py](ll/data_flow_test.py) | 4 |
+| `ll/` | 4.10 Connected Isochronous Stream | [connected_isochronous_test.py](ll/connected_isochronous_test.py) | 23 |
+| `ll/` | 4.10 CIS Establishment | [cis_setup_test.py](ll/cis_setup_test.py) | 15 |
+| `ll/` | 4.10 CIS Timing and Maintenance | [cis_timing_test.py](ll/cis_timing_test.py) | 12 |
+| `ll/` | 4.10 CIS Data and Security | [cis_data_test.py](ll/cis_data_test.py) | 8 |
+| `ll/` | 4.10 CIS Data Paths | [cis_data_path_test.py](ll/cis_data_path_test.py) | 8 |
 | `ll/` | 4.11 Broadcast Isochronous Streams | [broadcast_isochronous_test.py](ll/broadcast_isochronous_test.py) | 28 |
-| `ll/` | 4.12 Isochronous Testing | [isochronous_testing_test.py](ll/isochronous_testing_test.py) | 2 |
-| `ll/` | 4.13 PCL | [power_control_test.py](ll/power_control_test.py) | 73 |
+| `ll/` | 4.12 Isochronous Testing | [isochronous_testing_test.py](ll/isochronous_testing_test.py) | 8 |
+| `ll/` | 4.13 PCL | [power_control_test.py](ll/power_control_test.py) | 87 |
 
 ## 运行测试
 
 在 `components/bscontroller` 目录运行以下命令。射频用例需要可用的 BabbleSim PHY，配置步骤见[测试环境说明](../README.zh-CN.md#运行)。
 
-运行 `tests/qualification` 也会执行 4 项 [Lower Tester 回归测试](peer_test.py)，以及 [MCES](ll/frame_space_test.py)和[短连接间隔下的 PHY 切换](ll/connection_rate_test.py)两项空口回归测试。
+运行 `tests/qualification` 也会执行 4 项 [Lower Tester 回归测试](peer_test.py)，以及 [MCES](ll/frame_space_test.py)、[短连接间隔下的 PHY 切换](ll/connection_rate_test.py)和 [BIS 链路质量](ll/broadcast_isochronous_test.py)的空口回归测试。
 
 ```sh
 # 运行全部协议用例。

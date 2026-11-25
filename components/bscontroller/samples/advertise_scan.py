@@ -3,18 +3,53 @@
 
 """Bumble broadcaster and observer over two BSControllers."""
 
-from bscontroller.hosts.bumble import advertising, scanning
+import asyncio
+from contextlib import AsyncExitStack
+
+from bumble import data_types, hci
+from bumble.core import AdvertisingData
+from bumble.device import AdvertisingType, Device
 
 from . import runtime
-from .common import Reports
 
 
 async def run(devices):
     advertiser, observer = devices['advertiser'], devices['observer']
-    with Reports(observer) as reports:
-        async with advertising(advertiser), scanning(observer):
-            await reports.wait([advertiser.name], count=1)
-            return {'advertisements': dict(reports.counts), 'host': 'bumble'}
+    found = asyncio.Event()
+
+    def on_advertisement(report):
+        if (
+            report.address == advertiser.public_address
+            and report.data.get(AdvertisingData.Type.COMPLETE_LOCAL_NAME)
+            == advertiser.name
+        ):
+            found.set()
+
+    async with AsyncExitStack() as stack:
+        observer.on(Device.EVENT_ADVERTISEMENT, on_advertisement)
+        stack.callback(
+            observer.remove_listener, Device.EVENT_ADVERTISEMENT, on_advertisement
+        )
+        await advertiser.start_advertising(
+            AdvertisingType.UNDIRECTED,
+            own_address_type=hci.OwnAddressType.PUBLIC,
+            advertising_data=bytes(
+                AdvertisingData([data_types.CompleteLocalName(advertiser.name)])
+            ),
+            advertising_interval_min=40,
+            advertising_interval_max=60,
+        )
+        stack.push_async_callback(advertiser.stop_advertising)
+        await observer.start_scanning(
+            active=False,
+            own_address_type=hci.OwnAddressType.PUBLIC,
+            scan_interval=60,
+            scan_window=30,
+            scanning_phys=[hci.Phy.LE_1M],
+        )
+        stack.push_async_callback(observer.stop_scanning)
+        await found.wait()
+    return {'advertisements': {advertiser.name: 1}, 'host': 'bumble'}
 
 
 def main():

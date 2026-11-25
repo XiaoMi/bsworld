@@ -31,6 +31,7 @@ from bscontroller.linklayer import PDU_CONTROL_FEATURE_SET_SIZE
 from bscontroller.linklayer.api import (
     AdvertisingSnapshot,
     BigSnapshot,
+    CisEstablished,
     ConnectionSnapshot,
     PeriodicSyncSnapshot,
 )
@@ -881,6 +882,59 @@ class LeControllerEvents:
     def on_sync_lost(self, sync: PeriodicSyncSnapshot):
         self._emit_hci_packet(
             hci.HCI_LE_Periodic_Advertising_Sync_Lost_Event(sync_handle=sync.handle)
+        )
+
+    def on_cis_request(
+        self, acl_handle: int, cis_handle: int, cig_id: int, cis_id: int
+    ) -> bool:
+        """LE CIS Request (Vol 4, Part E, 7.7.65.26)."""
+        if not self.controller.event_mask & (1 << (hci.HCI_LE_META_EVENT - 1)):
+            return False
+        if not self._le_event_unmasked(hci.HCI_LE_CIS_REQUEST_EVENT):
+            return False
+        self._emit_hci_packet(
+            hci.HCI_LE_CIS_Request_Event(acl_handle, cis_handle, cig_id, cis_id)
+        )
+        return True
+
+    def on_cis_established(self, result: CisEstablished, status: int):
+        """LE CIS Established (Vol 4, Part E, 7.7.65.25)."""
+        parameters = dict(
+            status=status,
+            connection_handle=result.connection_handle,
+            cig_sync_delay=result.cig_sync_delay,
+            cis_sync_delay=result.cis_sync_delay,
+            transport_latency_c_to_p=result.transport_latency_c_to_p,
+            transport_latency_p_to_c=result.transport_latency_p_to_c,
+            phy_c_to_p=result.phy_c_to_p,
+            phy_p_to_c=result.phy_p_to_c,
+            nse=result.nse,
+            bn_c_to_p=result.bn_c_to_p,
+            bn_p_to_c=result.bn_p_to_c,
+            ft_c_to_p=result.ft_c_to_p,
+            ft_p_to_c=result.ft_p_to_c,
+            max_pdu_c_to_p=result.max_pdu_c_to_p,
+            max_pdu_p_to_c=result.max_pdu_p_to_c,
+            iso_interval=result.iso_interval,
+        )
+        if self._le_event_unmasked(hci.HCI_LE_CIS_ESTABLISHED_V2_EVENT):
+            event = hci.HCI_LE_CIS_Established_V2_Event(
+                **parameters,
+                sub_interval=result.sub_interval,
+                max_sdu_c_to_p=result.max_sdu_c_to_p,
+                max_sdu_p_to_c=result.max_sdu_p_to_c,
+                sdu_interval_c_to_p=result.sdu_interval_c_to_p,
+                sdu_interval_p_to_c=result.sdu_interval_p_to_c,
+                framing=result.framing,
+            )
+        else:
+            event = hci.HCI_LE_CIS_Established_Event(**parameters)
+        self._emit_hci_packet(event)
+
+    def on_cis_disconnected(self, cis_handle: int, reason: int):
+        """Report CIS termination without removing its ACL record."""
+        self._emit_hci_packet(
+            hci.HCI_Disconnection_Complete_Event(SUCCESS, cis_handle, reason)
         )
 
     @staticmethod

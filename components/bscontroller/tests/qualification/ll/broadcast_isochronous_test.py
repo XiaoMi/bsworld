@@ -1190,3 +1190,21 @@ async def test_procedure(
     air_dut, identifier, description, procedure, parameters, marks
 ):
     await verify_case(air_dut, identifier, description, procedure, parameters, marks)
+
+
+@pytest.mark.asyncio
+async def test_iso_link_quality_for_a_synchronized_bis(air_dut):
+    """Report a failed CRC and two unreceived payloads (Core 7.8.116)."""
+    peer, established = await acquire_receiver(air_dut, irc=1, nse=1)
+    (handle,) = established.connection_handle
+    command = hci.HCI_LE_Read_ISO_Link_Quality_Command(handle)
+    before = await air_dut.command(command)
+    await _send_event(air_dut, peer, {1: (0, b'a')})
+    await _send_event(air_dut, peer, {1: (0, b'b')}, bad_crc=lambda _: True)
+    await _send_event(air_dut, peer, {(1, 0): None})
+    await _send_event(air_dut, peer, {1: (0, b'c')})
+    quality = await air_dut.command(command)
+    assert quality.connection_handle == handle
+    assert quality.crc_error_packets == before.crc_error_packets + 1
+    assert quality.rx_unreceived_packets == before.rx_unreceived_packets + 2
+    await finish_receiver(air_dut, peer)

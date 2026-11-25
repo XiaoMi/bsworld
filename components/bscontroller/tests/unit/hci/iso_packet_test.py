@@ -90,3 +90,46 @@ def test_read_iso_tx_sync_offset_has_three_octets():
     """
     result = hci.HCI_LE_Read_ISO_TX_Sync_ReturnParameters(0, 1, 2, 0x12345678, 0xABCDEF)
     assert bytes(result).hex() == '000100020078563412efcdab'
+
+
+def test_set_cig_test_command_decodes_interleaved_records():
+    """Both CIG Test stream records follow Vol 4, Part E, 7.8.98."""
+    wire = bytes.fromhex(
+        '01 63 20 2b'
+        ' 01 204e00 102700 02 01 1000 00 01 00 02'
+        ' 02 03 2000 0a00 2100 1000 01 02 01 02'
+        ' 04 02 1e00 1600 2800 1200 02 04 02 01'
+    )
+    command = hci.HCI_Packet.from_bytes(wire)
+    assert isinstance(command, hci.HCI_LE_Set_CIG_Parameters_Test_Command)
+    assert command.sdu_interval_c_to_p == 20_000
+    assert command.sdu_interval_p_to_c == 10_000
+    assert (command.ft_c_to_p, command.ft_p_to_c, command.iso_interval) == (2, 1, 16)
+    assert command.cis_id == [2, 4]
+    assert command.nse == [3, 2]
+    assert command.max_sdu_c_to_p == [32, 30]
+    assert command.max_pdu_p_to_c == [16, 18]
+    assert command.phy_p_to_c == [2, 4]
+    assert command.bn_c_to_p == [1, 2]
+    assert bytes(command) == wire
+
+
+@pytest.mark.parametrize(
+    ('event_type', 'subevent', 'extension'),
+    [
+        (hci.HCI_LE_CIS_Established_Event, 0x19, ()),
+        (
+            hci.HCI_LE_CIS_Established_V2_Event,
+            0x2A,
+            (400, 42, 32, 10_000, 20_000, 1),
+        ),
+    ],
+)
+def test_cis_established_event_round_trip(event_type, subevent, extension):
+    """Each LE CIS Established version has its own HCI subevent code."""
+    event = event_type(
+        0, 3, 500, 500, 10500, 10500, 1, 2, 1, 1, 1, 1, 1, 42, 32, 8, *extension
+    )
+    wire = bytes(event)
+    assert wire[:4] == bytes((0x04, 0x3E, 43 if extension else 29, subevent))
+    assert hci.HCI_Packet.from_bytes(wire) == event

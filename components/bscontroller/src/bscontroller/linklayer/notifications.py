@@ -31,6 +31,7 @@ from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
     from bscontroller.address import Address
+    from bscontroller.linklayer.api import CisEstablished
     from bscontroller.linklayer.connection import Connection
     from bscontroller.linklayer.discovery import Advertising, PeriodicSync
     from bscontroller.linklayer.link import RadioLink
@@ -183,6 +184,11 @@ class NotificationSink(IsoListener, Protocol):
     def on_big_synchronized(self, group: BigSnapshot, status: int) -> None: ...
     def on_big_lost(self, handle: int, reason: int) -> None: ...
     def on_big_info(self, sync_handle: int, info: BigInfo) -> None: ...
+    def on_cis_request(
+        self, acl_handle: int, cis_handle: int, cig_id: int, cis_id: int
+    ) -> bool: ...
+    def on_cis_established(self, result: CisEstablished, status: int) -> None: ...
+    def on_cis_disconnected(self, cis_handle: int, reason: int) -> None: ...
 
 
 class NotificationAdapter:
@@ -459,6 +465,17 @@ class NotificationAdapter:
 
     def on_big_info(self, sync_handle: int, info: BigInfo) -> None:
         self.sink.on_big_info(sync_handle, info)
+
+    def on_cis_request(
+        self, acl_handle: int, cis_handle: int, cig_id: int, cis_id: int
+    ) -> bool:
+        return self.sink.on_cis_request(acl_handle, cis_handle, cig_id, cis_id)
+
+    def on_cis_established(self, result: CisEstablished, status: int) -> None:
+        self.sink.on_cis_established(result, status)
+
+    def on_cis_disconnected(self, cis_handle: int, reason: int) -> None:
+        self.sink.on_cis_disconnected(cis_handle, reason)
 
     def on_iso_received(self, handle: int, sdu: IsoSdu) -> None:
         self.sink.on_iso_received(handle, sdu)

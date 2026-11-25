@@ -19,7 +19,7 @@ from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
     from bscontroller.address import Address
-    from bscontroller.linklayer.api import BigSnapshot
+    from bscontroller.linklayer.api import BigSnapshot, CisEstablished
     from bscontroller.linklayer.bis import BigInfo
     from bscontroller.linklayer.connection import Connection
     from bscontroller.linklayer.discovery import Advertising, PeriodicSync
@@ -193,6 +193,16 @@ class BroadcastListener(IsoListener, Protocol):
     def on_big_info(self, sync_handle: int, info: BigInfo) -> None: ...
 
 
+class ConnectedIsoListener(Protocol):
+    """CIS lifetime notifications (Core Vol 6, Part B, 5.1.15)."""
+
+    def on_cis_request(
+        self, acl_handle: int, cis_handle: int, cig_id: int, cis_id: int
+    ) -> bool: ...
+    def on_cis_established(self, result: CisEstablished, status: int) -> None: ...
+    def on_cis_disconnected(self, cis_handle: int, reason: int) -> None: ...
+
+
 class Listener(
     ConnectionListener,
     ControlListener,
@@ -201,6 +211,7 @@ class Listener(
     ScanningListener,
     SynchronizationListener,
     BroadcastListener,
+    ConnectedIsoListener,
     Protocol,
 ):
     """Internal procedure callbacks, adapted before entering an upper layer."""

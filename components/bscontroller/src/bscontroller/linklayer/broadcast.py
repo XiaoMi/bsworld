@@ -72,6 +72,12 @@ class BigControl:
 
 
 @dataclass
+class BisRxQuality:
+    crc_errors: int = 0
+    unreceived: int = 0
+
+
+@dataclass
 class Big:
     handle: int
     info: BigInfo | None
@@ -96,6 +102,7 @@ class Big:
     running: bool = False
     received_cssn: int | None = None
     ciphers: dict[int, BisCipher] = field(default_factory=dict)
+    rx_quality: dict[int, BisRxQuality] = field(default_factory=dict)
     # Cache by associated BIG event, not RF transmission time: pre-transmission
     # and repetition must use identical plaintext and CCM nonce.
     payloads: dict[int, dict[int, tuple[IsoPdu, ...]]] = field(default_factory=dict)
@@ -157,6 +164,27 @@ class BroadcastManager:
         return frozenset(
             handle for group in self.groups.values() for handle in group.stream_handles
         )
+
+    def iso_link_quality(self, handle: int) -> tuple[int, tuple[int, ...]]:
+        for group in self.groups.values():
+            if (
+                group.transmit
+                or not group.reported
+                or handle not in group.stream_handles
+            ):
+                continue
+            bis = group.numbers[group.stream_handles.index(handle)]
+            counters = group.rx_quality[bis]
+            return SUCCESS, (
+                0,
+                0,
+                0,
+                0,
+                counters.crc_errors & 0xFFFFFFFF,
+                counters.unreceived & 0xFFFFFFFF,
+                0,
+            )
+        return UNKNOWN, (0,) * 7
 
     def _handles(self, count: int) -> tuple[int, ...]:
         return tuple(islice(self.link.roles.available_connection_handles(), count))
@@ -525,6 +553,7 @@ class BroadcastManager:
             self._close(group, ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
             return
         group.info = info
+        group.rx_quality = {number: BisRxQuality() for number in group.numbers}
         group.counter = info.payload_count // info.bn
         group.next_us = start_us + info.offset_us
         group.widening_us = 300 if info.offset_us >= 491460 else 30
@@ -653,8 +682,10 @@ class BroadcastManager:
                 self.iso.get_stream(handle, True).expire_payloads(group.counter)
         elif group.reported:
             for number, handle in zip(group.numbers, group.stream_handles):
+                pdus = received[number]
+                group.rx_quality[number].unreceived += pdus.count(None)
                 self.iso.get_stream(handle, False).received(
-                    tuple(received[number]),
+                    tuple(pdus),
                     group.next_us,
                     group.counter,
                     now_us=self.link.now_us,
@@ -672,6 +703,9 @@ class BroadcastManager:
 
     def mic_failure(self, group: Big) -> None:
         self._close(group, ErrorCode.CONNECTION_TERMINATED_DUE_TO_MIC_FAILURE_ERROR)
+
+    def crc_error(self, group: Big, number: int) -> None:
+        group.rx_quality[number].crc_errors += 1
 
     def control_received(self, group: Big, payload: bytes, cssn: int) -> None:
         if not payload or cssn == group.received_cssn:

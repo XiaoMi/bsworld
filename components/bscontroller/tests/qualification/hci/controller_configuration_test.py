@@ -1702,7 +1702,6 @@ RADIO_CASES = (
     'HCI/CCO/BI-37-C',
     'HCI/CCO/BI-39-C',
     'HCI/CCO/BI-75-C',
-    'HCI/CCO/BI-78-C',
     'HCI/CCO/BI-40-C',
     'HCI/CCO/BI-43-C',
     'HCI/CCO/BI-63-C',
@@ -2019,18 +2018,14 @@ async def invalid_auth_timeout_for_subrate(tester):
     assert result.connection_handle == link.handle
 
 
-async def unsupported_host_feature(tester, *, bit):
+async def unsupported_host_feature(tester):
     """Reject Setting Host Controlled FeatureSet Bit, Unsupported Feature on Controller.
 
     Initial Condition:
-        The IUT has no connection and the selected FeatureSet bit is clear.
-
-    Test Case Configuration:
-        BI-44 selects bit 32 (CIS Host Support) and BI-122 bit 47 (Channel
-        Sounding Host Support).
+        The IUT is in standby and Channel Sounding Host Support is clear.
 
     Test Steps:
-        1. Send LE Set Host Feature with the selected bit number and value 1.
+        1. Send LE Set Host Feature with bit 47 and value 1.
         2. Require Command Complete with Unsupported Feature or Parameter
            Value (0x11).
 
@@ -2042,7 +2037,9 @@ async def unsupported_host_feature(tester, *, bit):
         Core Vol 4, Part E, 7.8.115 and Vol 6, Part B, 4.6.
     """
     await tester.command(
-        hci.HCI_LE_Set_Host_Feature_Command(bit, 1),
+        hci.HCI_LE_Set_Host_Feature_Command(
+            hci.LeFeature.CHANNEL_SOUNDING_HOST_SUPPORT, 1
+        ),
         ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR,
     )
 
@@ -2074,17 +2071,10 @@ PROCEDURES |= procedure_cases(
     {'HCI/CCO/BI-120-C': ('LE Set Default Subrate, Invalid Parameters', {})},
 )
 
-# Reject the unsupported feature bits selected in Table 4.47.
+# Reject the unsupported Channel Sounding Host bit selected in Table 4.47.
 PROCEDURES |= procedure_cases(
     unsupported_host_feature,
-    {
-        f'HCI/CCO/BI-{number}-C': (
-            f'Reject Setting Host FeatureSet Bit {bit}, '
-            'Unsupported Feature on Controller',
-            {'bit': bit},
-        )
-        for number, bit in ((44, 32), (122, 47))
-    },
+    {'HCI/CCO/BI-122-C': ('Reject Unsupported Channel Sounding Host Feature', {})},
 )
 
 
@@ -2144,55 +2134,11 @@ async def invalid_frame_space_parameters(tester):
         )
 
 
-async def frame_space_update_requires_cis_support(tester):
-    """LE Frame Space Update, CIS not supported.
-
-    Initial Condition:
-        The IUT is Peripheral on an established LE 1M ACL with 150 µs
-        inter-frame space and declares Core 6.1 without CIS support.
-
-    Test Steps:
-        1. Send LE Frame Space Update with Spacing_Types = 0x08 (T_IFS_CIS)
-           and otherwise valid parameters.
-        2. Observe Command Status or, if successful, the subsequent
-           LE Frame Space Update Complete.
-
-    Expected Outcome:
-        The observed failure status is Unsupported Feature or Parameter
-        Value (0x11), as required by Core 6.1 for an unsupported local
-        Spacing_Types bit.
-
-    Source Correction:
-        HCI.TS.p39 requires Invalid HCI Command Parameters (0x12), which
-        agrees with Core 6.0. Use 0x11 as specified by Core 6.1, the version
-        declared by the IUT.
-
-    Reference:
-        HCI.TS.p39, 4.10, HCI/CCO/BI-78-C, PDF page 217;
-        Core Vol 4, Part E, 7.8.151 and 7.7.65.48.
-    """
-    link = await establish(tester)
-    await _expect_frame_space_update_error(
-        tester,
-        hci.HCI_LE_Frame_Space_Update_Command(
-            link.handle, 150, 200, hci.PhyBit.LE_1M, 0x08
-        ),
-        ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR,
-    )
-
-
 # Validate Table 4.34, including the unknown connection handle.
 PROCEDURES |= procedure_cases(
     invalid_frame_space_parameters,
     {'HCI/CCO/BI-75-C': ('LE Frame Space Update, Invalid Frame Space Parameters', {})},
 )
-
-# Reject CIS spacing with the status required by the IUT's Core version.
-PROCEDURES |= procedure_cases(
-    frame_space_update_requires_cis_support,
-    {'HCI/CCO/BI-78-C': ('LE Frame Space Update, CIS not supported', {})},
-)
-
 
 RATE_HOST_FEATURE = hci.LeFeature.SHORTER_CONNECTION_INTERVALS_HOST_SUPPORT
 RATE_CHANGE = hci.HCI_LE_Connection_Rate_Change_Event

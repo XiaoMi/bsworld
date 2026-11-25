@@ -299,7 +299,9 @@ def test_radio_claim_restores_previous_deadline_after_failure(connection, monkey
     """
     resource = connection.link.resource
     resource.deadline_us = 123
-    monkeypatch.setattr(resource, 'radio_limit', lambda owner=None: 77)
+    monkeypatch.setattr(
+        resource, 'radio_limit', lambda owner=None, *, protected=None: 77
+    )
     with pytest.raises(RuntimeError, match='event failed'):
         with resource.claim(connection):
             assert resource.deadline_us == 77

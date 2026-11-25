@@ -12,6 +12,7 @@ from tests.qualification.cases import (
     procedure_cases,
     verify_case,
 )
+from tests.qualification.cis import disconnect_cis, establish_peer_cis
 from tests.qualification.iso import (
     acquire_broadcaster,
     acquire_receiver,
@@ -163,7 +164,189 @@ async def iso_receive_test(tester):
         await finish_receiver(tester, peer)
 
 
+async def _next_cis_event(peer):
+    while peer.subevent:
+        await peer.exchange()
+
+
+async def _check_cis_path_busy(tester, handle, direction):
+    await tester.command(
+        hci.HCI_LE_Setup_ISO_Data_Path_Command(
+            handle, direction, 0, hci.CodingFormat(hci.CodecID.TRANSPARENT), 0, b''
+        ),
+        0x0C,
+    )
+
+
+async def _close_cis(tester, link, handle):
+    await disconnect_cis(tester, link, handle)
+    await link.disconnect()
+
+
+async def cis_transmit_test(tester, *, central):
+    """ISO Transmit Test Mode, CIS.
+
+    Initial Condition:
+        One unframed BN=1 CIS at 20 ms with three subevents and no HCI ISO
+        data path. Run in each IUT role in Table 4.12-1.
+
+    Test Steps:
+        1. Start transmit test mode for each Payload_Type in Table 4.12-2.
+        2. Receive five distinct CIS payloads per type. Check LLID, size and
+           the unframed SDU counter. Acknowledge each payload.
+        3. Require Command Disallowed when setting up an input data path.
+        4. End each round with a successful Test End.
+
+    Source Correction:
+        Test End returns Command Complete as required by Core Vol 4, Part E,
+        7.8.114.
+
+    Reference:
+        LL.TS.p28, 4.12.3, Tables 4.12-1 and 4.12-2, Figure 4.12-1.
+    """
+    link, peer, established = await establish_peer_cis(
+        tester, central=central, test_nse=3, offset_us=2500
+    )
+    handle = established.connection_handle
+    for payload_type in range(3):
+        await _next_cis_event(peer)
+        await tester.command(hci.HCI_LE_ISO_Transmit_Test_Command(handle, payload_type))
+        for _ in range(5):
+            counter = peer.counter
+            packet = await peer.exchange(header=0x40 | ((counter & 1) << 2))
+            header, size = packet.pdu[:2]
+            assert header & 0x43 == 0 and size == len(packet.pdu) - 2
+            if payload_type:
+                assert 4 <= size <= 251
+                assert payload_type != 2 or size == 251
+                assert int.from_bytes(packet.pdu[2:6], 'little') == counter
+            else:
+                assert size == 0
+            await peer.exchange(header=0x40 | (((counter + 1) & 1) << 2))
+            await _next_cis_event(peer)
+        await _check_cis_path_busy(tester, handle, 0)
+        await tester.command(hci.HCI_LE_ISO_Test_End_Command(handle))
+    await _close_cis(tester, link, handle)
+
+
+async def cis_receive_test(tester, *, central):
+    """ISO Receive Test Mode, CIS.
+
+    Initial Condition:
+        CIS with no HCI output path and ISO_Interval=400 ms. Use a 400 ms
+        SDU interval to preserve the default BN=1 in the unframed rounds.
+
+    Test Steps:
+        1. Establish the CIS using each Framing setting in Table 4.12-4.
+        2. Start the receive test with each Payload_Type for that framing.
+        3. Send five test SDUs per round, with little-endian counters and
+           the payload sizes in Table 4.12-4.
+        4. Require five received SDUs and zero failed or missed SDUs.
+        5. Reject an output data path while the test is active. End the test.
+
+    Source Conflict:
+        The 400 ms ISO interval and the default 20 ms SDU interval would
+        require BN >= 20 for unframed data. Use a 400 ms SDU interval to
+        exercise the BN=1 profile according to Core Vol 6, Part G, 2.1.
+
+    Source Correction:
+        Test End returns Command Complete (Vol 4, Part E, 7.8.114).
+
+    Reference:
+        LL.TS.p28, 4.12.4, Tables 4.12-3 and 4.12-4, Figure 4.12-3.
+    """
+    for framed, payload_types in ((False, (0, 1, 2)), (True, (2, 1))):
+        link, peer, established = await establish_peer_cis(
+            tester, central=central, interval_us=400000, test_nse=3, framed=framed
+        )
+        handle = established.connection_handle
+        max_sdu = 246 if framed else 251
+        for payload_type in payload_types:
+            await _next_cis_event(peer)
+            await tester.command(
+                hci.HCI_LE_ISO_Receive_Test_Command(handle, payload_type)
+            )
+            for index in range(5):
+                counter = peer.counter
+                size = (0, 4 + index, max_sdu)[payload_type]
+                data = counter.to_bytes(4, 'little') + bytes(size - 4) if size else b''
+                header = ((counter & 1) << 3) | (2 if framed else 0)
+                await peer.exchange(framed_sdu(data) if framed else data, header=header)
+                await _next_cis_event(peer)
+            result = await tester.command(
+                hci.HCI_LE_ISO_Read_Test_Counters_Command(handle)
+            )
+            assert (
+                result.received_sdu_count,
+                result.missed_sdu_count,
+                result.failed_sdu_count,
+            ) == (5, 0, 0)
+            await _check_cis_path_busy(tester, handle, 1)
+            await tester.command(hci.HCI_LE_ISO_Test_End_Command(handle))
+        await _close_cis(tester, link, handle)
+        if central:
+            await tester.command(hci.HCI_LE_Remove_CIG_Command(1))
+
+
+async def cis_receive_missing(tester, *, central):
+    """ISO Receive Test Mode missing PDU.
+
+    Initial Condition:
+        The Lower Tester initially sends NULL PDUs on a 400 ms CIS.
+
+    Test Steps:
+        1. Start ISO Receive Test with Payload_Type=0.
+        2. Send one nonzero-length test payload, then a valid zero-length
+           payload. Omit two scheduled data PDUs, with a valid payload
+           between them and another valid payload after them.
+        3. Read the counters. Require Failed=1 and Missed=2.
+        4. End the test successfully.
+
+    Source Conflict:
+        Section 4.12.4 specifies an ISO interval incompatible with its
+        default SDU interval and BN=1. Apply the same 400 ms SDU interval
+        as the CIS receive test.
+
+    Reference:
+        LL.TS.p28, 4.12.5, Table 4.12-5 and Figure 4.12-5.
+    """
+    link, peer, established = await establish_peer_cis(
+        tester, central=central, interval_us=400000, test_nse=3
+    )
+    handle = established.connection_handle
+    await _next_cis_event(peer)
+    await tester.command(hci.HCI_LE_ISO_Receive_Test_Command(handle, 0))
+    for payload in (b'invalid', b'', None, b'', None, b''):
+        if payload is None:
+            await peer.exchange()
+        else:
+            await peer.exchange(payload, header=(peer.counter & 1) << 3)
+        await _next_cis_event(peer)
+    result = await tester.command(hci.HCI_LE_ISO_Read_Test_Counters_Command(handle))
+    assert (result.failed_sdu_count, result.missed_sdu_count) == (1, 2)
+    await tester.command(hci.HCI_LE_ISO_Test_End_Command(handle))
+    await _close_cis(tester, link, handle)
+
+
 PROCEDURES: ProcedureMap = {}
+
+# Exercise all test payload patterns and counter outcomes for both CIS roles.
+for number, procedure, description in (
+    (1, cis_transmit_test, 'ISO Transmit Test Mode'),
+    (3, cis_receive_test, 'ISO Receive Test Mode'),
+    (5, cis_receive_missing, 'ISO Receive Test Mode missing PDU'),
+):
+    PROCEDURES |= procedure_cases(
+        procedure,
+        {
+            f'LL/IST/{role}/BV-{number:02}-C': pytest.param(
+                f'{description}, CIS {role}',
+                {'central': role == 'CEN'},
+                marks=() if number == 1 else pytest.mark.source_conflict,
+            )
+            for role in ('CEN', 'PER')
+        },
+    )
 
 # Section 4.12 selects the broadcaster and synchronized receiver ISO test modes;
 # every row in the referenced payload tables runs within its case procedure.

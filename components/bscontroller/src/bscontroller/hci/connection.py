@@ -7,6 +7,8 @@
 import asyncio
 import logging
 
+from cryptography.hazmat.primitives.asymmetric import ec
+
 from bscontroller import crypto, hci
 from bscontroller.capabilities import (
     CONTROLLER_PRIMARY_SCAN_PHY_MASK,
@@ -64,6 +66,12 @@ from bscontroller.linklayer.pawr import LL_PAWR_SUBEVENTS_MAX
 from bscontroller.radio.base import PHY_CODED_S2_FACTOR, PHY_CODED_S8_FACTOR, Phy
 
 logger = logging.getLogger(__name__)
+
+P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+# Core Vol 3, Part H, 2.3.5.6.1: the Secure Connections debug private key.
+P256_DEBUG_PRIVATE_KEY = (
+    0x3F49F6D4A3C55F3874C9B3E3D2103F504AFF607BEB40B7995899B8A6CD3C1ABD
+)
 
 
 class LeConnectionCommands(LeControllerContext):
@@ -379,6 +387,57 @@ class LeConnectionCommands(LeControllerContext):
         return hci.HCI_LE_Rand_ReturnParameters(
             SUCCESS, self.ll.random_bytes(LL_ENCRYPTION_RANDOM_SIZE)
         )
+
+    def on_hci_le_read_local_p_256_public_key_command(self, command):
+        self.controller._send_hci_command_status(SUCCESS, command.op_code)
+        # Use the same per-controller simulation RNG as LE Rand. Sample only
+        # scalars in the nonzero range of the P-256 subgroup.
+        scalar = 0
+        while not 0 < scalar < P256_ORDER:
+            scalar = int.from_bytes(self.ll.random_bytes(32), 'little')
+        self._p256_private_key = ec.derive_private_key(scalar, ec.SECP256R1())
+        public = self._p256_private_key.public_key().public_numbers()
+        self._emit_hci_packet(
+            hci.HCI_LE_Read_Local_P_256_Public_Key_Complete_Event(
+                SUCCESS,
+                public.x.to_bytes(32, 'little'),
+                public.y.to_bytes(32, 'little'),
+            )
+        )
+
+    def on_hci_le_generate_dhkey_command(self, command):
+        self._generate_dhkey(command, key_type=0)
+
+    def on_hci_le_generate_dhkey_v2_command(self, command):
+        self._generate_dhkey(command, key_type=command.key_type)
+
+    def _generate_dhkey(self, command, *, key_type):
+        if key_type == 0:
+            private_key = self._p256_private_key
+        elif key_type == 1:
+            private_key = ec.derive_private_key(P256_DEBUG_PRIVATE_KEY, ec.SECP256R1())
+        else:
+            self.controller._send_hci_command_status(INVALID, command.op_code)
+            return
+        if private_key is None:
+            self.controller._send_hci_command_status(DISALLOWED, command.op_code)
+            return
+        self.controller._send_hci_command_status(SUCCESS, command.op_code)
+        try:
+            # SEC1 decoding requires in-range affine coordinates before
+            # checking the curve. Convert each HCI coordinate to big-endian.
+            public_key = ec.EllipticCurvePublicKey.from_encoded_point(
+                ec.SECP256R1(),
+                b'\x04'
+                + command.key_x_coordinate[::-1]
+                + command.key_y_coordinate[::-1],
+            )
+        except ValueError:
+            # §7.7.65.9 requires the all-ones DH_Key on invalid input.
+            status, shared = INVALID, b'\xff' * 32
+        else:
+            status, shared = SUCCESS, private_key.exchange(ec.ECDH(), public_key)[::-1]
+        self._emit_hci_packet(hci.HCI_LE_Generate_DHKey_Complete_Event(status, shared))
 
     def on_hci_le_read_remote_features_command(self, command):
         self._run_ll_request(

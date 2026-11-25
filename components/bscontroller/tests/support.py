@@ -15,7 +15,7 @@ def advertising_data(structures):
 
 # LE Meta subevent codes of the [v2] events that only a PAwR-aware Host unmasks
 # (Vol 4, Part E, 7.7.65.10, .14, .15, .24).
-LE_V2_EVENT_CODES = (0x24, 0x25, 0x26, 0x29)
+LE_V2_EVENT_CODES = (0x24, 0x25, 0x26, 0x29, 0x2A)
 LE_EVENT_MASK_ALL = (1 << 64) - 1
 # A Host that predates PAwR: every LE event except the [v2] versions, so the
 # Controller reports with the [v1] events.

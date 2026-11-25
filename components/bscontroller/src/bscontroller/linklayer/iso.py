@@ -349,15 +349,16 @@ class IsoDataPaths:
             return UNKNOWN
         if direction not in (1, 2, 3):
             return INVALID
-        selected = [
-            stream
-            for transmit, stream in directions.items()
-            if direction & (1 if transmit else 2)
-        ]
-        if not selected:
-            return UNSUPPORTED
-        if any(not stream.configured for stream in selected):
-            return DISALLOWED
+        # Check every requested direction before removing any data path.
+        # A direction with no registered path also counts as not set up.
+        selected = []
+        for transmit, bit in ((True, 1), (False, 2)):
+            if not direction & bit:
+                continue
+            stream = directions.get(transmit)
+            if stream is None or not stream.configured:
+                return DISALLOWED
+            selected.append(stream)
         for stream in selected:
             stream.discard()
             stream.configured = False

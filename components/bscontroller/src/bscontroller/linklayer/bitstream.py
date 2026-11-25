@@ -23,7 +23,9 @@ from bscontroller.linklayer import (
 from bscontroller.radio.base import PHY_OCTET_BITS
 
 
-def generate_access_address(generator: Random, used: set[int]) -> int:
+def generate_access_address(
+    generator: Random, used: set[int], *, minimum_distance: int = 1
+) -> int:
     """Seeded data Access Address, valid for uncoded and Coded transmission."""
     # Use the caller's seeded RNG to reproduce simulation runs. This checks the
     # address patterns, not physical entropy (Vol 6, Part B, 2.1.2).
@@ -33,6 +35,10 @@ def generate_access_address(generator: Random, used: set[int]) -> int:
         # Avoid live identities and anything within one bit of the fixed
         # advertising Access Address, before applying waveform constraints.
         if value in used or (value ^ PDU_ADV_ACCESS_ADDRESS).bit_count() <= 1:
+            continue
+        if minimum_distance > 1 and any(
+            (value ^ address).bit_count() < minimum_distance for address in used
+        ):
             continue
         if valid_access_address(value):
             return value

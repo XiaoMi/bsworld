@@ -28,6 +28,13 @@ from tests.qualification.cases import (
     procedure_cases,
     verify_case,
 )
+from tests.qualification.cis import (
+    PEER_CIS_FEATURES,
+    disconnect_cis,
+    enable_cis,
+    establish_peer_cis,
+)
+from tests.qualification.iso import data_path, iso_packet
 from tests.qualification.link import _EncryptedPeer, start_encryption
 from tests.qualification.peer import (
     PEER_FEATURES,
@@ -42,6 +49,7 @@ from tests.qualification.tester import (
     LOWER_CENTRAL_PUBLIC_ADDRESS,
     LOWER_PERIPHERAL_PUBLIC_ADDRESS,
 )
+from tests.support import LE_EVENT_MASK_V1
 
 Opcode = ControlOpcode
 ErrorCode = hci.HCI_ErrorCode
@@ -51,7 +59,9 @@ CP = SpacingType.T_IFS_ACL_CP
 PC = SpacingType.T_IFS_ACL_PC
 ACL_IFS = CP | PC
 MCES = SpacingType.T_MCES
-CIS = SpacingType.T_IFS_CIS
+CIS_IFS = SpacingType.T_IFS_CIS
+CIS_MSS = SpacingType.T_MSS_CIS
+SPACING_TYPES = (CP, PC, MCES, CIS_IFS, CIS_MSS)
 RFU_SPACING = 1 << 15
 FSU_FEATURE = int(hci.LeFeatureMask.FRAME_SPACE_UPDATE)
 EXTENDED_FEATURES = int(hci.LeFeatureMask.LL_EXTENDED_FEATURE_SET)
@@ -119,7 +129,7 @@ class FrameSpacePeer(_EncryptedPeer):
         return bool(phys & phy_bit(self.rx_phy) and spacing & self.rx_type)
 
     def apply(self, space, phys, spacing):
-        for spacing_type in (CP, PC, MCES):
+        for spacing_type in SPACING_TYPES:
             if spacing & spacing_type:
                 for phy in PHY_ORDER:
                     if phys & phy_bit(phy):
@@ -130,7 +140,7 @@ class FrameSpacePeer(_EncryptedPeer):
             maximum,
             *(
                 self.spaces.get((spacing_type, phy), LL_IFS_US)
-                for spacing_type in (CP, PC, MCES)
+                for spacing_type in SPACING_TYPES
                 for phy in PHY_ORDER
                 if spacing & spacing_type and phys & phy_bit(phy)
             ),
@@ -425,7 +435,7 @@ async def respond(link, minimum, maximum, phys, spacing, *, probe=False):
         assert opcode == RSP, control(packet)
         assert minimum <= space <= maximum
         assert selected_phys == phys
-        selected = spacing & int(ACL_IFS)
+        selected = spacing & int(ACL_IFS | CIS_IFS | CIS_MSS)
         assert selected_spacing and selected_spacing & ~selected == 0
         assert packet.start_us - previous == (
             space
@@ -802,48 +812,18 @@ async def invalid_wire_parameters(tester, *, central):
     await link.disconnect()
 
 
-async def cis_not_supported(tester, *, central):
-    """Reject the CIS Frame Space type on an ACL-only Controller.
+async def remote_feature_not_supported(tester, *, central, phy, spacing):
+    """Fail an FSU targeting a feature that the remote Controller lacks.
 
     Initial Condition:
-        Unencrypted LE 1M ACL without CIS support.
+        Unencrypted LE 1M ACL. Lower Tester feature bits 8, 11, 28, and 29
+        are clear.
 
     Test Case Configuration:
-        CEN BI-02 and PER BI-02 select the two IUT roles.
+        Select role, requested PHY, and spacing from Table 4.4-34.
 
     Test Steps:
-        Send the LL request with the T_IFS_CIS bit alone and otherwise valid
-        PHY and spacing bounds.
-
-    Expected Outcome:
-        LL_REJECT_EXT_IND identifies the request and reports 0x1A. No
-        Host success notification is generated and ACL timing stays at 150 µs.
-
-    Reference:
-        LL.TS.p28, 4.4.5.4, Table 4.4-32, Figure 4.4-49.
-    """
-    link = await connect(tester, central=central)
-    rejected = await request_from_peer(
-        link, request(FRAME_SPACE_MIN_US, FRAME_SPACE_MAX_US, phy_bit(Phy.LE_1M), CIS)
-    )
-    assert rejected == bytes([REJECT, REQ, ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR])
-    assert not any(frame_event(item) for item in tester.events)
-    await check_timing(link, 3)
-    await link.disconnect()
-
-
-async def remote_phy_not_supported(tester, *, central, phy):
-    """Fail an FSU targeting a PHY that the remote Controller lacks.
-
-    Initial Condition:
-        Unencrypted LE 1M ACL with the Lower Tester advertising neither
-        LE 2M nor LE Coded support.
-
-    Test Case Configuration:
-        Select role and requested PHY from Table 4.4-34.
-
-    Test Steps:
-        Request the specified PHY and CP spacing through HCI. If admitted,
+        Request the specified PHY and spacing through HCI. If admitted,
         observe the LL request and have the Lower Tester reject it with 0x1A.
 
     Expected Outcome:
@@ -854,11 +834,16 @@ async def remote_phy_not_supported(tester, *, central, phy):
         LL.TS.p28, 4.4.5.6, Table 4.4-34, Figure 4.4-51.
     """
     features = int(PEER_FEATURES) | FSU_FEATURE
-    features &= ~int(hci.LeFeatureMask.LE_2M_PHY | hci.LeFeatureMask.LE_CODED_PHY)
+    features &= ~int(
+        hci.LeFeatureMask.LE_2M_PHY
+        | hci.LeFeatureMask.LE_CODED_PHY
+        | hci.LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_CENTRAL
+        | hci.LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_PERIPHERAL
+    )
     link = await connect(tester, central=central, features=features)
     phys = phy_bit(phy)
     status = await tester.command(
-        FrameSpaceUpdate(link.handle, FRAME_SPACE_MIN_US, LL_IFS_US, phys, CP),
+        FrameSpaceUpdate(link.handle, FRAME_SPACE_MIN_US, LL_IFS_US, phys, spacing),
         (ErrorCode.SUCCESS, ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR),
     )
     if status.status == ErrorCode.SUCCESS:
@@ -868,7 +853,7 @@ async def remote_phy_not_supported(tester, *, central, phy):
         else:
             payload = await link.control(REQ)
             await link.exchange(reject, llid=LlId.CONTROL)
-        assert payload == request(FRAME_SPACE_MIN_US, LL_IFS_US, phys, CP)
+        assert payload == request(FRAME_SPACE_MIN_US, LL_IFS_US, phys, spacing)
         await complete(
             link,
             initiator=LOCAL_INITIATOR,
@@ -877,6 +862,160 @@ async def remote_phy_not_supported(tester, *, central, phy):
     else:
         await check_timing(link, 5, forbidden=REQ)
     assert not any(frame_event(item) for item in tester.events)
+    await link.disconnect()
+
+
+async def verify_cis_spacing(air, handle, mss_us):
+    """Exchange full data PDUs to exercise the negotiated RF timing."""
+    tester = air.link.tester
+    # LE 1M airtime for 251 data octets, MIC and packet overhead in each direction.
+    assert air.subinterval_us >= 2 * (251 + 4 + 10) * 8 + air.spacing_us + mss_us
+    while air.nominal_us < tester.radio.now_us + 60 or air.subevent:
+        air.step()
+    for _ in range(MONITORED_EVENTS):
+        sequence = air.counter
+        tx = bytes([((sequence & 0x7F) << 1) | 1]) * 251
+        rx = bytes([(sequence & 0x7F) << 1]) * 251
+        tester.send(bytes(iso_packet(handle, sequence & 0xFFFF, tx)))
+        packet = await air.exchange(rx, header=(sequence & 1) << 3)
+        assert packet.pdu[2:] == tx
+        # A subsequent subevent acknowledges the received SDU.
+        packet = await air.exchange()
+        assert bool(packet.pdu[0] & 0x04) != bool(sequence & 1)
+        while air.subevent:
+            await air.exchange()
+
+
+async def connect_fsu_cis(tester, *, central, interval):
+    await tester.masks(le=LE_EVENT_MASK_V1)
+    await enable_cis(tester)
+    return await connect(
+        tester,
+        central=central,
+        interval=interval,
+        features=PEER_CIS_FEATURES | FSU_FEATURE,
+    )
+
+
+async def cis_frame_space(tester, *, central, local):
+    """Use negotiated CIS spacing for the next CIS on the same ACL.
+
+    Initial Condition:
+        Unencrypted LE 1M ACL and a bidirectional CIS with 100 ms SDU and ISO
+        intervals. The initial CIS inter-frame and minimum subevent spaces
+        are 150 µs.
+
+    Test Case Configuration:
+        Select the IUT role and FSU initiator. In three rounds select CIS
+        inter-frame space, minimum subevent space, and both, respectively.
+
+    Test Steps:
+        Exchange SDUs on the original CIS and negotiate the spacing update.
+        Verify timing on the existing CIS, terminate it, and recreate it on
+        the same ACL. Exchange SDUs for 20 intervals on the new CIS.
+
+    Expected Outcome:
+        The update completes with the selected spacing types and values.
+        The existing CIS retains its spacing. The new CIS uses the negotiated
+        inter-frame and minimum subevent spaces.
+
+    Reference:
+        LL.TS.p28, 4.4.5.1–2, Tables 4.4-26 through 4.4-29, Figures 4.4-45–46.
+    """
+    interval_us = 100000
+    link = await connect_fsu_cis(tester, central=central, interval=80)
+    phys = phy_bit(Phy.LE_1M)
+    ifs_us = mss_us = LL_IFS_US
+
+    async def create(address):
+        _, air, event = await establish_peer_cis(
+            tester,
+            central=central,
+            link=link,
+            interval_us=interval_us,
+            ifs_us=ifs_us,
+            mss_us=mss_us,
+            access_address=address,
+        )
+        handle = event.connection_handle
+        await data_path(tester, handle, 0)
+        await data_path(tester, handle, 1)
+        return air, handle
+
+    air, handle = await create(0x7654BA98)
+    await verify_cis_spacing(air, handle, mss_us)
+    for spacing, minimum, maximum, address in (
+        (CIS_IFS, FRAME_SPACE_MIN_US, ifs_us, 0x2265B1F5),
+        (CIS_MSS, FRAME_SPACE_MIN_US, mss_us, 0x91B7584A),
+        (CIS_IFS | CIS_MSS, FRAME_SPACE_MAX_US, FRAME_SPACE_MAX_US, 0x1027C4D1),
+    ):
+        if local:
+            await initiate(link, minimum, maximum, phys, spacing, minimum)
+            selected = minimum
+        else:
+            selected = await respond(link, minimum, maximum, phys, spacing)
+        await verify_cis_spacing(air, handle, mss_us)
+        await disconnect_cis(tester, link, handle)
+        if central:
+            await tester.command(hci.HCI_LE_Remove_CIG_Command(1))
+        if spacing & CIS_IFS:
+            ifs_us = selected
+        if spacing & CIS_MSS:
+            mss_us = selected
+        air, handle = await create(address)
+        await verify_cis_spacing(air, handle, mss_us)
+    await disconnect_cis(tester, link, handle)
+    await link.disconnect()
+
+
+async def cis_creation_collision(tester):
+    """Accept CIS creation while a local Frame Space Update is outstanding.
+
+    Initial Condition:
+        The IUT is connected as an unencrypted LE 1M Peripheral. The Lower
+        Tester keeps MD set in the ACL exchange.
+
+    Test Steps:
+        Request Frame Space Update locally. After its request reaches the air,
+        send LL_CIS_REQ and reject the FSU with LL Procedure Collision.
+        Accept and establish the CIS, then exchange ISO data at the original
+        spacing.
+
+    Expected Outcome:
+        HCI reports the FSU error and completes CIS establishment. The CIS
+        exchanges the expected data with the original 150 µs spacing.
+
+    Reference:
+        LL.TS.p28, 4.4.3.6, LL/TIM/PER/BV-28-C, Figure 4.4-19.
+    """
+    link = await connect_fsu_cis(tester, central=False, interval=32)
+    await check_timing(link)
+    phys = phy_bit(Phy.LE_1M)
+    async with host_request(
+        link, FRAME_SPACE_MIN_US, LL_IFS_US, phys, ACL_IFS
+    ) as event:
+        await event.send(more=True)
+        event.acknowledged(await event.receive())
+
+    async def reject_frame_space(_handle):
+        error = (
+            ErrorCode.LMP_ERROR_TRANSACTION_COLLISION_OR_LL_PROCEDURE_COLLISION_ERROR
+        )
+        await link.exchange(bytes((REJECT, REQ, error)), llid=LlId.CONTROL)
+        await complete(link, initiator=LOCAL_INITIATOR, status=error)
+
+    _, air, established = await establish_peer_cis(
+        tester,
+        central=False,
+        link=link,
+        before_accept=reject_frame_space,
+        offset_us=5000,
+    )
+    handle = established.connection_handle
+    await data_path(tester, handle, 0)
+    await data_path(tester, handle, 1)
+    await verify_cis_spacing(air, handle, LL_IFS_US)
+    await disconnect_cis(tester, link, handle)
     await link.disconnect()
 
 
@@ -1120,7 +1259,6 @@ PROCEDURES |= procedure_cases(
 )
 for number, procedure, title in (
     (1, invalid_wire_parameters, 'Frame Space Change, Invalid Parameters'),
-    (2, cis_not_supported, 'Frame Space Change, CIS not supported'),
     (5, reject_active_interval, 'Frame Space Change, insufficient active interval'),
 ):
     PROCEDURES |= procedure_cases(
@@ -1131,14 +1269,53 @@ for number, procedure, title in (
         },
     )
 PROCEDURES |= procedure_cases(
-    remote_phy_not_supported,
+    remote_feature_not_supported,
     {
         case_id(central, first + index): (
-            f'Frame Space Change, remote device does not support {phy_label(phy)}',
-            {'central': central, 'phy': phy},
+            'Frame Space Change, remote device does not support '
+            f'{("CIS" if spacing == CIS_IFS else phy_label(phy))}',
+            {'central': central, 'phy': phy, 'spacing': spacing},
         )
         for central, first in ((True, 51), (False, 55))
-        for index, phy in enumerate((LE_2M, LE_CODED))
+        for index, (phy, spacing) in enumerate(
+            ((LE_2M, CP), (LE_CODED, CP), (LE_1M, CIS_IFS))
+        )
+    },
+)
+
+# CIS frame space values are snapshotted at CIS creation.
+PROCEDURES |= procedure_cases(
+    cis_frame_space,
+    {
+        case_id(central, number): (
+            description,
+            {'central': central, 'local': local},
+        )
+        for central, number, local, description in (
+            (True, 49, True, 'Initiate a Frame Space Change in a CIS, Central'),
+            (False, 53, True, 'Initiate a Frame Space Change in a CIS, Peripheral'),
+            (
+                True,
+                50,
+                False,
+                'Respond to a Frame Space Change Request in a CIS, Central',
+            ),
+            (
+                False,
+                54,
+                False,
+                'Respond to a Frame Space Change Request in a CIS, Peripheral',
+            ),
+        )
+    },
+)
+PROCEDURES |= procedure_cases(
+    cis_creation_collision,
+    {
+        'LL/TIM/PER/BV-28-C': (
+            'Handling Frame Space Request Collision with CIS Creation, Peripheral',
+            {},
+        )
     },
 )
 

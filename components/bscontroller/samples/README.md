@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Each sample runs one Bluetooth scenario. Every device uses a Bumble Host connected to its own BSController over H4 on a Unix socket. The Controllers share one BabbleSim PHY, and the Host event loop uses simulation time.
+Each sample uses Bumble directly. Every Host connects to its own BSController over H4 on a Unix socket. The shared launcher starts the BabbleSim PHY and runs the Hosts on the simulation clock.
 
 ## Run a sample
 
@@ -22,10 +22,19 @@ The sample prints a JSON result on success. Use `--bsim-dir` to override `BSIM_O
 |---|---|
 | `python -m samples.advertise_scan` | An observer discovers a broadcaster. |
 | `python -m samples.scan_adv` | Three devices advertise and scan concurrently. Each receives advertisements from the other two. |
-| `python -m samples.gatt` | A Central discovers a Battery Service, reads its value and receives a notification. |
-| `python -m samples.central_multilink` | One Central keeps three Peripheral connections and verifies GATT reads and notifications on every link. Use `--peripherals N` to change the number of Peripherals. |
+| `python -m samples.advertising_coding_selection` | Advertise with S=2 on the primary PHY and S=8 on the secondary PHY, then check both in the scan report. |
 | `python -m samples.periodic` | An observer keeps two independent periodic advertising synchronizations and receives data from both. |
 | `python -m samples.broadcast_iso` | One broadcaster sends two BIS streams to two synchronized receivers. The sample checks every SDU byte for byte. |
+| `python -m samples.gatt` | A Central discovers a Battery Service, reads its value and receives a notification. |
+| `python -m samples.central_multilink` | One Central keeps three Peripheral connections and verifies GATT reads and notifications on every link. Use `--peripherals N` to change the number of Peripherals. |
+| `python -m samples.connected_iso` | Create one CIS over an ACL connection and exchange an ISO SDU in each direction. |
+| `python -m samples.connection_subrating` | Negotiate a subrate factor of three and read the Battery Service. |
+| `python -m samples.frame_space_update` | Negotiate a 200 µs LE 1M frame space from Central to Peripheral, then discover services. |
+| `python -m samples.connection_rate` | Reduce the connection interval to 5 ms and run GATT on the updated link. |
+| `python -m samples.sleep_clock_accuracy` | Read the peer's SCA before and after it improves its clock accuracy. |
+| `python -m samples.power_control` | Read the peer's transmit power and receive a path loss zone report. |
+| `python -m samples.flushable_acl` | Queue two ATT writes, let the flushable packet expire, and check delivery and HCI credits. |
+| `python -m samples.public_key_validation` | Read the local P-256 public key and check rejection of an invalid peer public key. |
 | `python -m samples.coexistence` | Five devices keep five ACL links, two periodic advertisers, and four periodic synchronizations while scanning, advertising, and exchanging GATT data. |
 
 `broadcast_iso` accepts `--encrypted`, `--framed`, `--phy 1|2|3` (1M, 2M, Coded) and `--receivers N`.

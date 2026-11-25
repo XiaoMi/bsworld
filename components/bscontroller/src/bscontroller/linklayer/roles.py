@@ -40,6 +40,7 @@ from bscontroller.linklayer import (
 from bscontroller.linklayer.advertising import ExtendedPdu, SyncInfo
 from bscontroller.linklayer.broadcast import BroadcastManager
 from bscontroller.linklayer.channel_selection import channel_selection_2
+from bscontroller.linklayer.cig import CigManager
 from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.discovery import (
     Advertising,
@@ -437,6 +438,7 @@ class ConnectionManager:
                 connection,
                 partial(self.run, connection, target_us),
                 connection.last_event_us,
+                partial(connection_window, connection),
             )
             for connection in self.contexts.values()
         ]
@@ -1477,16 +1479,18 @@ class LinkRoles:
         self.synchronization = SynchronizationManager(link)
         self.iso = IsoDataPaths(link.listener)
         self.broadcast = BroadcastManager(link, self.iso)
+        self.cig = CigManager(link, self.iso)
 
     def _used_connection_handles(self) -> set[int]:
         return (
             self.connections.contexts.keys()
             | self.broadcast.connection_handles()
+            | self.cig.connection_handles()
             | self.iso.connection_handles()
         )
 
     def available_connection_handles(self) -> Iterator[int]:
-        """Return free LL handles, including reservations for pending BIGs."""
+        """Return free LL handles, including reservations for pending ISO links."""
         used = self._used_connection_handles()
         return (
             handle
@@ -1499,6 +1503,7 @@ class LinkRoles:
 
     def reset(self) -> None:
         self.broadcast.reset()
+        self.cig.reset()
         self.iso.reset()
         self.connections.contexts.clear()
         self.advertising.clear()
@@ -1548,4 +1553,5 @@ class LinkRoles:
                     if response is not exclude
                 )
         reservations.extend(self.broadcast.reservations(exclude))
+        reservations.extend(self.cig.reservations(exclude))
         return reservations

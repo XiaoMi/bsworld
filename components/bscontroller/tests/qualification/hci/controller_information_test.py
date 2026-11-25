@@ -22,6 +22,8 @@ RADIO_CASES = {'HCI/CIN/BV-14-C'}
 EXPECTED_COMMANDS = frozenset(
     {
         hci.HCI_DISCONNECT_COMMAND,
+        hci.HCI_READ_CONNECTION_ACCEPT_TIMEOUT_COMMAND,
+        hci.HCI_WRITE_CONNECTION_ACCEPT_TIMEOUT_COMMAND,
         hci.HCI_LE_ADD_DEVICE_TO_RESOLVING_LIST_COMMAND,
         hci.HCI_LE_REMOVE_DEVICE_FROM_RESOLVING_LIST_COMMAND,
         hci.HCI_LE_CLEAR_RESOLVING_LIST_COMMAND,
@@ -44,6 +46,9 @@ EXPECTED_COMMANDS = frozenset(
         hci.HCI_LE_CREATE_CONNECTION_COMMAND,
         hci.HCI_LE_ENABLE_ENCRYPTION_COMMAND,
         hci.HCI_LE_ENCRYPT_COMMAND,
+        hci.HCI_LE_READ_LOCAL_P_256_PUBLIC_KEY_COMMAND,
+        hci.HCI_LE_GENERATE_DHKEY_COMMAND,
+        hci.HCI_LE_GENERATE_DHKEY_V2_COMMAND,
         hci.HCI_LE_EXTENDED_CREATE_CONNECTION_COMMAND,
         hci.HCI_LE_LONG_TERM_KEY_REQUEST_NEGATIVE_REPLY_COMMAND,
         hci.HCI_LE_LONG_TERM_KEY_REQUEST_REPLY_COMMAND,
@@ -57,6 +62,13 @@ EXPECTED_COMMANDS = frozenset(
         hci.HCI_LE_READ_BUFFER_SIZE_COMMAND,
         hci.HCI_LE_READ_BUFFER_SIZE_V2_COMMAND,
         hci.HCI_LE_READ_ISO_TX_SYNC_COMMAND,
+        hci.HCI_LE_READ_ISO_LINK_QUALITY_COMMAND,
+        hci.HCI_LE_SET_CIG_PARAMETERS_COMMAND,
+        hci.HCI_LE_SET_CIG_PARAMETERS_TEST_COMMAND,
+        hci.HCI_LE_CREATE_CIS_COMMAND,
+        hci.HCI_LE_REMOVE_CIG_COMMAND,
+        hci.HCI_LE_ACCEPT_CIS_REQUEST_COMMAND,
+        hci.HCI_LE_REJECT_CIS_REQUEST_COMMAND,
         hci.HCI_LE_CREATE_BIG_COMMAND,
         hci.HCI_LE_CREATE_BIG_TEST_COMMAND,
         hci.HCI_LE_TERMINATE_BIG_COMMAND,
@@ -190,7 +202,10 @@ EXPECTED_LE_FEATURES = int(
     | hci.LeFeatureMask.LE_POWER_CONTROL_REQUEST_DUP
     | hci.LeFeatureMask.LE_PATH_LOSS_MONITORING
     | hci.LeFeatureMask.MINIMUM_NUMBER_OF_USED_CHANNELS_PROCEDURE
+    | hci.LeFeatureMask.REMOTE_PUBLIC_KEY_VALIDATION
     | hci.LeFeatureMask.LL_EXTENDED_FEATURE_SET
+    | hci.LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_CENTRAL
+    | hci.LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_PERIPHERAL
     | hci.LeFeatureMask.ISOCHRONOUS_BROADCASTER
     | hci.LeFeatureMask.SYNCHRONIZED_RECEIVER
     | hci.LeFeatureMask.SLEEP_CLOCK_ACCURACY_UPDATES
@@ -267,6 +282,27 @@ async def read_local_version_information(tester):
         result.company_identifier,
         result.lmp_subversion,
     ) == EXPECTED_LOCAL_VERSION
+
+
+async def read_public_key_validation_feature(tester):
+    """Read the Remote Public Key Validation feature bit.
+
+    Initial Condition:
+        The IUT has no connection to the Lower Tester.
+
+    Test Steps:
+        Send LE Read Local Supported Features Page 0 and receive the
+        successful Command Complete event.
+
+    Expected Outcome:
+        Bit 27 of the returned FeatureSet is set.
+
+    Reference:
+        HCI.TS.p39, HCI/CIN/BV-09-C, 4.6.1, Figure 4.21.
+        Core Vol 4, Part E, 7.8.3 and Vol 6, Part B, 4.6.26.
+    """
+    result = await tester.command(hci.HCI_LE_Read_Local_Supported_Features_Command())
+    assert int.from_bytes(result.le_features, 'little') & (1 << 27)
 
 
 async def read_local_le_features(tester):
@@ -424,6 +460,12 @@ PROCEDURES |= procedure_cases(
             {},
         ),
     },
+)
+
+# The public key validation capability is reported in LE FeatureSet page 0.
+PROCEDURES |= procedure_cases(
+    read_public_key_validation_feature,
+    {'HCI/CIN/BV-09-C': ('Read LE Public Key Validation Feature Bit', {})},
 )
 
 # Verify that the returned LE feature bits match the declared LL capabilities.

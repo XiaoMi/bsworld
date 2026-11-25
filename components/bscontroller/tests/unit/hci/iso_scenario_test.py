@@ -13,6 +13,8 @@ from bscontroller.hci.transport import H4Parser, H4Server
 from bscontroller.linklayer.advertising import ExtendedPdu, SyncInfo
 from bscontroller.linklayer.bis import BisCipher, group_session_key
 from bscontroller.linklayer.channel_selection import isochronous_channels
+from bscontroller.linklayer.cis import CisDirection, CisEventParameters
+from bscontroller.linklayer.cis_parameters import CisRequest, CisWindow
 from bscontroller.linklayer.discovery import PeriodicSync
 from bscontroller.linklayer.isoal import IsoalParameters, IsoSdu, IsoStatus
 from bscontroller.linklayer.pawr import acad_structures
@@ -350,6 +352,93 @@ def test_iso_handle_has_independent_input_and_output_test_modes(host):
     setup_path(host, handle, 1)
     iso.release(handle)
     assert not iso.contains(handle)
+
+
+@pytest.mark.parametrize('directions', [(0,), (1,), (0, 1)])
+def test_cis_removes_only_configured_iso_data_paths(host, directions):
+    """Every requested direction needs a data path (Core Vol 4, E, 7.8.110).
+
+    Steps:
+        1. Create a CIS configuration and set up one data path.
+        2. Attempt to remove the other direction, then both directions.
+        3. Remove the configured path, including a second path when the CIS
+           has both directions. Repeat removal.
+
+    Expected:
+        - Requests that include an unset path return Command Disallowed.
+        - A failed request leaves configured paths available for removal.
+    """
+    tx, rx = (32 if direction in directions else 0 for direction in (0, 1))
+    (handle,) = host.cmd(
+        hci.HCI_LE_Set_CIG_Parameters_Command(
+            cig_id=1,
+            sdu_interval_c_to_p=10_000,
+            sdu_interval_p_to_c=10_000,
+            worst_case_sca=0,
+            packing=0,
+            framing=0,
+            max_transport_latency_c_to_p=40,
+            max_transport_latency_p_to_c=40,
+            cis_id=[1],
+            max_sdu_c_to_p=[tx],
+            max_sdu_p_to_c=[rx],
+            phy_c_to_p=[1],
+            phy_p_to_c=[1],
+            rtn_c_to_p=[0],
+            rtn_p_to_c=[0],
+        )
+    ).connection_handle
+    configured = directions[0]
+    setup_path(host, handle, configured)
+    for mask in (1 << (1 - configured), 3):
+        host.cmd(
+            hci.HCI_LE_Remove_ISO_Data_Path_Command(handle, mask),
+            ErrorCode.COMMAND_DISALLOWED_ERROR,
+        )
+    if len(directions) == 2:
+        setup_path(host, handle, 1)
+        mask = 3
+    else:
+        mask = 1 << configured
+    remove_path = hci.HCI_LE_Remove_ISO_Data_Path_Command(handle, mask)
+    host.cmd(remove_path)
+    host.cmd(remove_path, ErrorCode.COMMAND_DISALLOWED_ERROR)
+
+
+def test_bis_removes_configured_iso_data_path(host):
+    """Removing an input BIS path permits setting it up again (7.8.110)."""
+    handle = establish(host)
+    setup_path(host, handle)
+    for mask in (2, 3):
+        host.cmd(
+            hci.HCI_LE_Remove_ISO_Data_Path_Command(handle, mask),
+            ErrorCode.COMMAND_DISALLOWED_ERROR,
+        )
+    host.cmd(hci.HCI_LE_Remove_ISO_Data_Path_Command(handle, 1))
+    setup_path(host, handle)
+
+
+def test_cis_request_handle_known_before_any_iso_path_exists(host):
+    """Before Accept, an incoming CIS Request has a handle and no data path."""
+    host.cmd(
+        hci.HCI_LE_Set_Host_Feature_Command(
+            hci.LeFeature.CONNECTED_ISOCHRONOUS_STREAM, 1
+        )
+    )
+    connection = host.connection(hci.Role.PERIPHERAL)
+    direction = CisDirection(Phy.LE_1M, 32, 1, 1, 20_000, 32)
+    params = CisEventParameters(direction, direction, 20_000, 0, 1, False, 0, 0)
+    request = CisRequest(1, 1, params, CisWindow(2000, 2000, 6))
+    host.in_loop(host.link.roles.cig.control, connection, request.encode())
+    event = host.ut_rx(hci.HCI_LE_CIS_Request_Event)
+    host.cmd(
+        hci.HCI_LE_Remove_ISO_Data_Path_Command(event.cis_connection_handle, 1),
+        ErrorCode.COMMAND_DISALLOWED_ERROR,
+    )
+    host.cmd(
+        hci.HCI_LE_Remove_ISO_Data_Path_Command(0x0EFF, 1),
+        ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR,
+    )
 
 
 def test_framed_sdu_with_unrepresentable_offset_releases_credit(host):

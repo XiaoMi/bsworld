@@ -389,6 +389,7 @@ class ConnectionParametersProcedure:
             )
             if (
                 not valid_timing(interval, interval, latency, timeout)
+                or not connection.fits_cis_supervision_timeout(timeout)
                 or not self.owner.frame_space.fits_interval(interval)
                 or (
                     interval * LL_CONN_INTERVAL_UNIT_US
@@ -432,7 +433,9 @@ class ConnectionParametersProcedure:
             minimum, maximum, latency, timeout, *_ = PARAM_REQUEST.unpack(
                 payload[PDU_CONTROL_OPCODE_SIZE:]
             )
-            if not valid_timing(minimum, maximum, latency, timeout):
+            if not valid_timing(
+                minimum, maximum, latency, timeout
+            ) or not connection.fits_cis_supervision_timeout(timeout):
                 self.owner.reject(opcode, ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR)
             elif not self.owner.frame_space.fits_interval(maximum):
                 reason = ErrorCode.UNACCEPTABLE_CONNECTION_PARAMETERS_ERROR

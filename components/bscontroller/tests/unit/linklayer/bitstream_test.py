@@ -18,12 +18,25 @@ and ``parameters_test.py``.
 """
 
 import random
+from unittest.mock import Mock
 
 import pytest
 
 from bscontroller.linklayer.bitstream import generate_access_address
 from bscontroller.radio.packet import crc24
 from tests.unit.helpers import check_access_address
+
+
+def test_cis_access_address_rejects_a_one_bit_neighbor():
+    """Core Vol 6, Part B, 2.1.2 requires a distinct CIS Access Address."""
+    existing = 0x9A328370
+    neighbor, independent = 0x9A328378, 0x7654BA98
+    generator = Mock()
+    generator.getrandbits.side_effect = (neighbor, independent)
+    assert (
+        generate_access_address(generator, {existing}, minimum_distance=2)
+        == independent
+    )
 
 
 def test_access_address_generation_is_reproducible_and_valid_on_coded():

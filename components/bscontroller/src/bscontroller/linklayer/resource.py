@@ -30,6 +30,7 @@ class PendingOperation:
     run: Callable[[], Awaitable[object]]
     # Equal-time connections rotate by their last served event.
     order: int = 0
+    protected: Callable[[], RadioReservation] | None = None
 
 
 class RadioResourceManager:
@@ -50,19 +51,20 @@ class RadioResourceManager:
         )
 
     @contextmanager
-    def claim(self, owner: object = None):
+    def claim(self, owner: object = None, *, protected: RadioReservation | None = None):
         """Bound an event's work by the next competing reservation; release on all
         exits.
         """
         previous = self.deadline_us
-        self.deadline_us = self.radio_limit(owner)
+        self.deadline_us = self.radio_limit(owner, protected=protected)
         try:
             yield self.deadline_us
         finally:
             self.deadline_us = previous
 
     async def execute(self, operation: PendingOperation) -> None:
-        with self.claim(operation.owner):
+        protected = operation.protected() if operation.protected is not None else None
+        with self.claim(operation.owner, protected=protected):
             await operation.run()
 
     def reservations(self, *, exclude: object = None) -> list[RadioReservation]:
@@ -89,13 +91,28 @@ class RadioResourceManager:
             self.reservations(exclude=owner), start_us, end_us, priority
         )
 
-    def radio_limit(self, owner: object = None) -> int | None:
-        starts = [
-            start
-            for reservation in self.reservations(exclude=owner)
-            for start, _ in [reservation.window_after(self._now_us() + 1)]
-            if start > self._now_us() + 1
-        ]
+    def radio_limit(
+        self, owner: object = None, *, protected: RadioReservation | None = None
+    ) -> int | None:
+        now = self._now_us() + 1
+        if protected is not None:
+            first, last = protected.window_after(now)
+        starts = []
+        for reservation in self.reservations(exclude=owner):
+            start, end = reservation.window_after(now)
+            if (
+                protected is not None
+                and reservation.priority > protected.priority
+                and first < end
+                and start < last
+            ):
+                # A lower-priority exchange cannot run in the reserved first
+                # exchange; only its later appearances bound work.
+                start, end = reservation.window_after(max(end, last))
+                if start < last:
+                    start, _ = reservation.window_after(end)
+            if start > now:
+                starts.append(start)
         return min(starts) if starts else None
 
     def fits_radio(self, end_us: int) -> bool:

@@ -231,7 +231,9 @@ class ConnectionRateProcedure:
             or self.owner.subrating.peer_request is not None
         ):
             return DISALLOWED
-        if not parameters.valid:
+        if not parameters.valid or not self.connection.fits_cis_supervision_timeout(
+            parameters.supervision_timeout
+        ):
             return INVALID
         if not self.local_supported or self.peer_supported is False:
             return UNSUPPORTED
@@ -305,6 +307,9 @@ class ConnectionRateProcedure:
             or factor > min(request.subrate_max, limits.subrate_max)
             or request.max_latency > limits.max_latency
             or request.supervision_timeout > limits.supervision_timeout
+            or not self.connection.fits_cis_supervision_timeout(
+                request.supervision_timeout
+            )
         ):
             if peer:
                 self.owner.reject(Opcode.LL_CONNECTION_RATE_REQ, UNSUPPORTED_INTERVAL)
@@ -485,6 +490,7 @@ class ConnectionRateProcedure:
             or not rate.valid
             or rate.interval < MIN_RATE_INTERVAL
             or rate.interval_us < minimum_us
+            or not self.connection.fits_cis_supervision_timeout(rate.timeout)
         ):
             self.owner.enqueue(
                 bytes([Opcode.LL_UNKNOWN_RSP, Opcode.LL_CONNECTION_RATE_IND])
