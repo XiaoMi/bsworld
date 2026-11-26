@@ -24,7 +24,13 @@ from bscontroller.linklayer import LL_IFS_US
 from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.parameters import Parameters
 from bscontroller.linklayer.state import Role
-from tests.unit.linklayer.air.advertising import SCAN_WINDOW, scan_legacy
+from tests.unit.linklayer.air.advertising import (
+    SCAN_WINDOW,
+    AdvType,
+    configure_legacy,
+    enable_legacy,
+    scan_legacy,
+)
 from tests.unit.linklayer.air.harness import (
     CONNECT_PARAMETERS,
     IUT_ADDRESS,
@@ -58,6 +64,43 @@ def accept(iut, address):
             address.address_type, address
         )
     )
+
+
+@pytest.mark.parametrize('active,state_bit', [(False, 8), (True, 12)])
+def test_nonconnectable_advertising_and_scanning_share_the_radio(
+    iut, active, state_bit
+):
+    """Exercise the advertised legacy state combination (Vol 4, Part E, 7.8.27).
+
+    Steps:
+        1. Read LE Supported States and enable non-connectable advertising on
+           channel 37 together with passive or active scanning.
+        2. Transmit a scannable advertisement while both roles are enabled.
+           In the active case, answer the scan request.
+
+    Expected:
+        - The matching state bit is set. The IUT sends its own advertising data
+          and reports the peer. Active scanning also produces SCAN_REQ and a
+          scan response report for that peer.
+    """
+    states = iut.ut(hci.HCI_LE_Read_Supported_States_Command()).le_states
+    assert int.from_bytes(states, 'little') & (1 << state_bit)
+    configure_legacy(iut, AdvType.ADV_NONCONN_IND, data=b'local', channel_map=1)
+    enable_legacy(iut)
+    scan_legacy(iut, active=active)
+    iut.lt_tx(adv_scan_ind(data=b'peer'), channel=37, at=3000)
+    if active:
+        iut.lt_tx(scan_rsp(data=b'response'), channel=37)
+    iut.run(WINDOW_US)
+    advertisement = iut.lt_rx(PduType.ADV_NONCONN_IND)
+    assert advertisement.channel == 37 and advertisement.pdu[8:] == b'local'
+    iut.ut_rx_report(event_type=ReportType.ADV_SCAN_IND, address=PEER, data=b'peer')
+    if active:
+        request = iut.lt_rx(PduType.SCAN_REQ)
+        assert address_of(request.pdu, 8, rx=True) == PEER
+        iut.ut_rx_report(event_type=ReportType.SCAN_RSP, address=PEER, data=b'response')
+    iut.ut_rx_q_is_empty()
+    iut.lt_rx_q_is_empty()
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +380,8 @@ def test_duplicate_filter_resets_on_reenable(iut):
     Steps:
         1. Upper Tester enables scanning with duplicate filtering.
         2. Lower Tester scripts an ADV_IND; run one window.
-        3. Upper Tester disables, then re-enables scanning with filtering.
+        3. Disable with Filter_Duplicates set to 0xFF (ignored on disable),
+           then re-enable scanning with filtering.
         4. Lower Tester scripts the same ADV_IND; run one window.
 
     Expected:
@@ -346,11 +390,87 @@ def test_duplicate_filter_resets_on_reenable(iut):
     scan_legacy(iut, duplicates=1)
     iut.lt_tx(adv_ind())
     iut.run(WINDOW_US)
-    stop(iut)
+    iut.ut(hci.HCI_LE_Set_Scan_Enable_Command(0, 0xFF))
     iut.ut(hci.HCI_LE_Set_Scan_Enable_Command(1, 1))
     iut.lt_tx(adv_ind())
     iut.run(WINDOW_US)
     assert len(iut.reports()) == 2
+
+
+@pytest.mark.parametrize('duplicates', [0, 1])
+def test_repeated_scan_enable_preserves_pending_scan_response(iut, duplicates):
+    """Change Filter_Duplicates while the scanner waits for SCAN_RSP (7.8.11).
+
+    Steps:
+        Send ADV_SCAN_IND, re-enable after SCAN_REQ, then deliver its SCAN_RSP.
+        Receive two identical non-scannable advertisements.
+
+    Expected:
+        The response reaches the Host, counts as one backoff success, and
+        subsequent reports follow the new duplicate-filter setting.
+    """
+    scan_legacy(iut, active=True, duplicates=1 - duplicates)
+    iut.lt_tx(adv_scan_ind(data=b'ad'))
+    iut.lt_tx(scan_rsp(data=b'rsp'))
+    window = iut.link.roles.scanning.run(iut.link.scan, iut.now_us + WINDOW_US)
+    with iut.pause_radio(window, 'receive', occurrence=2):
+        iut.ut_rx_report(event_type=ReportType.ADV_SCAN_IND, data=b'ad')
+        iut.lt_rx(PduType.SCAN_REQ)
+        iut.ut(hci.HCI_LE_Set_Scan_Enable_Command(1, duplicates))
+    iut.ut_rx_report(event_type=ReportType.SCAN_RSP, data=b'rsp')
+    assert iut.ll.scan_parameters.backoff.successes == 1
+    for _ in range(2):
+        iut.lt_tx(adv_nonconn_ind(data=b'repeat'))
+        iut.run(WINDOW_US)
+    assert [entry.data for entry in iut.reports()] == [b'repeat'] * (2 - duplicates)
+
+
+@pytest.mark.parametrize('action', ['disable', 'restart', 'reset'])
+def test_scan_response_belongs_to_the_scan_that_sent_the_request(iut, action):
+    """Release an active scanner while waiting for SCAN_RSP (Vol 6, Part B, 4.4.3.2).
+
+    Steps:
+        1. Receive an ADV_SCAN_IND, transmit SCAN_REQ and pause its response window.
+        2. Disable scanning, restart it, or reset and configure it again.
+        3. Deliver the old response, then run a fresh active-scan exchange.
+
+    Expected:
+        - The first advertisement was reported before the Host command. The old
+          response produces no report and consumes no backoff randomness.
+        - The fresh scanner reports its own response and records one success.
+    """
+    scan_legacy(iut, active=True)
+    iut.lt_tx(adv_scan_ind(data=b'first'))
+    iut.lt_tx(scan_rsp(data=b'old'))
+    window = iut.link.roles.scanning.run(iut.link.scan, iut.now_us + WINDOW_US)
+    with iut.pause_radio(window, 'receive', occurrence=2):
+        iut.ut_rx_report(event_type=ReportType.ADV_SCAN_IND, data=b'first')
+        iut.lt_rx(PduType.SCAN_REQ)
+        if action == 'reset':
+            iut.ut(hci.HCI_Reset_Command())
+            iut.ut(hci.HCI_Set_Event_Mask_Command(b'\xff' * 8))
+            iut.ut(hci.HCI_LE_Set_Event_Mask_Command(b'\xff' * 8))
+            scan_legacy(iut, active=True)
+        else:
+            stop(iut)
+            if action == 'restart':
+                iut.ut(hci.HCI_LE_Set_Scan_Enable_Command(1, 0))
+        random_state = iut.link.random.getstate()
+    assert iut.link.random.getstate() == random_state
+    iut.ut_rx_q_is_empty()
+    iut.lt_script_is_consumed()
+
+    if action == 'disable':
+        iut.ut(hci.HCI_LE_Set_Scan_Enable_Command(1, 0))
+    assert iut.ll.scan_parameters.backoff.successes == 0
+    iut.lt_tx(adv_scan_ind(data=b'second'))
+    iut.lt_tx(scan_rsp(data=b'new'))
+    iut.run(WINDOW_US)
+    iut.lt_rx(PduType.SCAN_REQ)
+    iut.ut_rx_report(event_type=ReportType.ADV_SCAN_IND, data=b'second')
+    iut.ut_rx_report(event_type=ReportType.SCAN_RSP, data=b'new')
+    assert iut.ll.scan_parameters.backoff.successes == 1
+    iut.ut_rx_q_is_empty()
 
 
 def test_scan_rotates_primary_channels_per_window(iut):

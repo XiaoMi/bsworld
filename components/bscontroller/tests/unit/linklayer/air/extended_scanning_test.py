@@ -53,7 +53,16 @@ def status_of(report):
     return (report.event_type >> 5) & 3
 
 
-def scan(iut, *, active=False, phys=hci.PhyBit.LE_1M, policy=0, duration=0, period=0):
+def scan(
+    iut,
+    *,
+    active=False,
+    phys=hci.PhyBit.LE_1M,
+    policy=0,
+    duration=0,
+    period=0,
+    duplicates=0,
+):
     count = bin(phys).count('1')
     iut.ut(
         hci.HCI_LE_Set_Extended_Scan_Parameters_Command(
@@ -65,7 +74,7 @@ def scan(iut, *, active=False, phys=hci.PhyBit.LE_1M, policy=0, duration=0, peri
             scan_windows=[WINDOW] * count,
         )
     )
-    iut.ut(hci.HCI_LE_Set_Extended_Scan_Enable_Command(1, 0, duration, period))
+    iut.ut(hci.HCI_LE_Set_Extended_Scan_Enable_Command(1, duplicates, duration, period))
 
 
 def primary(
@@ -603,6 +612,107 @@ def test_active_sends_aux_scan_req_and_reports_response(iut):
     assert iut.ll.scan_parameters.backoff.successes == 1
 
 
+@pytest.mark.parametrize(
+    'stage', ['primary', 'auxiliary', 'request', 'response', 'response-chain']
+)
+def test_reenable_starts_a_new_scan_period_during_an_exchange(iut, stage):
+    """Restart an extended scan at successive RF boundaries (Vol 4, Part E, 7.8.65).
+
+    Steps:
+        1. Start active scanning and script a scannable extended advertising event.
+        2. Re-enable with a new duration during primary RX, auxiliary RX, request
+           TX, response RX, or the first response-chain RX.
+        3. Send a fresh advertising event and answer its scan request.
+
+    Expected:
+        - Previously issued radio operations finish. The old exchange submits
+          no further radio work or reports and leaves the new backoff untouched.
+        - The next exchange delivers its advertisement and scan response.
+    """
+    scan(iut, active=True)
+    iut.lt_tx(primary(AdvertisingMode.SCANNABLE))
+    if stage != 'primary':
+        iut.lt_tx(
+            auxiliary(mode=AdvertisingMode.SCANNABLE),
+            channel=AUX_CHANNEL,
+            after=AUX_OFFSET,
+        )
+    if stage in ('response', 'response-chain'):
+        more = AUX_OFFSET if stage == 'response-chain' else None
+        iut.lt_tx(scan_response(b'old', more=more), channel=AUX_CHANNEL)
+    if stage == 'response-chain':
+        iut.lt_tx(chain(b'tail'), channel=AUX_CHANNEL, after=AUX_OFFSET)
+    method, occurrence = {
+        'primary': ('receive', 1),
+        'auxiliary': ('receive', 2),
+        'request': ('transmit', 1),
+        'response': ('receive', 3),
+        'response-chain': ('receive', 4),
+    }[stage]
+    window = iut.link.roles.scanning.run(iut.link.scan, iut.now_us + WINDOW_US)
+    with iut.pause_radio(window, method, occurrence=occurrence):
+        if stage in ('request', 'response', 'response-chain'):
+            iut.ut_rx_report(event_type=SCANNABLE, data=b'')
+        iut.ut(hci.HCI_LE_Set_Extended_Scan_Enable_Command(1, 0, 20, 0))
+        started = iut.now_us
+        random_state = iut.link.random.getstate()
+        listens = len(iut.radio.listens)
+    assert len(iut.radio.listens) == listens + (method == 'receive')
+    assert iut.link.random.getstate() == random_state
+    assert iut.ll.scan_parameters.deadline_us == started + 200_000
+    assert iut.ll.scan_parameters.backoff.successes == 0
+    assert iut.ll.scan_parameters.backoff.failures == 0
+    assert [tx.kind for tx in iut.lt_rx_all()] == (
+        [PduType.SCAN_REQ] if stage in ('request', 'response', 'response-chain') else []
+    )
+    iut.lt_script_is_consumed()
+    iut.ut_rx_q_is_empty()
+
+    send_event(
+        iut,
+        primary(AdvertisingMode.SCANNABLE),
+        auxiliary(mode=AdvertisingMode.SCANNABLE),
+    )
+    iut.lt_tx(scan_response(b'new'), channel=AUX_CHANNEL)
+    iut.run(WINDOW_US)
+    iut.lt_rx(PduType.SCAN_REQ)
+    iut.ut_rx_report(event_type=SCANNABLE, data=b'')
+    iut.ut_rx_report(event_type=SCANNABLE | SCAN_RESPONSE, data=b'new')
+    assert iut.ll.scan_parameters.backoff.successes == 1
+    iut.ut_rx_q_is_empty()
+
+
+def test_duplicate_filter_keeps_scan_response_apart_from_advertisement(iut):
+    """A scan response is not a duplicate of the advertisement sharing its ADI.
+
+    Purpose: Verify that with duplicate filtering, the scannable advertisement
+    and its AUX_SCAN_RSP, which share one ADI, are each reported once, and a
+    repeat of both under the same ADI is filtered (Vol 6, Part B, 2.3.4.4,
+    4.4.3.5).
+
+    Steps:
+        1. Upper Tester enables active scanning with duplicate filtering.
+        2. Twice, Lower Tester scripts the scannable event with SID 2, DID 7 and
+           an AUX_SCAN_RSP carrying "response"; run one scan window each.
+
+    Expected:
+        - The Host gets the scannable report and the scan-response report once
+          each, and nothing else.
+    """
+    scan(iut, active=True, duplicates=1)
+    for _ in range(2):
+        send_event(
+            iut,
+            primary(AdvertisingMode.SCANNABLE),
+            auxiliary(mode=AdvertisingMode.SCANNABLE),
+        )
+        iut.lt_tx(scan_response(b'response'), channel=AUX_CHANNEL)
+        iut.run(WINDOW_US)
+    iut.ut_rx_report(event_type=SCANNABLE, data=b'')
+    iut.ut_rx_report(event_type=SCANNABLE | SCAN_RESPONSE, data=b'response')
+    iut.ut_rx_q_is_empty()
+
+
 def test_active_follows_scan_response_chain(iut):
     """Active scanning follows a chained AUX_SCAN_RSP.
 
@@ -784,6 +894,51 @@ def test_duration_with_period_restarts_scanning(iut):
     assert any(1_280_000 <= start < 1_380_000 for start in starts)
 
 
+@pytest.mark.parametrize('duration,period', [(0, 1), (1, 0)])
+def test_invalid_scan_restart_preserves_the_current_period(iut, duration, period):
+    """Validate the new period before replacing the scan (Vol 4, Part E, 7.8.65).
+
+    Steps:
+        1. Enable timed scanning, then request per-period duplicate filtering
+           with either Duration or Period zero.
+        2. Disable scanning with reserved Filter_Duplicates and Duration > Period.
+
+    Expected:
+        - The rejected restart leaves the scanner and its deadline intact.
+        - Disable succeeds and ignores all fields after Enable.
+    """
+    scan(iut, duration=5)
+    original = iut.link.scan
+    iut.ut(
+        hci.HCI_LE_Set_Extended_Scan_Enable_Command(1, 2, duration, period),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    assert iut.link.scan is original and original.deadline_us == 50_000
+    iut.ut(hci.HCI_LE_Set_Extended_Scan_Enable_Command(0, 0xFF, 65535, 1))
+    assert not iut.ll.scanning_enabled
+
+
+@pytest.mark.parametrize('duplicates,report_count', [(1, 1), (2, 2)])
+def test_reenable_respects_the_duplicate_filter_period(iut, duplicates, report_count):
+    """Re-enable scanning using the same duplicate filter (Vol 4, Part E, 7.8.65).
+
+    Steps:
+        1. Receive an advertisement, re-enable with identical settings and
+           receive the same ADI again.
+
+    Expected:
+        - Filter_Duplicates 1 suppresses the second report. Filter_Duplicates 2
+          starts a fresh duplicate history for the new period.
+    """
+    scan(iut, duplicates=duplicates, duration=2, period=1)
+    send_event(iut, primary(), auxiliary(b'same'))
+    iut.run(10_000)
+    iut.ut(hci.HCI_LE_Set_Extended_Scan_Enable_Command(1, duplicates, 2, 1))
+    send_event(iut, primary(), auxiliary(b'same'))
+    iut.run(10_000)
+    assert [report.data for report in iut.reports()] == [b'same'] * report_count
+
+
 def test_duration_not_shorter_than_period_is_invalid(iut):
     """A scan duration not shorter than its period is rejected.
 
@@ -834,6 +989,84 @@ def test_duplicate_filter_resets_each_period_only_when_requested(iut, duplicates
     send_event(iut, primary(), auxiliary(b'dup'))
     iut.run(1_200_000)
     assert len(iut.reports()) == (2 if duplicates == 2 else 1)
+
+
+def test_duplicate_filter_tracks_the_previous_did_per_advertising_set(iut):
+    """A DID may recur after a different DID in the same advertising set.
+
+    Purpose: Verify that each address and SID has its own previous DID (Vol 6,
+    Part B, 4.4.2.11 and 4.4.3.5).
+
+    Steps:
+        1. Enable passive scanning with duplicate filtering.
+        2. Send DID 7 from the peer on SID 2. Interleave another SID and another
+           advertiser before repeating the first report.
+        3. Change the first set's DID to 8 while keeping its data, then use DID
+           7 again with new data.
+
+    Expected:
+        - The Host receives each set's first report and both DID changes. The
+          intervening sets do not cause the repeated report to be delivered.
+    """
+    scan(iut, duplicates=1)
+    name_a, name_b = b'\x02\x09A', b'\x02\x09B'
+    for address, sid, did, data in (
+        (PEER, 2, 7, name_a),
+        (PEER, 3, 8, name_a),
+        (OTHER, 2, 8, name_a),
+        (PEER, 2, 7, name_a),
+        (PEER, 2, 8, name_a),
+        (PEER, 2, 7, name_b),
+    ):
+        send_event(
+            iut,
+            primary(sid=sid, did=did),
+            auxiliary(data, advertiser=address, sid=sid, did=did),
+        )
+        iut.run(WINDOW_US)
+    iut.lt_script_is_consumed()
+    assert [(r.address, r.advertising_sid, r.data) for r in iut.reports()] == [
+        (PEER, 2, name_a),
+        (PEER, 3, name_a),
+        (OTHER, 2, name_a),
+        (PEER, 2, name_a),
+        (PEER, 2, name_b),
+    ]
+
+
+def test_duplicate_filter_reports_longer_prefixes_of_the_same_chain(iut):
+    """Repeated receptions can recover more data under an unchanged DID.
+
+    Purpose: Verify that a longer truncated report and the final complete
+    report reach the Host (Vol 6, Part B, 4.4.3.5).
+
+    Steps:
+        1. Enable passive scanning with duplicate filtering.
+        2. Transmit the same three-fragment advertisement in each scan window.
+           Deliver one fragment, then two, repeat both prefixes, then deliver
+           the full chain followed by a prefix and another full reception.
+
+    Expected:
+        - The Host receives the first and longer prefixes marked TRUNCATED,
+          then the whole advertisement marked COMPLETE, each once.
+    """
+    scan(iut, duplicates=1)
+    head, middle, tail = b'\x02\x09A', b'\x02\x0a\x08', b'\x02\x01\x06'
+    pdus = (
+        primary(),
+        auxiliary(head, more=AUX_OFFSET),
+        chain(middle, more=AUX_OFFSET),
+        chain(tail),
+    )
+    for count in (1, 2, 1, 2, 3, 1, 3):
+        send_event(iut, *pdus[: 1 + count])
+        iut.run(WINDOW_US)
+    iut.lt_script_is_consumed()
+    assert [(status_of(r), r.data) for r in iut.reports()] == [
+        (TRUNCATED, head),
+        (TRUNCATED, head + middle),
+        (COMPLETE, head + middle + tail),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -931,6 +1164,34 @@ def connect_response(advertiser=PEER, target=IUT_ADDRESS, **changes):
         random_target=target.is_random,
     )
     return ExtendedPdu(**(values | changes))
+
+
+def test_cancel_during_aux_follow_cannot_initiate_for_a_new_request(iut):
+    """Cancel and reissue Create Connection while receiving AUX_ADV_IND (7.8.66).
+
+    Steps:
+        1. Follow a connectable primary advertisement. During auxiliary RX,
+           cancel initiation and start another request for the same peer.
+        2. Deliver the old AUX_ADV_IND, then a fresh advertisement and response.
+
+    Expected:
+        - Only the fresh advertisement elicits AUX_CONNECT_REQ and creates an ACL.
+    """
+    create_connection(iut)
+    mode = AdvertisingMode.CONNECTABLE
+    send_event(iut, primary(mode), auxiliary(mode=mode))
+    window = iut.link.roles.scanning.run(iut.link.initiating, iut.now_us + WINDOW_US)
+    with iut.pause_radio(window, 'receive', occurrence=2):
+        iut.ut(hci.HCI_LE_Create_Connection_Cancel_Command())
+        create_connection(iut)
+    iut.ut_rx(CONNECTED, status=ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
+    iut.ut_rx_q_is_empty()
+    iut.lt_rx_q_is_empty()
+    send_event(iut, primary(mode), auxiliary(mode=mode))
+    iut.lt_tx(connect_response(), channel=AUX_CHANNEL)
+    iut.run(10_000)
+    iut.lt_rx(PduType.CONNECT_IND)
+    iut.ut_rx(CONNECTED, status=0, peer_address=PEER)
 
 
 @pytest.mark.parametrize('phy', list(Phy))

@@ -17,10 +17,16 @@ from tests.qualification.cis import (
     CIS_REQ,
     cis_request,
     connect_cis_acl,
+    disconnect_cis,
     establish_configured_cis,
     establish_peer_cis,
 )
-from tests.qualification.iso import data_path, framed_sdu, iso_packet
+from tests.qualification.iso import (
+    data_path,
+    expect_iso_credits,
+    framed_sdu,
+    iso_packet,
+)
 from tests.support import LE_EVENT_MASK_ALL
 
 ErrorCode = hci.HCI_ErrorCode
@@ -1338,3 +1344,79 @@ async def test_connected_isochronous(
     air_dut, identifier, description, procedure, parameters, marks
 ):
     await verify_case(air_dut, identifier, description, procedure, parameters, marks)
+
+
+@pytest.mark.asyncio
+async def test_cis_credits_follow_establishment_and_disconnection(air_dut):
+    """Check packet-based flow control across two uses of one Central CIS handle.
+
+    Initial Condition:
+        The IUT is the Central on an LE ACL and has at least two HCI ISO buffers.
+
+    Test Steps:
+        1. Configure an input path and send two HCI ISO packets before Create CIS.
+        2. Reject the first creation request over the ACL. Establish the CIS
+           on retry, then disconnect it and send a late packet.
+        3. Attempt Create CIS with an unknown ACL and send another late packet.
+           Retry with the original ACL and send one packet before establishment.
+
+    Expected Outcome:
+        The first CIS PDU in each connection carries no SDU. The Host receives
+        two credits after the first successful CIS Established event and one
+        after the second. Neither late packet produces a credit.
+
+    Reference:
+        Core Vol 4, Part E, Sections 4.3, 7.7.19 and 7.8.109.
+    """
+    tester = air_dut
+    link = await connect_cis_acl(tester, central=True)
+    buffers = await tester.command(hci.HCI_LE_Read_Buffer_Size_V2_Command())
+    assert buffers.total_num_iso_data_packets >= 2
+    result = await tester.command(_set_cig(cis_id=(1,)))
+    (handle,) = result.connection_handle
+    await data_path(tester, handle, 0)
+    completed = hci.HCI_Number_Of_Completed_Packets_Event
+    established = hci.HCI_LE_CIS_Established_Event
+
+    async def check_first_event(air, credits):
+        await tester.command(hci.HCI_LE_Read_Buffer_Size_V2_Command())
+        assert tester.take(lambda event: isinstance(event, completed)) is None
+        first = await air.exchange()
+        assert first.pdu[1] == 0
+        event = await tester.expect(
+            lambda event: isinstance(event, (established, completed))
+        )
+        assert isinstance(event, established)
+        assert (event.status, event.connection_handle) == (0, handle)
+        await expect_iso_credits(tester, handle, credits)
+
+    tester.send(bytes(iso_packet(handle, 0, b'a')))
+    tester.send(bytes(iso_packet(handle, 1, b'b')))
+    await tester.command(hci.HCI_LE_Create_CIS_Command([handle], [link.handle]))
+    await link.control(CIS_REQ)
+    reason = ErrorCode.CONNECTION_REJECTED_DUE_TO_LIMITED_RESOURCES_ERROR
+    await link.exchange(
+        bytes((ControlOpcode.LL_REJECT_EXT_IND, CIS_REQ, reason)), llid=LlId.CONTROL
+    )
+    event = await tester.event(established)
+    assert (event.status, event.connection_handle) == (reason, handle)
+
+    _, air, _ = await establish_configured_cis(
+        tester, link, handle, exchange_first=False
+    )
+    await check_first_event(air, 2)
+    await disconnect_cis(tester, link, handle)
+    tester.send(bytes(iso_packet(handle, 2, b'c')))
+    await tester.command(
+        hci.HCI_LE_Create_CIS_Command([handle], [0x0EFF]),
+        ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR,
+    )
+    tester.send(bytes(iso_packet(handle, 3, b'd')))
+
+    _, air, _ = await establish_configured_cis(
+        tester, link, handle, exchange_first=False
+    )
+    tester.send(bytes(iso_packet(handle, 4, b'e')))
+    await check_first_event(air, 1)
+    await disconnect_cis(tester, link, handle)
+    assert tester.take(lambda event: isinstance(event, completed)) is None

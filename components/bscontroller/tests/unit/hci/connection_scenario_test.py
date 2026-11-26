@@ -834,7 +834,7 @@ def test_invalid_host_acl_is_dropped(host, handle, pb, bc):
     host.ut_rx_q_is_empty()
 
 
-def test_oversize_host_acl_is_rejected(host):
+def test_oversize_host_acl_is_rejected(host, caplog):
     """Host ACL larger than the buffer is rejected.
 
     Purpose: Verify the Controller rejects a Host ACL payload exceeding the LE
@@ -842,38 +842,86 @@ def test_oversize_host_acl_is_rejected(host):
 
     Steps:
         1. Establish a connection.
-        2. Submit an ACL packet one octet over the buffer size.
+        2. Submit an ACL packet one octet over the buffer size, then a valid one.
 
     Expected:
-        - ``ValueError`` mentioning 'HCI buffer' is raised; the queue is empty.
+        - The warning identifies the handle, actual length and limit.
+        - Only the valid packet enters the queue on the same connection.
     """
     connection = host.connection()
-    data = bytes(host.controller.config.acl_packet_length + 1)
-    with pytest.raises(ValueError, match='HCI buffer'):
-        host.controller.on_hci_acl_data_packet(
-            hci.HCI_AclDataPacket(connection.handle, FIRST, 0, len(data), data)
-        )
+    limit = host.cmd(hci.HCI_LE_Read_Buffer_Size_Command()).le_acl_data_packet_length
+    host.acl(connection.handle, FIRST, bytes(limit + 1))
+    assert f'ACL handle 0x{connection.handle:04X}' in caplog.text
+    assert f'{limit + 1}-octet packet (maximum {limit})' in caplog.text
     assert not connection.event.queue
+    host.ut_rx_q_is_empty()
+    host.acl(connection.handle, FIRST, b'valid')
+    assert [fragment.payload for fragment in connection.event.queue] == [b'valid']
 
 
-def test_empty_host_acl_returns_its_credit_at_once(host):
+@pytest.mark.parametrize('release', ['ack', 'disconnect', 'reset'])
+def test_acl_buffers_are_shared_across_connections(configured, caplog, release):
+    """Two ACL handles share the buffer count reported in LE Read Buffer Size.
+
+    Steps:
+        1. Fill the only ACL buffer on one handle and send a packet on another.
+        2. Acknowledge the first packet, disconnect its handle, or reset the Controller.
+        3. Send again on the second connection (recreated after Reset).
+
+    Expected:
+        - The excess packet is dropped with a warning and earns no credit.
+        - Releasing the first buffer allows the next packet through.
+    """
+    host = configured(ControllerConfig(acl_packet_count=1))
+    first, second = host.connection(), host.connection()
+    host.acl(first.handle, FIRST, b'first')
+    host.acl(second.handle, FIRST, b'excess')
+    assert f'ACL handle 0x{second.handle:04X}' in caplog.text
+    assert 'HCI buffer limit 1 reached' in caplog.text
+    assert not second.event.queue
+    host.ut_rx_q_is_empty()
+
+    if release == 'ack':
+        host.loop.run_until_complete(first.send(0, 100))
+        host.in_loop(first.accept, bytes([LlId.CONTINUATION | 0x04, 0]), True)
+        host.ut_rx(
+            hci.HCI_Number_Of_Completed_Packets_Event,
+            connection_handles=[first.handle],
+            num_completed_packets=[1],
+        )
+    elif release == 'disconnect':
+        host.in_loop(first.complete, ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR)
+        host.ut_rx(DISCONNECTED, connection_handle=first.handle)
+    else:
+        host.cmd(hci.HCI_Reset_Command())
+        second = host.connection()
+    host.acl(second.handle, FIRST, b'next')
+    assert [fragment.payload for fragment in second.event.queue] == [b'next']
+    host.ut_rx_q_is_empty()
+
+
+def test_empty_host_acl_returns_its_credit_at_once(configured):
     """An empty Host ACL packet returns its flow-control credit immediately.
 
     Purpose: Verify enqueuing an empty ACL payload returns one completed-packet
     credit to the Host at once (Vol 4, Part E, 5.4.2, 7.7.19).
 
     Steps:
-        1. Establish a connection and enqueue an empty ACL payload.
+        1. Establish a connection with one ACL buffer and send an empty Host packet.
+        2. Send a nonempty packet after receiving the completion.
 
     Expected:
         - A Number Of Completed Packets event reports one completed packet for
-          this handle.
+          this handle. The next packet uses the released buffer.
     """
+    host = configured(ControllerConfig(acl_packet_count=1))
     connection = host.connection()
-    host.in_loop(connection.enqueue_acl, False, b'')
+    host.acl(connection.handle, FIRST, b'')
     event = host.ut_rx(hci.HCI_Number_Of_Completed_Packets_Event)
     assert event.connection_handles == [connection.handle]
     assert event.num_completed_packets == [1]
+    host.acl(connection.handle, FIRST, b'next')
+    assert [fragment.payload for fragment in connection.event.queue] == [b'next']
 
 
 # ---------------------------------------------------------------------------

@@ -39,7 +39,9 @@ from bscontroller.linklayer.state import AdvertisingProperties, DataStatus
 from bscontroller.radio.base import PHY_CODED_S2_FACTOR, Phy
 
 if TYPE_CHECKING:
+    from bscontroller.hci.buffers import DataBuffers
     from bscontroller.hci.controller import Controller
+    from bscontroller.hci.records import ScanDuplicateFilter
     from bscontroller.linklayer.bis import BigInfo
     from bscontroller.linklayer.isoal import IsoSdu
     from bscontroller.linklayer.service import LinkLayerService
@@ -56,22 +58,21 @@ class LeControllerEvents:
 
     controller: Controller
     ll: LinkLayerService
+    acl_buffers: DataBuffers
+    iso_buffers: DataBuffers
+    cis_established: dict[int, bool]
     extended_scan: bool
-    filter_duplicates: bool
-    period_duplicate_reset: bool
-    seen: set[tuple]
+    duplicate_filter: ScanDuplicateFilter | None
 
     def trace(self, message: str) -> None:
         self.controller.trace(message)
 
-    def _emit_hci_packet(self, packet):
+    def _emit_hci_packet(self, packet) -> bool:
         # Vol 4, Part E, 7.3.1, 7.3.69 and 7.8.1: masked events are not sent to the
         # Host.
         if isinstance(packet, hci.HCI_LE_Meta_Event):
-            if not self.controller.event_mask & (1 << (hci.HCI_LE_META_EVENT - 1)):
-                return
-            if not self.controller.le_event_mask & (1 << (packet.subevent_code - 1)):
-                return
+            if not self._host_receives_le_event(packet.subevent_code):
+                return False
         elif isinstance(
             packet,
             (
@@ -82,20 +83,22 @@ class LeControllerEvents:
             ),
         ):
             if not self.controller.event_mask & (1 << (packet.event_code - 1)):
-                return
+                return False
         elif isinstance(packet, hci.HCI_Authenticated_Payload_Timeout_Expired_Event):
             if not self.controller.event_mask_page_2 & (
                 1 << (packet.event_code - hci.HCI_EVENT_MASK_PAGE_2_CODE_BASE)
             ):
-                return
+                return False
         self.controller.send_hci_packet(packet)
+        return True
 
     def on_scan_timeout(self):
+        self.duplicate_filter = None
         self._emit_hci_packet(hci.HCI_LE_Scan_Timeout_Event())
 
     def on_scan_period(self):
-        if self.period_duplicate_reset:
-            self.seen.clear()
+        if self.duplicate_filter is not None:
+            self.duplicate_filter.on_scan_period()
 
     def on_long_term_key_request(self, connection: ConnectionSnapshot, rand, ediv):
         self._emit_hci_packet(
@@ -253,7 +256,10 @@ class LeControllerEvents:
             max_latency=latency,
             timeout=timeout,
         )
-        if self.controller.le_event_mask & (1 << (event.subevent_code - 1)):
+        # Vol 6, Part B, 5.1.7.2: a request whose event the Host cannot receive,
+        # because of the LE Meta or the subevent mask, is rejected with
+        # Unsupported Remote Feature instead of waiting for a Host reply.
+        if self._host_receives_le_event(event.subevent_code):
             self._emit_hci_packet(event)
         else:
             self.ll.reject_parameters(
@@ -335,7 +341,7 @@ class LeControllerEvents:
                     channel_selection_algorithm=int(connection.csa2),
                 )
             )
-        if connection.advertising_handle is not None:
+        if connection.advertising_events is not None:
             self._emit_hci_packet(
                 hci.HCI_LE_Advertising_Set_Terminated_Event(
                     status=SUCCESS,
@@ -349,6 +355,7 @@ class LeControllerEvents:
 
     def on_disconnected(self, connection: ConnectionSnapshot, reason):
         """Disconnection Complete (Vol 4, Part E, 7.7.5)."""
+        self.acl_buffers.release(connection.handle)
         record = self.controller.le_connections.pop(connection.peer, None)
         if record is not None:
             record.disconnected(connection)
@@ -428,6 +435,12 @@ class LeControllerEvents:
     def _le_event_unmasked(self, subevent_code: int) -> bool:
         return bool(self.controller.le_event_mask & (1 << (subevent_code - 1)))
 
+    def _host_receives_le_event(self, subevent_code: int) -> bool:
+        """Both the LE Meta event and its subevent must be enabled."""
+        return bool(
+            self.controller.event_mask & (1 << (hci.HCI_LE_META_EVENT - 1))
+        ) and self._le_event_unmasked(subevent_code)
+
     def on_connect_failed(self, peer, status):
         """An initiation the Link Layer gave up on, such as an unanswered PAwR
         AUX_CONNECT_REQ (Vol 4, Part E, 7.7.65.10).
@@ -448,6 +461,7 @@ class LeControllerEvents:
 
     def on_acl_completed(self, handle: int):
         """Number Of Completed Packets (Vol 4, Part E, 7.7.19)."""
+        self.acl_buffers.complete(handle, 1)
         self._emit_hci_packet(
             hci.HCI_Number_Of_Completed_Packets_Event(
                 connection_handles=[handle], num_completed_packets=[1]
@@ -481,8 +495,26 @@ class LeControllerEvents:
         """
         if not self.ll.scanning_enabled:
             return
-        # Map LL receive properties to Vol 4, Part E event encoding here.
         properties = report.properties
+        if self.extended_scan:
+            report_code = hci.HCI_LE_EXTENDED_ADVERTISING_REPORT_EVENT
+        elif not properties & AdvertisingProperties.LEGACY_ADVERTISING_PDU_USED:
+            return
+        elif (
+            target is not None
+            and target.address_type == hci.AddressType.UNABLE_TO_RESOLVE
+        ):
+            report_code = hci.HCI_LE_DIRECTED_ADVERTISING_REPORT_EVENT
+        else:
+            report_code = hci.HCI_LE_ADVERTISING_REPORT_EVENT
+        if not self._host_receives_le_event(report_code):
+            return
+        # Filter the logical report before splitting it into HCI fragments.
+        if self.duplicate_filter is not None and self.duplicate_filter.is_duplicate(
+            address, sid, report, data
+        ):
+            return
+        # Map LL receive properties to Vol 4, Part E event encoding here.
         event_type = (
             sum(
                 int(wire_flag)
@@ -515,20 +547,8 @@ class LeControllerEvents:
             if tx_power is not None
             else AdvertisingReport.TX_POWER_INFORMATION_NOT_AVAILABLE
         )
-        key = (address, data, event_type, sid)
-        if self.filter_duplicates:
-            # Filter the logical report before HCI fragmentation, so one fragment
-            # cannot suppress the rest. TODO: use ADI in the duplicate key
-            # (Vol 6, Part B, 4.4.3.5; see specification-references.md).
-            if key in self.seen:
-                return
-            self.seen.add(key)
         rssi = self._advertising_rssi(rssi)
-        if (
-            not self.extended_scan
-            and target is not None
-            and target.address_type == hci.AddressType.UNABLE_TO_RESOLVE
-        ):
+        if report_code == hci.HCI_LE_DIRECTED_ADVERTISING_REPORT_EVENT:
             # 7.7.65.11 uses a dedicated legacy event for an unresolved RPA
             # TargetA; its Direct_Address_Type is Random, not the extended
             # report's 0xFE "unable to resolve" metadata value.
@@ -549,7 +569,7 @@ class LeControllerEvents:
                 )
             )
             return
-        if self.extended_scan:
+        if report_code == hci.HCI_LE_EXTENDED_ADVERTISING_REPORT_EVENT:
             if (
                 self.ll.features
                 & hci.LeFeatureMask.ADVERTISING_CODING_SELECTION_HOST_SUPPORT
@@ -607,7 +627,7 @@ class LeControllerEvents:
                         ]
                     )
                 )
-        elif event_type & ReportFlags.LEGACY_ADVERTISING_PDU_USED:
+        else:
             # Legacy reports cannot represent extended PDUs or their PHY/SID fields.
             legacy_type = (
                 hci.HCI_LE_Advertising_Report_Event.EventType.SCAN_RSP
@@ -888,14 +908,16 @@ class LeControllerEvents:
         self, acl_handle: int, cis_handle: int, cig_id: int, cis_id: int
     ) -> bool:
         """LE CIS Request (Vol 4, Part E, 7.7.65.26)."""
-        if not self.controller.event_mask & (1 << (hci.HCI_LE_META_EVENT - 1)):
-            return False
-        if not self._le_event_unmasked(hci.HCI_LE_CIS_REQUEST_EVENT):
-            return False
-        self._emit_hci_packet(
+        if not self._emit_hci_packet(
             hci.HCI_LE_CIS_Request_Event(acl_handle, cis_handle, cig_id, cis_id)
-        )
+        ):
+            return False
+        self.cis_established[cis_handle] = False
         return True
+
+    def _release_cis_buffers(self, handle: int):
+        self.cis_established.pop(handle, None)
+        self.iso_buffers.release(handle)
 
     def on_cis_established(self, result: CisEstablished, status: int):
         """LE CIS Established (Vol 4, Part E, 7.7.65.25)."""
@@ -929,13 +951,23 @@ class LeControllerEvents:
             )
         else:
             event = hci.HCI_LE_CIS_Established_Event(**parameters)
-        self._emit_hci_packet(event)
+        sent = self._emit_hci_packet(event)
+        handle = result.connection_handle
+        if status != SUCCESS:
+            if not self.ll.cig.contains(handle):
+                self._release_cis_buffers(handle)
+        elif sent and not self.cis_established.get(handle):
+            self.cis_established[handle] = True
+            if count := self.iso_buffers.pending(handle):
+                self.on_iso_completed(handle, count)
 
     def on_cis_disconnected(self, cis_handle: int, reason: int):
         """Report CIS termination without removing its ACL record."""
-        self._emit_hci_packet(
+        sent = self._emit_hci_packet(
             hci.HCI_Disconnection_Complete_Event(SUCCESS, cis_handle, reason)
         )
+        if sent or not self.ll.cig.contains(cis_handle):
+            self._release_cis_buffers(cis_handle)
 
     @staticmethod
     def _big_event_parameters(group: BigSnapshot, status: int):
@@ -1033,6 +1065,10 @@ class LeControllerEvents:
         self.controller.send_hci_packets(packets)
 
     def on_iso_completed(self, handle: int, count: int):
+        # Vol 4, Part E, 7.7.19: report this handle only after CIS Established.
+        if self.cis_established.get(handle) is False:
+            return
+        self.iso_buffers.complete(handle, count)
         self._emit_hci_packet(
             hci.HCI_Number_Of_Completed_Packets_Event([handle], [count])
         )

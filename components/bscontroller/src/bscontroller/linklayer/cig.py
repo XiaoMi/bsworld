@@ -158,9 +158,7 @@ class CigManager:
 
     def waiting_for_establishment(self, handle: int) -> bool:
         stream = self.streams.get(handle)
-        return stream is not None and (
-            stream.event is None or not stream.event.established
-        )
+        return stream is not None and not stream.reported
 
     def set_accept_timeout(self, timeout: int) -> int:
         # Core Vol 4, Part E, 6.7: units of 625 microseconds.

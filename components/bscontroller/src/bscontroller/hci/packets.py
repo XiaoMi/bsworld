@@ -1338,9 +1338,13 @@ class HCI_Object:
         return HCI_Object.dict_to_bytes(self.__dict__, self.fields)
 
     @staticmethod
-    def parse_length_prefixed_bytes(data, offset):
+    def parse_length_prefixed_bytes(data, offset, *, padded_size=0):
         length = data[offset]
-        return offset + 1 + length, data[offset + 1 : offset + 1 + length]
+        if padded_size and length + 1 > padded_size:
+            raise InvalidPacketError('data exceeds its padded field')
+        return offset + (padded_size or length + 1), data[
+            offset + 1 : offset + 1 + length
+        ]
 
     @staticmethod
     def serialize_length_prefixed_bytes(data, padded_size=0):
@@ -1517,6 +1521,9 @@ class HCI_Packet:
                 return HCI_IsoDataPacket.from_bytes(packet)
 
             return HCI_CustomPacket(packet)
+        except InvalidIsoDataError:
+            # The receiving Controller logs and discards this complete H4 frame.
+            raise
         except Exception as e:
             logger.error(f'error parsing HCI packet [{packet.hex()}]: {e}')
             raise
@@ -1553,6 +1560,8 @@ class HCI_Command(HCI_Packet):
     command_classes: dict[int, type[HCI_Command]] = {}
     op_code: int
     fields: Fields = ()
+    # Some variable-length commands retain partial fields for diagnostic decoding.
+    complete: bool = True
     _parameters: bytes = b''
 
     _Command = TypeVar("_Command", bound="HCI_Command")
@@ -1593,12 +1602,19 @@ class HCI_Command(HCI_Packet):
         cls.command_names.update(cls.command_map(symbols))
 
     @staticmethod
-    def from_bytes(packet: bytes) -> HCI_Command:
+    def split_packet(packet: bytes) -> tuple[int, bytes]:
+        """Read the opcode and parameters of a complete H4 command."""
+        if len(packet) < 4:
+            raise InvalidPacketError('incomplete HCI command header')
         op_code, length = struct.unpack_from('<HB', packet, 1)
         parameters = packet[4:]
         if len(parameters) != length:
             raise InvalidPacketError('invalid packet length')
+        return op_code, parameters
 
+    @staticmethod
+    def from_bytes(packet: bytes) -> HCI_Command:
+        op_code, parameters = HCI_Command.split_packet(packet)
         # Look for a registered class
         cls = HCI_Command.command_classes.get(op_code)
         if cls is None:
@@ -1609,8 +1625,22 @@ class HCI_Command(HCI_Packet):
 
     @classmethod
     def from_parameters(cls, parameters: bytes) -> HCI_Command:
-        command = cls(**HCI_Object.dict_from_bytes(parameters, 0, cls.fields))
+        end, values = HCI_Object.dict_and_offset_from_bytes(parameters, 0, cls.fields)
+        if end != len(parameters):
+            raise InvalidPacketError('invalid HCI command parameter length')
+        command = cls(**values)
         command.parameters = parameters
+        return command
+
+    @classmethod
+    def decode_parameters(cls, parameters: bytes) -> HCI_Command:
+        """Decode a complete command for dispatch. A partial command cannot execute."""
+        try:
+            command = cls.from_parameters(parameters)
+        except (ValueError, IndexError, struct.error) as error:
+            raise InvalidPacketError('invalid HCI command parameters') from error
+        if not command.complete:
+            raise InvalidPacketError('incomplete HCI command parameters')
         return command
 
     @classmethod
@@ -1705,6 +1735,7 @@ class HCI_StatusReturnParameters(HCI_ReturnParameters):
 
 @dataclasses.dataclass
 class HCI_GenericStatusReturnParameters(HCI_StatusReturnParameters):
+    fields = [('status', 1), ('data', '*')]
     data: bytes = field(metadata=metadata('*'))
 
 
@@ -1754,6 +1785,29 @@ class HCI_SyncCommand(HCI_Command, Generic[_RP]):
     @classmethod
     def parse_return_parameters(cls, parameters: bytes) -> _RP:
         return cls.return_parameters_class.from_parameters(parameters)
+
+    @classmethod
+    def error_return_parameters(
+        cls, status: HCI_ErrorCode, parameters: bytes
+    ) -> HCI_StatusReturnParameters:
+        """Echo the supplied identifier following Status (Vol 4, Part E, 4.5.1)."""
+        returned = cls.return_parameters_class.fields
+        if (
+            cls.fields
+            and len(returned) > 1
+            and isinstance(cls.fields[0], tuple)
+            and cls.fields[0] == returned[1]
+        ):
+            name, size = cls.fields[0]
+            if name == 'bd_addr':
+                size = 6
+            if (
+                (name.endswith('handle') or name in ('bd_addr', 'cig_id'))
+                and isinstance(size, int)
+                and len(parameters) >= size
+            ):
+                return HCI_GenericStatusReturnParameters(status, parameters[:size])
+        return HCI_StatusReturnParameters(status)
 
 
 # -----------------------------------------------------------------------------
@@ -2245,7 +2299,9 @@ class HCI_LE_Set_Advertising_Data_Command(HCI_SyncCommand[HCI_StatusReturnParame
     advertising_data: bytes = field(
         metadata=metadata(
             {
-                'parser': HCI_Object.parse_length_prefixed_bytes,
+                'parser': functools.partial(
+                    HCI_Object.parse_length_prefixed_bytes, padded_size=32
+                ),
                 'serializer': functools.partial(
                     HCI_Object.serialize_length_prefixed_bytes, padded_size=32
                 ),
@@ -2267,7 +2323,9 @@ class HCI_LE_Set_Scan_Response_Data_Command(
     scan_response_data: bytes = field(
         metadata=metadata(
             {
-                'parser': HCI_Object.parse_length_prefixed_bytes,
+                'parser': functools.partial(
+                    HCI_Object.parse_length_prefixed_bytes, padded_size=32
+                ),
                 'serializer': functools.partial(
                     HCI_Object.serialize_length_prefixed_bytes, padded_size=32
                 ),
@@ -3343,7 +3401,9 @@ class HCI_LE_Set_Extended_Scan_Parameters_Command(
         scanning_filter_policy = parameters[1]
         scanning_phys = parameters[2]
 
-        phy_bits_set = bin(scanning_phys).count('1')
+        phy_bits_set = scanning_phys.bit_count()
+        if len(parameters) != 3 + 5 * phy_bits_set:
+            raise InvalidPacketError('expected one scan parameter record per PHY')
         scan_types = []
         scan_intervals = []
         scan_windows = []
@@ -3464,7 +3524,9 @@ class HCI_LE_Extended_Create_Connection_Command(HCI_AsyncCommand):
         peer_address = Address.parse_address_preceded_by_type(parameters, 3)[1]
         initiating_phys = parameters[9]
 
-        phy_bits_set = bin(initiating_phys).count('1')
+        phy_bits_set = initiating_phys.bit_count()
+        if len(parameters) != 10 + 16 * phy_bits_set:
+            raise InvalidPacketError('expected one connection parameter record per PHY')
 
         def read_parameter_list(offset):
             return [
@@ -6593,6 +6655,10 @@ class HCI_AclDataPacket(HCI_Packet):
 
 
 # -----------------------------------------------------------------------------
+class InvalidIsoDataError(InvalidPacketError):
+    """The H4 frame is complete but its ISO data load has an invalid layout."""
+
+
 @dataclasses.dataclass
 class HCI_IsoDataPacket(HCI_Packet):
     '''
@@ -6638,15 +6704,21 @@ class HCI_IsoDataPacket(HCI_Packet):
 
         if ts_flag:
             if not should_include_sdu_info:
-                logger.warning(f'Timestamp included when pb_flag={bin(pb_flag)}')
+                raise InvalidIsoDataError(
+                    f'ISO handle 0x{connection_handle:04X}: timestamp with PB={pb_flag}'
+                )
             if len(packet) < pos + 4:
-                raise InvalidPacketError('ISO data packet truncated (timestamp)')
+                raise InvalidIsoDataError(
+                    f'ISO handle 0x{connection_handle:04X}: truncated timestamp'
+                )
             time_stamp, *_ = struct.unpack_from('<I', packet, pos)
             pos += 4
 
         if should_include_sdu_info:
             if len(packet) < pos + 4:
-                raise InvalidPacketError('ISO data packet truncated (SDU info)')
+                raise InvalidIsoDataError(
+                    f'ISO handle 0x{connection_handle:04X}: truncated SDU info'
+                )
             packet_sequence_number, sdu_info = struct.unpack_from('<HH', packet, pos)
             iso_sdu_length = sdu_info & 0xFFF
             packet_status_flag = (sdu_info >> 14) & 0b11

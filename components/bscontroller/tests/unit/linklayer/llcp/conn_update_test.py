@@ -45,6 +45,17 @@ from tests.unit.linklayer.llcp.harness import (
 UPDATE_DONE = hci.HCI_LE_Connection_Update_Complete_Event
 REMOTE_REQUEST = hci.HCI_LE_Remote_Connection_Parameter_Request_Event
 DISCONNECTED = hci.HCI_Disconnection_Complete_Event
+# Either mask hides the remote request from the Host (Vol 4, Part E, 7.3.1, 7.8.1).
+REMOTE_REQUEST_MASKS = ['le_meta', 'subevent']
+
+
+def mask_remote_request(controller, mask: str) -> None:
+    if mask == 'le_meta':
+        controller.event_mask &= ~(1 << (hci.HCI_LE_META_EVENT - 1))
+    else:
+        controller.le_event_mask &= ~(
+            1 << (hci.HCI_LE_REMOTE_CONNECTION_PARAMETER_REQUEST_EVENT - 1)
+        )
 
 
 def request(iut, minimum, maximum=None, latency=0, timeout=100, *, status=0):
@@ -711,15 +722,17 @@ def test_central_rem_host_does_not_answer(central):
     central.ut_rx(DISCONNECTED, reason=ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
 
 
-def test_central_rem_masked_event_rejects_automatically(central):
+@pytest.mark.parametrize('mask', REMOTE_REQUEST_MASKS)
+def test_central_rem_masked_event_rejects_automatically(central, mask):
     """A masked remote-request event makes the Central reject automatically.
 
-    Purpose: Verify that when the LE Remote Connection Parameter Request event is
-    masked off, the Central does not surface the request to the Host and instead
-    rejects PARAM_REQ with unsupported remote feature.
+    Purpose: Verify that when the LE Meta event or the LE Remote Connection
+    Parameter Request subevent is masked off, the Central does not surface the
+    request to the Host and instead rejects PARAM_REQ with unsupported remote
+    feature (Core Vol 6, Part B, 5.1.7.2).
 
     Steps:
-        1. Mask off the remote connection parameter request event.
+        1. Mask off the LE Meta event or the remote request subevent.
         2. Lower Tester sends PARAM_REQ 30.
         3. Lower Tester receives the Central's response.
 
@@ -728,10 +741,7 @@ def test_central_rem_masked_event_rejects_automatically(central):
         - The IUT transmits REJECT_EXT_IND(LL_CONNECTION_PARAM_REQ, unsupported
           remote feature).
     """
-    controller = central.controller
-    controller.le_event_mask &= ~(
-        1 << (hci.HCI_LE_REMOTE_CONNECTION_PARAMETER_REQUEST_EVENT - 1)
-    )
+    mask_remote_request(central.controller, mask)
     central.event_prepare()
     central.lt_tx(connection_param_req(30))
     central.event_done()
@@ -1188,15 +1198,17 @@ def test_periph_rem_second_instant_while_pending_closes_link(peripheral):
     peripheral.ut_rx(DISCONNECTED, reason=ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR)
 
 
-def test_periph_rem_masked_event_rejects_automatically(peripheral):
+@pytest.mark.parametrize('mask', REMOTE_REQUEST_MASKS)
+def test_periph_rem_masked_event_rejects_automatically(peripheral, mask):
     """A masked remote-request event makes the Peripheral reject automatically.
 
-    Purpose: Verify that when the LE Remote Connection Parameter Request event is
-    masked off, a Peripheral rejects a peer PARAM_REQ with unsupported remote
-    feature without surfacing it to the Host.
+    Purpose: Verify that when the LE Meta event or the LE Remote Connection
+    Parameter Request subevent is masked off, a Peripheral rejects a peer
+    PARAM_REQ with unsupported remote feature without surfacing it to the Host
+    (Core Vol 6, Part B, 5.1.7.2).
 
     Steps:
-        1. Mask off the remote connection parameter request event.
+        1. Mask off the LE Meta event or the remote request subevent.
         2. Lower Tester sends PARAM_REQ 30.
         3. Lower Tester receives the Peripheral's response.
 
@@ -1205,9 +1217,7 @@ def test_periph_rem_masked_event_rejects_automatically(peripheral):
           remote feature).
         - No Host notification is produced.
     """
-    peripheral.controller.le_event_mask &= ~(
-        1 << (hci.HCI_LE_REMOTE_CONNECTION_PARAMETER_REQUEST_EVENT - 1)
-    )
+    mask_remote_request(peripheral.controller, mask)
     peripheral.event_prepare()
     peripheral.lt_tx(connection_param_req(30))
     peripheral.event_done()

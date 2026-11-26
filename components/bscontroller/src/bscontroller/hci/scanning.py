@@ -35,6 +35,7 @@ from bscontroller.hci.context import (
     UNSUPPORTED,
     LeControllerContext,
 )
+from bscontroller.hci.records import ScanDuplicateFilter
 from bscontroller.linklayer import PDU_ADV_ADDRESS_SIZE, PDU_ADV_ADI_SID_MAX
 from bscontroller.linklayer.api import (
     PeriodicSyncConfig,
@@ -108,6 +109,7 @@ class LeScanningCommands(LeControllerContext):
         window,
         maximum_interval=HCI_LE_SCAN_INTERVAL_MAX,
         extended=False,
+        windows=(),
     ):
         """Validate and replace the saved scan configuration in scheduler units.
 
@@ -135,6 +137,7 @@ class LeScanningCommands(LeControllerContext):
             policy,
             own_address_type=own,
             extended=extended,
+            windows=windows,
         )
         return hci.HCI_StatusReturnParameters(status)
 
@@ -142,16 +145,13 @@ class LeScanningCommands(LeControllerContext):
         '''
         See Bluetooth spec Vol 4, Part E - 7.8.10 LE Set Scan Parameters Command
         '''
-        result = self._scan_parameters(
+        return self._scan_parameters(
             command.own_address_type,
             command.scanning_filter_policy,
             command.le_scan_type,
             command.le_scan_interval,
             command.le_scan_window,
         )
-        if result.status == SUCCESS:
-            self.extended_scan = False
-        return result
 
     def on_hci_le_set_extended_scan_parameters_command(self, command):
         '''
@@ -192,7 +192,7 @@ class LeScanningCommands(LeControllerContext):
             return hci.HCI_StatusReturnParameters(INVALID)
         # Validate all PHY entries before _scan_parameters replaces the live
         # configuration; a bad later entry must not commit the first one.
-        result = self._scan_parameters(
+        return self._scan_parameters(
             command.own_address_type,
             command.scanning_filter_policy,
             command.scan_types[0],
@@ -200,48 +200,65 @@ class LeScanningCommands(LeControllerContext):
             command.scan_windows[0],
             maximum_interval=HCI_LE_EXT_SCAN_INTERVAL_MAX,
             extended=True,
-        )
-        if result.status == SUCCESS:
-            self.extended_scan = True
-            self.ll.configure_scan_windows(
-                tuple(
-                    ScanWindowConfig(
-                        phy,
-                        interval * HCI_LE_SCAN_INTERVAL_UNIT_US,
-                        window * HCI_LE_SCAN_INTERVAL_UNIT_US,
-                        bool(kind),
-                    )
-                    for phy, kind, interval, window in zip(
-                        phys,
-                        command.scan_types,
-                        command.scan_intervals,
-                        command.scan_windows,
-                    )
+            windows=tuple(
+                ScanWindowConfig(
+                    phy,
+                    interval * HCI_LE_SCAN_INTERVAL_UNIT_US,
+                    window * HCI_LE_SCAN_INTERVAL_UNIT_US,
+                    bool(kind),
                 )
-            )
-        return result
+                for phy, kind, interval, window in zip(
+                    phys,
+                    command.scan_types,
+                    command.scan_intervals,
+                    command.scan_windows,
+                )
+            ),
+        )
 
-    def _scan_enable(self, enable, duplicates):
+    def _scan_enable(
+        self, enable, duplicates, *, extended=False, duration_us=0, period_us=0
+    ):
         """Shared checks for LE Set (Extended) Scan Enable (Vol 4, Part E, 7.8.11,
         7.8.65).
         """
-        if enable not in (0, 1) or duplicates not in (
-            HCI_LE_SCAN_DUPLICATES_DISABLED,
-            HCI_LE_SCAN_DUPLICATES_ENABLED,
-            HCI_LE_SCAN_DUPLICATES_RESET_EACH_PERIOD,
+        if enable not in (0, 1) or (
+            enable
+            and duplicates
+            not in (
+                HCI_LE_SCAN_DUPLICATES_DISABLED,
+                HCI_LE_SCAN_DUPLICATES_ENABLED,
+                HCI_LE_SCAN_DUPLICATES_RESET_EACH_PERIOD,
+            )
         ):
             return hci.HCI_StatusReturnParameters(INVALID)
-        self.filter_duplicates = bool(duplicates)
-        # Start a new scan epoch with fresh duplicate-filter and backoff history.
-        # The backoff follows the example in Vol 6, Part B, 4.4.3.2.
-        self.seen.clear()
-        return hci.HCI_StatusReturnParameters(self.ll.enable_scanning(bool(enable)))
+        status = self.ll.enable_scanning(
+            bool(enable),
+            extended=extended,
+            duration_us=duration_us,
+            period_us=period_us,
+        )
+        if status == SUCCESS:
+            self.extended_scan = extended
+            reset_each_period = duplicates == HCI_LE_SCAN_DUPLICATES_RESET_EACH_PERIOD
+            if not enable or not duplicates:
+                self.duplicate_filter = None
+            elif (
+                self.duplicate_filter is None
+                or self.duplicate_filter.reset_each_period != reset_each_period
+            ):
+                self.duplicate_filter = ScanDuplicateFilter(
+                    reset_each_period=reset_each_period
+                )
+            else:
+                self.duplicate_filter.on_scan_period()
+        return hci.HCI_StatusReturnParameters(status)
 
     def on_hci_le_set_scan_enable_command(self, command):
         '''
         See Bluetooth spec Vol 4, Part E - 7.8.11 LE Set Scan Enable Command
         '''
-        if command.filter_duplicates not in (0, 1):
+        if command.le_scan_enable and command.filter_duplicates not in (0, 1):
             return hci.HCI_StatusReturnParameters(INVALID)
         return self._scan_enable(command.le_scan_enable, command.filter_duplicates)
 
@@ -249,23 +266,22 @@ class LeScanningCommands(LeControllerContext):
         '''
         See Bluetooth spec Vol 4, Part E - 7.8.65 LE Set Extended Scan Enable Command
         '''
+        if not command.enable:
+            return self._scan_enable(0, 0, extended=True)
+        duration_us = command.duration * HCI_LE_DURATION_UNIT_US
+        period_us = command.period * HCI_LE_SCAN_PERIOD_UNIT_US if duration_us else 0
         if (
-            command.duration
-            and command.period
-            and command.duration * HCI_LE_DURATION_UNIT_US
-            >= command.period * HCI_LE_SCAN_PERIOD_UNIT_US
-        ):
+            command.filter_duplicates == HCI_LE_SCAN_DUPLICATES_RESET_EACH_PERIOD
+            and not period_us
+        ) or (period_us and duration_us >= period_us):
             return hci.HCI_StatusReturnParameters(INVALID)
-        result = self._scan_enable(command.enable, command.filter_duplicates)
-        if result.status == SUCCESS:
-            self.ll.set_scan_period(
-                command.duration * HCI_LE_DURATION_UNIT_US,
-                command.period * HCI_LE_SCAN_PERIOD_UNIT_US,
-            )
-            self.period_duplicate_reset = (
-                command.filter_duplicates == HCI_LE_SCAN_DUPLICATES_RESET_EACH_PERIOD
-            )
-        return result
+        return self._scan_enable(
+            command.enable,
+            command.filter_duplicates,
+            extended=True,
+            duration_us=duration_us,
+            period_us=period_us,
+        )
 
     def on_hci_le_read_filter_accept_list_size_command(self, command):
         '''
@@ -502,7 +518,6 @@ class LeScanningCommands(LeControllerContext):
         status = (
             INVALID
             if command.sync_handle > HCI_LE_SYNC_HANDLE_MAX
-            or not command.complete
             or not 1 <= len(subevents) <= HCI_LE_PAWR_SYNC_SUBEVENTS_MAX
             or any(subevent >= LL_PAWR_SUBEVENTS_MAX for subevent in subevents)
             else self.ll.set_sync_subevents(
@@ -525,7 +540,6 @@ class LeScanningCommands(LeControllerContext):
         status = (
             INVALID
             if command.sync_handle > HCI_LE_SYNC_HANDLE_MAX
-            or not command.complete
             or len(command.response_data) > HCI_LE_PAWR_DATA_SIZE_MAX
             else self.ll.set_response_data(
                 command.sync_handle,

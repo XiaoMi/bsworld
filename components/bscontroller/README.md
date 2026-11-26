@@ -150,6 +150,8 @@ For runnable examples of LE advertising, connection management, ISO data and con
 | `maxBigs` | `4` | `1`–`240` | 7.8.103, 7.8.106 |
 | `maxBis` | `16` | `1`–`3839` | 5.3.1, 7.8.103, 7.8.106 |
 
+All ACL connections share the ACL buffers, and all ISO streams share a separate ISO pool. If the Host exceeds the advertised packet length or sends while the corresponding pool is full, the Controller drops that packet and logs the handle and limit.
+
 Use `defaults` for settings shared by all Controllers and `controllers` for overrides by name.
 
 ```json

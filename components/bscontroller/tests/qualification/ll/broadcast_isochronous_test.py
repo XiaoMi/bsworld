@@ -1208,3 +1208,38 @@ async def test_iso_link_quality_for_a_synchronized_bis(air_dut):
     assert quality.crc_error_packets == before.crc_error_packets + 1
     assert quality.rx_unreceived_packets == before.rx_unreceived_packets + 2
     await finish_receiver(air_dut, peer)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('offset_us', [-90, 90], ids=['early', 'late'])
+@pytest.mark.parametrize('change_sca', [False, True], ids=['50ppm', '500ppm'])
+async def test_synchronized_bis_at_the_sleep_clock_window_edge(
+    air_dut, offset_us, change_sca
+):
+    """Receive a BIS PDU at the edge of the sleep-clock window (Core Vol 6, B, 4.2.4).
+
+    Initial Condition:
+        The Lower Tester advertises 500 ppm, one BIS subevent per 100-ms interval.
+
+    Test Steps:
+        Synchronize, optionally switch the IUT from 50 to 500 ppm through HCI,
+        then transmit the next payload 90 us early or late on its BIS channel.
+
+    Expected Outcome:
+        The 71-us window misses the SDU. The 116-us window delivers its bytes.
+    """
+    peer, established = await acquire_receiver(
+        air_dut, irc=1, nse=1, interval=80, sdu_interval=100_000
+    )
+    (handle,) = established.connection_handle
+    await data_path(air_dut, handle, 1)
+    if change_sca:
+        await air_dut.command(hci.HCI_LE_Modify_Sleep_Clock_Accuracy_Command(1))
+    peer.big.anchor += offset_us
+    await _send_event(air_dut, peer, {1: (0, b'edge')})
+    packet = await air_dut.event(hci.HCI_IsoDataPacket)
+    assert packet.connection_handle == handle
+    assert (packet.packet_status_flag, packet.iso_sdu_fragment) == (
+        (0, b'edge') if change_sca else (2, b'')
+    )
+    await finish_receiver(air_dut, peer)

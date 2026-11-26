@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
+from unittest.mock import patch
 
 from bscontroller import hci
 from bscontroller.hci.backend import RadioBackend
@@ -408,3 +410,30 @@ class AirHarness:
 
     def call(self, coroutine):
         return self.loop.run_until_complete(coroutine)
+
+    @contextmanager
+    def pause_radio(self, procedure, method, *, occurrence=1):
+        """Run a procedure up to its selected radio call, then let the Host act."""
+        reached = self.loop.create_future()
+        resume = self.loop.create_future()
+        original = getattr(self.radio, method)
+
+        async def paused(*args, **kwargs):
+            nonlocal occurrence
+            occurrence -= 1
+            if occurrence == 0:
+                reached.set_result(None)
+                await resume
+            return await original(*args, **kwargs)
+
+        with patch.object(self.radio, method, paused):
+            task = self.loop.create_task(procedure)
+            try:
+                self.call(
+                    asyncio.wait((reached, task), return_when=asyncio.FIRST_COMPLETED)
+                )
+                assert reached.done(), f'procedure ended before {method}'
+                yield
+            finally:
+                resume.set_result(None)
+                self.call(task)

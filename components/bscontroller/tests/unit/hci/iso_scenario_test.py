@@ -10,10 +10,13 @@ import pytest
 from bscontroller import hci
 from bscontroller.config import ControllerConfig
 from bscontroller.hci.transport import H4Parser, H4Server
+from bscontroller.linklayer import LL_SCA_50_PPM, ControlOpcode
 from bscontroller.linklayer.advertising import ExtendedPdu, SyncInfo
+from bscontroller.linklayer.api import CisEstablished
 from bscontroller.linklayer.bis import BisCipher, group_session_key
 from bscontroller.linklayer.channel_selection import isochronous_channels
-from bscontroller.linklayer.cis import CisDirection, CisEventParameters
+from bscontroller.linklayer.cig import Setup
+from bscontroller.linklayer.cis import CisDirection, CisEvent, CisEventParameters
 from bscontroller.linklayer.cis_parameters import CisRequest, CisWindow
 from bscontroller.linklayer.discovery import PeriodicSync
 from bscontroller.linklayer.isoal import IsoalParameters, IsoSdu, IsoStatus
@@ -156,6 +159,88 @@ def test_big_create_complete_and_hci_fragment_credits(configured):
     assert sync.packet_sequence_number == 42
     assert sync.tx_time_stamp == packets[0].start_us
     assert sync.time_offset == 0
+
+
+def test_bis_handles_share_iso_buffers_independently_of_acl(configured, caplog):
+    """ACL and ISO each have one buffer shared across handles (Vol 4, Part E, 4.1.1).
+
+    Steps:
+        1. Set up two BIS input paths. Send an unknown handle and an oversized
+           timestamped packet, then a valid packet on the first path.
+        2. Send on the second BIS while the first holds the only ISO buffer.
+           Queue ACL data and disconnect the ACL.
+        3. Advance a BIG event, then send on the second BIS again.
+
+    Expected:
+        - The timestamp and SDU header count toward the ISO length limit.
+        - ACL data is accepted while ISO is full. Only accepted ISO packets
+          produce credits and update their stream's TX Sync sequence number.
+    """
+    host = configured(
+        ControllerConfig(iso_packet_count=1, iso_packet_length=8, acl_packet_count=1)
+    )
+    advertising(host)
+    host.cmd_status(create_big(num_bis=2))
+    advance(host, 10000)
+    first, second = host.ut_rx(hci.HCI_LE_Create_BIG_Complete_Event).connection_handle
+    setup_path(host, first)
+    setup_path(host, second)
+
+    def send(handle, sequence, timestamp=None):
+        host.send(
+            hci.HCI_IsoDataPacket(
+                handle,
+                5 if timestamp is None else 9,
+                b'x',
+                2,
+                time_stamp=timestamp,
+                packet_sequence_number=sequence,
+                iso_sdu_length=1,
+                packet_status_flag=0,
+            )
+        )
+
+    send(0x0EFF, 1)
+    assert 'No active ISO data handle 0x0EFF' in caplog.text
+    send(first, 2, host.link.now_us)
+    assert (
+        f'ISO handle 0x{first:04X}: dropping 9-octet packet (maximum 8)' in caplog.text
+    )
+    send(first, 3)
+    send(second, 4)
+    assert f'ISO handle 0x{second:04X}' in caplog.text
+    assert 'HCI buffer limit 1 reached' in caplog.text
+    host.ut_rx_q_is_empty()
+
+    acl = host.connection()
+    host.acl(acl.handle, hci.HCI_ACL_PB_FIRST_NON_FLUSHABLE, b'acl')
+    assert [fragment.payload for fragment in acl.event.queue] == [b'acl']
+    host.in_loop(acl.complete, ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR)
+    host.ut_rx(hci.HCI_Disconnection_Complete_Event, connection_handle=acl.handle)
+    advance(host, 20000)
+    host.ut_rx(
+        hci.HCI_Number_Of_Completed_Packets_Event,
+        connection_handles=[first],
+        num_completed_packets=[1],
+    )
+    assert (
+        host.cmd(hci.HCI_LE_Read_ISO_TX_Sync_Command(first)).packet_sequence_number == 3
+    )
+    host.cmd(
+        hci.HCI_LE_Read_ISO_TX_Sync_Command(second), ErrorCode.COMMAND_DISALLOWED_ERROR
+    )
+    send(second, 5)
+    advance(host, 30000)
+    host.ut_rx(
+        hci.HCI_Number_Of_Completed_Packets_Event,
+        connection_handles=[second],
+        num_completed_packets=[1],
+    )
+    assert (
+        host.cmd(hci.HCI_LE_Read_ISO_TX_Sync_Command(second)).packet_sequence_number
+        == 5
+    )
+    host.ut_rx_q_is_empty()
 
 
 @pytest.mark.parametrize(
@@ -324,6 +409,50 @@ def test_iso_output_sdu_crosses_socket_as_individual_h4_frames(configured, tmp_p
     assert b''.join(frame.iso_sdu_fragment for frame in frames) == sdu.data
 
 
+def test_invalid_iso_headers_do_not_close_h4_session(host, tmp_path, caplog):
+    """Discard an ISO frame with invalid fragment metadata (Vol 4, Part E, 5.4.5).
+
+    Steps:
+        Send fragments with short SDU or timestamp fields and a continuation
+        with a timestamp, then send HCI Reset on the same socket.
+
+    Expected:
+        Each invalid packet is logged. The first reply is Reset Command
+        Complete, and the socket remains connected.
+    """
+
+    async def exchange():
+        path = tmp_path / 'iso.sock'
+        async with H4Server(host.controller, path) as endpoint:
+            reader, writer = await asyncio.open_unix_connection(path)
+            try:
+                for flags, data in (
+                    (0x00, b'abc'),
+                    (0x60, b'ab'),
+                    (0x60, bytes(6)),
+                    (0x50, bytes(4)),
+                ):
+                    writer.write(
+                        bytes((hci.HCI_ISO_DATA_PACKET, 1, flags, len(data), 0)) + data
+                    )
+                writer.write(bytes(hci.HCI_Reset_Command()))
+                await writer.drain()
+                reply = hci.HCI_Packet.from_bytes(
+                    await asyncio.wait_for(reader.readexactly(7), 2)
+                )
+                assert isinstance(reply, hci.HCI_Command_Complete_Event)
+                assert reply.command_opcode == hci.HCI_RESET_COMMAND
+                assert not endpoint.finished.done()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+    host.loop.run_until_complete(exchange())
+    assert caplog.text.count('ISO handle 0x0001: truncated SDU info') == 2
+    assert caplog.text.count('ISO handle 0x0001: truncated timestamp') == 1
+    assert caplog.text.count('ISO handle 0x0001: timestamp with PB=1') == 1
+
+
 def test_iso_handle_has_independent_input_and_output_test_modes(host):
     """One ISO handle can own two independently configured directions.
 
@@ -354,6 +483,181 @@ def test_iso_handle_has_independent_input_and_output_test_modes(host):
     assert not iso.contains(handle)
 
 
+def configure_cig(host, *sdu_sizes):
+    count = len(sdu_sizes)
+    tx, rx = zip(*sdu_sizes)
+    return host.cmd(
+        hci.HCI_LE_Set_CIG_Parameters_Command(
+            cig_id=1,
+            sdu_interval_c_to_p=10_000,
+            sdu_interval_p_to_c=10_000,
+            worst_case_sca=0,
+            packing=0,
+            framing=0,
+            max_transport_latency_c_to_p=40,
+            max_transport_latency_p_to_c=40,
+            cis_id=list(range(1, count + 1)),
+            max_sdu_c_to_p=tx,
+            max_sdu_p_to_c=rx,
+            phy_c_to_p=[1] * count,
+            phy_p_to_c=[1] * count,
+            rtn_c_to_p=[0] * count,
+            rtn_p_to_c=[0] * count,
+        )
+    ).connection_handle
+
+
+@pytest.mark.parametrize(
+    'established',
+    [hci.HCI_LE_CIS_Established_Event, hci.HCI_LE_CIS_Established_V2_Event, None],
+)
+def test_early_iso_fragments_are_credited_after_cis_established(
+    configured, established
+):
+    """Report early HCI fragments only after the Host receives CIS Established."""
+    host = configured(ControllerConfig(iso_packet_count=4))
+    (handle,) = configure_cig(host, (32, 32))
+    setup_path(host, handle)
+    mask = 1 << (established.subevent_code - 1) if established else 0
+    host.cmd(hci.HCI_LE_Set_Event_Mask_Command(mask.to_bytes(8, 'little')))
+    host.send(
+        hci.HCI_IsoDataPacket(
+            handle,
+            5,
+            b'a',
+            0,
+            packet_sequence_number=7,
+            iso_sdu_length=2,
+            packet_status_flag=0,
+        )
+    )
+    host.send(hci.HCI_IsoDataPacket(handle, 1, b'b', 3))
+    host.ut_rx_q_is_empty()
+    path = host.link.roles.iso.get_stream(handle, True)
+    assert not path.queue and path.assembly is None
+    host.notify('on_cis_established', CisEstablished(handle), ErrorCode.SUCCESS)
+    if established:
+        host.ut_rx(established, connection_handle=handle, status=0)
+        host.ut_rx(
+            hci.HCI_Number_Of_Completed_Packets_Event,
+            connection_handles=[handle],
+            num_completed_packets=[2],
+        )
+    host.ut_rx_q_is_empty()
+
+
+def test_removed_cig_does_not_charge_its_credits_to_a_reused_handle(configured):
+    """Removing a pending CIS frees the sole buffer for a BIS using its handle."""
+    host = configured(ControllerConfig(iso_packet_count=1))
+    (handle,) = configure_cig(host, (32, 32))
+    setup_path(host, handle)
+    packet = hci.HCI_IsoDataPacket(
+        handle,
+        5,
+        b'x',
+        2,
+        packet_sequence_number=0,
+        iso_sdu_length=1,
+        packet_status_flag=0,
+    )
+    host.send(packet)
+    host.cmd(hci.HCI_LE_Remove_CIG_Command(1))
+    host.ut_rx_q_is_empty()
+    assert establish(host) == handle
+    setup_path(host, handle)
+    host.send(packet)
+    advance(host, 20000)
+    host.ut_rx(
+        hci.HCI_Number_Of_Completed_Packets_Event,
+        connection_handles=[handle],
+        num_completed_packets=[1],
+    )
+    host.ut_rx_q_is_empty()
+
+
+@pytest.mark.parametrize('report_disconnect', [True, False])
+def test_disconnected_cis_does_not_take_another_streams_credits(
+    configured, report_disconnect, caplog
+):
+    """The Central retains its ISO path across disconnection (Vol 4, E, 4.3 and 7.7.5).
+
+    Steps:
+        1. Start with two established Central CISes and four shared HCI ISO buffers.
+        2. Enable or mask Disconnection Complete, disconnect the first CIS and
+           acknowledge its LL_CIS_TERMINATE_IND.
+        3. Submit three packets on the old handle followed by four on the
+           surviving handle before its next ISO event.
+
+    Expected:
+        Only the four live SDUs are queued. Late packets return credits only
+        when the Host still considers the old CIS connected.
+    """
+    host = configured(ControllerConfig(iso_packet_count=4))
+    acl = host.connection()
+    manager = host.link.roles.cig
+    retired, live = configure_cig(host, (32, 32), (32, 32))
+    for handle in (retired, live):
+        stream = manager.streams[handle]
+        stream.connection = acl
+        stream.stage = Setup.ACTIVE
+        stream.event = CisEvent(
+            acl,
+            handle,
+            host.link.new_access_address(),
+            acl.parameters.crc_init,
+            10_000,
+            stream.parameters,
+            iso=manager.iso,
+        )
+        stream.event.established = True
+        host.in_loop(manager._report_established, stream)
+        host.ut_rx(hci.HCI_LE_CIS_Established_Event, connection_handle=handle, status=0)
+        setup_path(host, handle)
+
+    reason = ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR
+    if not report_disconnect:
+        mask = host.controller.event_mask & ~(
+            1 << (hci.HCI_DISCONNECTION_COMPLETE_EVENT - 1)
+        )
+        host.cmd(hci.HCI_Set_Event_Mask_Command(mask.to_bytes(8, 'little')))
+    host.cmd_status(hci.HCI_Disconnect_Command(retired, reason))
+    termination = acl.event.queue.popleft().payload
+    assert termination == bytes((ControlOpcode.LL_CIS_TERMINATE_IND, 1, 1, reason))
+    host.in_loop(acl.llcp.acknowledged, termination)
+    if report_disconnect:
+        host.ut_rx(
+            hci.HCI_Disconnection_Complete_Event, connection_handle=retired, status=0
+        )
+    host.ut_rx_q_is_empty()
+    for handle, count in ((retired, 3), (live, 4)):
+        for sequence in range(count):
+            host.send(
+                hci.HCI_IsoDataPacket(
+                    handle,
+                    5,
+                    b'x',
+                    2,
+                    packet_sequence_number=sequence,
+                    iso_sdu_length=1,
+                    packet_status_flag=0,
+                )
+            )
+    assert not manager.iso.get_stream(retired, True).queue
+    assert f'No active ISO data handle 0x{retired:04X}' not in caplog.text
+    assert [
+        sdu.sequence_number for sdu in manager.iso.get_stream(live, True).queue
+    ] == list(range(4))
+    if not report_disconnect:
+        for _ in range(3):
+            host.ut_rx(
+                hci.HCI_Number_Of_Completed_Packets_Event,
+                connection_handles=[retired],
+                num_completed_packets=[1],
+            )
+    host.ut_rx_q_is_empty()
+    host.cmd(hci.HCI_LE_Remove_ISO_Data_Path_Command(retired, 1))
+
+
 @pytest.mark.parametrize('directions', [(0,), (1,), (0, 1)])
 def test_cis_removes_only_configured_iso_data_paths(host, directions):
     """Every requested direction needs a data path (Core Vol 4, E, 7.8.110).
@@ -368,26 +672,8 @@ def test_cis_removes_only_configured_iso_data_paths(host, directions):
         - Requests that include an unset path return Command Disallowed.
         - A failed request leaves configured paths available for removal.
     """
-    tx, rx = (32 if direction in directions else 0 for direction in (0, 1))
-    (handle,) = host.cmd(
-        hci.HCI_LE_Set_CIG_Parameters_Command(
-            cig_id=1,
-            sdu_interval_c_to_p=10_000,
-            sdu_interval_p_to_c=10_000,
-            worst_case_sca=0,
-            packing=0,
-            framing=0,
-            max_transport_latency_c_to_p=40,
-            max_transport_latency_p_to_c=40,
-            cis_id=[1],
-            max_sdu_c_to_p=[tx],
-            max_sdu_p_to_c=[rx],
-            phy_c_to_p=[1],
-            phy_p_to_c=[1],
-            rtn_c_to_p=[0],
-            rtn_p_to_c=[0],
-        )
-    ).connection_handle
+    sizes = tuple(32 if direction in directions else 0 for direction in (0, 1))
+    (handle,) = configure_cig(host, sizes)
     configured = directions[0]
     setup_path(host, handle, configured)
     for mask in (1 << (1 - configured), 3):
@@ -676,6 +962,51 @@ def test_receiver_inherits_periodic_sca_and_tracks_clock_drift(host):
     host.ut_rx(hci.HCI_IsoDataPacket, iso_sdu_fragment=b'drift', packet_status_flag=0)
     group = host.link.roles.broadcast.groups[0]
     assert group.sca == 0 and group.last_rx_us == 1010400
+
+
+@pytest.mark.parametrize('drift_us', [-60, 60], ids=['early', 'late'])
+@pytest.mark.parametrize('change_sca', [False, True], ids=['50ppm', '500ppm'])
+def test_bis_receive_window_follows_local_sleep_clock(host, drift_us, change_sca):
+    """Use the current local SCA for the first BIS subevent (Core Vol 6, B, 4.2.4).
+
+    Steps:
+        Synchronize with a 50-ppm broadcaster. Optionally change the local SCA
+        to 500 ppm via HCI, then place the next packet 60 us off its 100-ms anchor.
+
+    Expected:
+        With two 50-ppm clocks the packet falls outside the window. At 500 ppm
+        the receiver delivers its SDU and synchronizes to its actual start time.
+    """
+    info = bis_info(offset_us=9990, iso_interval=80, sdu_interval_us=100_000)
+    receiver(host, info, timeout=100)
+    host.link.syncs[3].info = SyncInfo(
+        9990, 80, info.channel_map, 0x9A328370, 0x123456, 0, sca=LL_SCA_50_PPM
+    )
+    receive_packet(host, info, 0, b'first')
+    advance(host, 17_000)
+    handle = host.ut_rx(
+        hci.HCI_LE_BIG_Sync_Established_Event, status=0
+    ).connection_handle[0]
+    setup_path(host, handle, 1)
+    if change_sca:
+        host.cmd(hci.HCI_LE_Modify_Sleep_Clock_Accuracy_Command(1))
+    receive_packet(host, info, 1, b'edge', drift_us=drift_us)
+    advance(host, 117_000)
+    group = host.link.roles.broadcast.groups[0]
+    if change_sca:
+        host.ut_rx(
+            hci.HCI_IsoDataPacket,
+            connection_handle=handle,
+            iso_sdu_fragment=b'edge',
+            packet_status_flag=0,
+        )
+        assert group.last_rx_us == 110_000 + drift_us
+    else:
+        host.ut_rx(
+            hci.HCI_IsoDataPacket, connection_handle=handle, packet_status_flag=2
+        )
+        assert group.last_rx_us == 10_000
+    host.ut_rx_q_is_empty()
 
 
 def test_receiver_wrong_broadcast_code_is_a_mic_failure(host):

@@ -126,6 +126,118 @@ def test_unknown_opcode_with_registered_class_is_still_unknown(host):
     host.cmd(hci.HCI_LE_Rand_Command(), ErrorCode.UNKNOWN_HCI_COMMAND_ERROR)
 
 
+@pytest.mark.parametrize(
+    'opcode,parameters',
+    [
+        (hci.HCI_RESET_COMMAND, b'\x01'),
+        (hci.HCI_SET_EVENT_MASK_COMMAND, bytes(7)),
+        (hci.HCI_SET_EVENT_MASK_COMMAND, bytes(9)),
+        (hci.HCI_LE_SET_ADVERTISING_DATA_COMMAND, b'\x01x'),
+        (hci.HCI_LE_SET_SCAN_RESPONSE_DATA_COMMAND, b'\x20' + bytes(31)),
+        (hci.HCI_LE_SET_EXTENDED_ADVERTISING_DATA_COMMAND, b'\x00\x03\x00\x03ab'),
+        (hci.HCI_LE_SET_EXTENDED_ADVERTISING_ENABLE_COMMAND, b'\x01\x02' + bytes(4)),
+        (hci.HCI_LE_SET_EXTENDED_SCAN_PARAMETERS_COMMAND, b'\x00\x00\x01' + bytes(6)),
+        (hci.HCI_LE_SET_PERIODIC_ADVERTISING_SUBEVENT_DATA_COMMAND, b'\x08\x01'),
+        (hci.HCI_LE_SET_PERIODIC_ADVERTISING_RESPONSE_DATA_COMMAND, b'\x34\x02'),
+        (hci.HCI_LE_SET_PERIODIC_SYNC_SUBEVENT_COMMAND, b'\x34\x02\x00\x00\x02\x01'),
+    ],
+)
+def test_invalid_command_parameter_length_returns_command_complete(
+    host, opcode, parameters
+):
+    """A complete H4 command with invalid parameters fails before execution (4.5.1).
+
+    Steps:
+        1. Send a synchronous command with a missing or extra field, an invalid
+           length prefix, or a record count that disagrees with its payload.
+        2. Issue Read BD_ADDR on the same transport.
+
+    Expected:
+        - One Command Complete returns 0x12 for the submitted opcode.
+        - The event mask and advertising command family retain their initial values.
+          The subsequent read succeeds.
+    """
+    host.cmd(
+        hci.HCI_Command(parameters, op_code=opcode),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    assert host.controller.event_mask == ALL
+    assert host.controller.le_procedures.extended_commands is None
+    assert host.cmd(hci.HCI_Read_BD_ADDR_Command()).bd_addr == IUT_ADDRESS
+    host.ut_rx_q_is_empty()
+
+
+@pytest.mark.parametrize(
+    'opcode,identifier',
+    [
+        (hci.HCI_LE_SET_DATA_LENGTH_COMMAND, b'\x34\x02'),
+        (hci.HCI_LE_SET_PERIODIC_ADVERTISING_SUBEVENT_DATA_COMMAND, b'\x08'),
+        (hci.HCI_LE_SET_PERIODIC_SYNC_SUBEVENT_COMMAND, b'\x34\x02'),
+    ],
+)
+def test_invalid_command_echoes_the_supplied_handle(host, opcode, identifier):
+    """Command Complete carries the supplied handle after Status (4.5.1).
+
+    Steps:
+        1. Supply only the connection, advertising or sync handle of the command.
+
+    Expected:
+        - Status is 0x12 and the handle octets match the command on the wire.
+    """
+    result = host.cmd(
+        hci.HCI_Command(identifier, op_code=opcode),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    assert result.wire[7 : 7 + len(identifier)] == identifier
+
+
+@pytest.mark.parametrize(
+    'opcode,parameters',
+    [
+        (hci.HCI_DISCONNECT_COMMAND, b'\x01'),
+        (hci.HCI_LE_CREATE_CIS_COMMAND, b'\x02' + bytes(4)),
+        (hci.HCI_LE_EXTENDED_CREATE_CONNECTION_COMMAND, bytes(9) + b'\x01' + bytes(15)),
+        (
+            hci.HCI_LE_EXTENDED_CREATE_CONNECTION_V2_COMMAND,
+            bytes(11) + b'\x01' + bytes(17),
+        ),
+    ],
+)
+def test_invalid_async_command_only_returns_command_status(host, opcode, parameters):
+    """An asynchronous command rejected at dispatch has no completion event (4.5.1).
+
+    Steps:
+        1. Send an incomplete Disconnect, CIS array, or Extended Create
+           Connection PHY record within a complete H4 frame.
+
+    Expected:
+        - Command Status returns 0x12. No initiation starts or further event arrives.
+    """
+    reply = host.cmd_status(
+        hci.HCI_Command(parameters, op_code=opcode),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    assert reply.num_hci_command_packets == 1
+    assert host.link.initiating is None
+    host.ut_rx_q_is_empty()
+
+
+def test_legacy_advertising_data_ignores_unused_padding(host):
+    """Only the declared octets of a padded legacy field reach the advertiser.
+
+    Steps:
+        1. Send two octets of advertising data with nonzero unused padding.
+
+    Expected:
+        - The Controller stores the two declared octets.
+    """
+    parameters = b'\x02ab' + b'\xff' * 29
+    host.cmd(
+        hci.HCI_Command(parameters, op_code=hci.HCI_LE_SET_ADVERTISING_DATA_COMMAND)
+    )
+    assert host.controller.le_legacy_advertiser.advertising_data == b'ab'
+
+
 def test_frame_length_mismatch_is_rejected(host):
     """A command whose H4 length disagrees with its body is rejected.
 
@@ -133,16 +245,22 @@ def test_frame_length_mismatch_is_rejected(host):
     declared parameter length does not match the payload, emitting no event.
 
     Steps:
-        1. Build an Inquiry command and corrupt its length octet.
-        2. Feed it directly to ``on_packet``.
+        1. Corrupt the length octet of supported synchronous and asynchronous
+           commands, and of an unsupported command.
+        2. Feed each frame directly to ``on_packet``.
 
     Expected:
         - ``InvalidPacketError`` is raised and the Host queue stays empty.
     """
-    packet = bytearray(bytes(hci.HCI_Command(b'', op_code=INQUIRY)))
-    packet[3] = 1
-    with pytest.raises(InvalidPacketError):
-        host.controller.on_packet(bytes(packet))
+    for opcode in (
+        hci.HCI_RESET_COMMAND,
+        hci.HCI_LE_READ_LOCAL_P_256_PUBLIC_KEY_COMMAND,
+        INQUIRY,
+    ):
+        packet = bytearray(bytes(hci.HCI_Command(b'', op_code=opcode)))
+        packet[3] = 1
+        with pytest.raises(InvalidPacketError):
+            host.controller.on_packet(bytes(packet))
     host.ut_rx_q_is_empty()
 
 
@@ -264,21 +382,69 @@ def test_read_supported_commands_matches_dispatch(host):
 
     Steps:
         1. Read the supported-commands mask.
-        2. Check each supported opcode's bit and one unsupported opcode's bit.
+        2. Resolve the command class, handler and mask bit for each supported
+           opcode. Inspect one unsupported opcode's bit.
 
     Expected:
-        - Every supported opcode with a defined mask bit is set; the LE CS
-          Read Local Supported Capabilities bit is clear.
+        - Each supported opcode has a decoder and a dedicated handler. Its defined
+          mask bit is set. The LE CS Read Local Supported Capabilities bit is clear.
     """
     result = host.cmd(hci.HCI_Read_Local_Supported_Commands_Command())
     mask = int.from_bytes(result.supported_commands, 'little')
     for opcode in host.controller.supported_commands:
-        bit = hci.HCI_SUPPORTED_COMMANDS_MASKS.get(opcode, 0)
-        assert not bit or mask & bit, hex(opcode)
+        command = hci.HCI_Command.command_classes[opcode]
+        name = f'on_{command.name.lower()}'
+        handler = getattr(
+            host.controller.le_procedures, name, getattr(host.controller, name, None)
+        )
+        assert callable(handler), name
+        # Read Local Supported Commands itself has no bit in Section 6.27.
+        if opcode != hci.HCI_READ_LOCAL_SUPPORTED_COMMANDS_COMMAND:
+            assert mask & hci.HCI_SUPPORTED_COMMANDS_MASKS[opcode], hex(opcode)
     unsupported = hci.HCI_SUPPORTED_COMMANDS_MASKS[
         hci.HCI_LE_CS_READ_LOCAL_SUPPORTED_CAPABILITIES_COMMAND
     ]
     assert not mask & unsupported
+
+
+def test_le_features_advertise_their_required_commands(host):
+    """Implemented LE features advertise their commands (Vol 4, Part E, 3 and 6.27).
+
+    Steps:
+        1. Read All Local Supported Features and Read Local Supported Commands.
+        2. Check the feature bit and the corresponding command bits assigned by Core.
+
+    Expected:
+        - Both CIS roles, Path Loss Monitoring, Subrating, Monitoring Advertisers
+          and Frame Space Update advertise their feature-specific commands.
+    """
+    features = int.from_bytes(
+        host.cmd(hci.HCI_LE_Read_All_Local_Supported_Features_Command()).le_features,
+        'little',
+    )
+    commands = host.cmd(
+        hci.HCI_Read_Local_Supported_Commands_Command()
+    ).supported_commands
+    # Command bits (octet, mask) for each Core condition in Section 6.27.
+    required = {
+        hci.LeFeature.CONNECTED_ISOCHRONOUS_STREAM_CENTRAL: (
+            (41, 0x80),
+            (42, 0x07),
+        ),  # C.39
+        hci.LeFeature.CONNECTED_ISOCHRONOUS_STREAM_PERIPHERAL: ((42, 0x18),),  # C.40
+        hci.LeFeature.LE_PATH_LOSS_MONITORING: ((44, 0x60),),  # C.52
+        hci.LeFeature.CONNECTION_SUBRATING: ((46, 0x03),),  # C.57
+        hci.LeFeature.MONITORING_ADVERTISERS: (
+            (28, 0x80),
+            (47, 0xE0),
+            (48, 0x01),
+        ),  # C.78
+        hci.LeFeature.FRAME_SPACE_UPDATE: ((48, 0x02),),  # C.79
+    }
+    for feature, fields in required.items():
+        assert features & (1 << feature), feature.name
+        for octet, mask in fields:
+            assert commands[octet] & mask == mask, (feature.name, octet)
 
 
 def test_read_local_supported_features_is_le_only(host):

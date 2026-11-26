@@ -671,8 +671,8 @@ class LeConnectionCommands(LeControllerContext):
         ):
             logger.warning('Invalid ACL handle or flags')
             return
-        if len(packet.data) > self.controller.config.acl_packet_length:
-            raise ValueError('ACL payload exceeds the HCI buffer')
+        if not self.acl_buffers.acquire(packet.connection_handle, len(packet.data)):
+            return
         self.ll.send_acl(
             packet.connection_handle,
             packet.pb_flag == hci.HCI_ACL_PB_CONTINUATION,

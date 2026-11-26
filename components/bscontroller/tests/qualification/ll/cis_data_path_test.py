@@ -15,7 +15,12 @@ from tests.qualification.cases import (
     verify_case,
 )
 from tests.qualification.cis import disconnect_cis, establish_peer_cis
-from tests.qualification.iso import data_path, iso_packet
+from tests.qualification.iso import (
+    data_path,
+    expect_iso_credits,
+    iso_packet,
+    send_iso_sdu,
+)
 
 MAX_PDU = 251
 NESN = 0x04
@@ -74,13 +79,14 @@ async def send_unidirectional(tester, *, central):
 
     Expected Outcome:
         The Lower Tester receives identical data with LLID=0, NPI=0 and
-        correct sequence bits and length. The Host receives a completed
-        packet credit for the CIS handle.
+        correct sequence bits and length. The Host receives one credit for
+        each HCI ISO packet it submitted on the CIS handle.
 
     Reference:
         LL.TS.p28, 4.10.5.10, LL/CIS/CEN/BV-45-C and LL/CIS/PER/BV-33-C,
         Tables 4.10-60 to 4.10-62.
     """
+    buffers = await tester.command(hci.HCI_LE_Read_Buffer_Size_V2_Command())
     _, air, event = await establish_peer_cis(
         tester,
         central=central,
@@ -91,7 +97,7 @@ async def send_unidirectional(tester, *, central):
     handle = event.connection_handle
     await data_path(tester, handle, 0)
     payload = bytes(range(MAX_PDU))
-    tester.send(bytes(iso_packet(handle, 0, payload)))
+    pending = await send_iso_sdu(tester, handle, 0, payload, buffers)
     parity = air.counter & 1
     if central:
 
@@ -102,10 +108,7 @@ async def send_unidirectional(tester, *, central):
     pdu = (await air.exchange(header=header)).pdu
     assert pdu[0] & (0x03 | NPI | SN | NESN) == parity * SN
     assert pdu[1] == len(payload) and pdu[2:] == payload
-    credit = await tester.event(hci.HCI_Number_Of_Completed_Packets_Event)
-    assert dict(zip(credit.connection_handles, credit.num_completed_packets)) == {
-        handle: 1
-    }
+    await expect_iso_credits(tester, handle, pending)
 
 
 async def receive_unidirectional(tester, *, central):

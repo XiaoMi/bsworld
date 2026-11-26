@@ -100,7 +100,7 @@ class Connection:
         self.termination_status = ErrorCode.CONNECTION_TERMINATED_BY_LOCAL_HOST_ERROR
         self.closed: bool = False
         self.advertising_handle: int | None = None
-        self.advertising_events = 0
+        self.advertising_events: int | None = None
         # The PAwR train the connection came from: the local set for a Central,
         # the synchronized train for a Peripheral (Vol 4, Part E, 7.7.65.10).
         self.pawr_advertising_handle: int | None = None

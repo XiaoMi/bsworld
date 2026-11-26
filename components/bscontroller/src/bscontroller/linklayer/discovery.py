@@ -64,6 +64,7 @@ class Advertising:
     data: bytearray = field(default_factory=bytearray)
     scan_response: bytearray = field(default_factory=bytearray)
     enabled: bool = False
+    enable_count: int = field(default=0, init=False)
     next_us: int = 0
     extended: bool = False
     sid: int = 0

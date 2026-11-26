@@ -34,7 +34,7 @@ from tests.qualification.cis import (
     enable_cis,
     establish_peer_cis,
 )
-from tests.qualification.iso import data_path, iso_packet
+from tests.qualification.iso import data_path, expect_iso_credits, send_iso_sdu
 from tests.qualification.link import _EncryptedPeer, start_encryption
 from tests.qualification.peer import (
     PEER_FEATURES,
@@ -865,7 +865,7 @@ async def remote_feature_not_supported(tester, *, central, phy, spacing):
     await link.disconnect()
 
 
-async def verify_cis_spacing(air, handle, mss_us):
+async def verify_cis_spacing(air, handle, mss_us, buffers):
     """Exchange full data PDUs to exercise the negotiated RF timing."""
     tester = air.link.tester
     # LE 1M airtime for 251 data octets, MIC and packet overhead in each direction.
@@ -876,7 +876,7 @@ async def verify_cis_spacing(air, handle, mss_us):
         sequence = air.counter
         tx = bytes([((sequence & 0x7F) << 1) | 1]) * 251
         rx = bytes([(sequence & 0x7F) << 1]) * 251
-        tester.send(bytes(iso_packet(handle, sequence & 0xFFFF, tx)))
+        pending = await send_iso_sdu(tester, handle, sequence & 0xFFFF, tx, buffers)
         packet = await air.exchange(rx, header=(sequence & 1) << 3)
         assert packet.pdu[2:] == tx
         # A subsequent subevent acknowledges the received SDU.
@@ -884,6 +884,7 @@ async def verify_cis_spacing(air, handle, mss_us):
         assert bool(packet.pdu[0] & 0x04) != bool(sequence & 1)
         while air.subevent:
             await air.exchange()
+        await expect_iso_credits(tester, handle, pending)
 
 
 async def connect_fsu_cis(tester, *, central, interval):
@@ -922,6 +923,7 @@ async def cis_frame_space(tester, *, central, local):
     Reference:
         LL.TS.p28, 4.4.5.1–2, Tables 4.4-26 through 4.4-29, Figures 4.4-45–46.
     """
+    buffers = await tester.command(hci.HCI_LE_Read_Buffer_Size_V2_Command())
     interval_us = 100000
     link = await connect_fsu_cis(tester, central=central, interval=80)
     phys = phy_bit(Phy.LE_1M)
@@ -943,7 +945,7 @@ async def cis_frame_space(tester, *, central, local):
         return air, handle
 
     air, handle = await create(0x7654BA98)
-    await verify_cis_spacing(air, handle, mss_us)
+    await verify_cis_spacing(air, handle, mss_us, buffers)
     for spacing, minimum, maximum, address in (
         (CIS_IFS, FRAME_SPACE_MIN_US, ifs_us, 0x2265B1F5),
         (CIS_MSS, FRAME_SPACE_MIN_US, mss_us, 0x91B7584A),
@@ -954,7 +956,7 @@ async def cis_frame_space(tester, *, central, local):
             selected = minimum
         else:
             selected = await respond(link, minimum, maximum, phys, spacing)
-        await verify_cis_spacing(air, handle, mss_us)
+        await verify_cis_spacing(air, handle, mss_us, buffers)
         await disconnect_cis(tester, link, handle)
         if central:
             await tester.command(hci.HCI_LE_Remove_CIG_Command(1))
@@ -963,7 +965,7 @@ async def cis_frame_space(tester, *, central, local):
         if spacing & CIS_MSS:
             mss_us = selected
         air, handle = await create(address)
-        await verify_cis_spacing(air, handle, mss_us)
+        await verify_cis_spacing(air, handle, mss_us, buffers)
     await disconnect_cis(tester, link, handle)
     await link.disconnect()
 
@@ -988,6 +990,7 @@ async def cis_creation_collision(tester):
     Reference:
         LL.TS.p28, 4.4.3.6, LL/TIM/PER/BV-28-C, Figure 4.4-19.
     """
+    buffers = await tester.command(hci.HCI_LE_Read_Buffer_Size_V2_Command())
     link = await connect_fsu_cis(tester, central=False, interval=32)
     await check_timing(link)
     phys = phy_bit(Phy.LE_1M)
@@ -1014,7 +1017,7 @@ async def cis_creation_collision(tester):
     handle = established.connection_handle
     await data_path(tester, handle, 0)
     await data_path(tester, handle, 1)
-    await verify_cis_spacing(air, handle, LL_IFS_US)
+    await verify_cis_spacing(air, handle, LL_IFS_US, buffers)
     await disconnect_cis(tester, link, handle)
     await link.disconnect()
 

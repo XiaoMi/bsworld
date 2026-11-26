@@ -336,6 +336,212 @@ def test_legacy_pdus_through_extended_commands(iut, properties, pdu_type):
     assert packets[0].pdu[8:] == b'legacy'
 
 
+@pytest.mark.parametrize('notify', [0, 1])
+@pytest.mark.parametrize(
+    'properties,pdu_type',
+    [
+        (Properties.USE_LEGACY_ADVERTISING_PDUS | SCANNABLE, PduType.ADV_SCAN_IND),
+        (
+            Properties.USE_LEGACY_ADVERTISING_PDUS | SCANNABLE | CONNECTABLE,
+            PduType.ADV_IND,
+        ),
+    ],
+)
+def test_legacy_pdu_scan_request_notification(iut, properties, pdu_type, notify):
+    """A legacy-PDU extended set reports SCAN_REQ when notifications are enabled.
+
+    Purpose: Verify that an extended set using legacy PDUs answers SCAN_REQ with
+    SCAN_RSP and raises a Scan Request Received event only when notifications
+    are enabled, as for AUX_SCAN_REQ (Vol 4, Part E, 7.7.65.19; Vol 6, Part B,
+    4.4.2.3).
+
+    Steps:
+        1. Upper Tester configures the scannable legacy-PDU set with scan-response
+           data and the parametrized notification setting.
+        2. Upper Tester enables advertising.
+        3. Lower Tester scripts a SCAN_REQ on channel 37.
+        4. Run one event and read all transmissions.
+
+    Expected:
+        - Channel 37 carries the legacy PDU, then SCAN_RSP one T_IFS after the
+          request with the IUT address and "response".
+        - A Scan Request Received event is raised iff notifications are enabled.
+        - Nothing else reaches the Host.
+
+    Parameters range over ADV_SCAN_IND and ADV_IND, each with notifications
+    disabled and enabled.
+    """
+    configure_extended(
+        iut,
+        properties,
+        scan_response=b'response',
+        scan_request_notification_enable=notify,
+    )
+    enable_extended(iut)
+    iut.lt_tx(scan_req(), channel=37)
+    packets = one_event(iut)
+    assert [packet.kind for packet in packets] == [
+        pdu_type,
+        PduType.SCAN_RSP,
+        pdu_type,
+        pdu_type,
+    ]
+    response = packets[1]
+    request = iut.radio.delivered[0]
+    assert response.channel == 37
+    assert response.start_us == request.end_us + LL_IFS_US
+    assert response.pdu[2:8] == bytes(IUT_ADDRESS)
+    assert response.pdu[8:] == b'response'
+    if notify:
+        iut.ut_rx(
+            hci.HCI_LE_Scan_Request_Received_Event,
+            advertising_handle=0,
+            scanner_address=PEER,
+        )
+    iut.ut_rx_q_is_empty()
+
+
+@pytest.mark.parametrize('legacy', [True, False], ids=['legacy', 'extended'])
+@pytest.mark.parametrize('action', ['disable', 'restart', 'reuse-handle', 'reset'])
+def test_scan_request_for_a_released_advertising_set(iut, legacy, action):
+    """An outstanding scan request belongs to the advertising event that opened RX.
+
+    Purpose: Verify the lifetime of SCAN_REQ and AUX_SCAN_REQ notifications across
+    advertising disable and Controller reset (Vol 4, Part E, 7.3.2, 7.8.56, 7.7.65.19).
+
+    Steps:
+        1. Enable a scannable set with notifications and pause its request RX.
+        2. Disable or restart the set, replace it at the same handle,
+           or reset the Controller and recreate the set with notifications enabled.
+        3. Give the new enable a one-event limit and deliver both the old request
+           and a fresh one, enabling the set first if it was left disabled.
+
+    Expected:
+        - The old event produces no further transmission or Host notification.
+        - The fresh request receives the new scan-response data and one Host
+          notification for handle 0. Termination counts one completed event.
+    """
+    properties = (
+        SCANNABLE | Properties.USE_LEGACY_ADVERTISING_PDUS if legacy else SCANNABLE
+    )
+    configure_extended(
+        iut, properties, scan_response=b'old', scan_request_notification_enable=1
+    )
+    enable_extended(iut)
+    iut.lt_tx(scan_req())
+    event = iut.link.advance_to_us(iut.now_us + 1)
+    with iut.pause_radio(event, 'receive'):
+        assert iut.lt_rx_all()
+        if action == 'reset':
+            iut.ut(hci.HCI_Reset_Command())
+            iut.ut(hci.HCI_Set_Event_Mask_Command(b'\xff' * 8))
+            iut.ut(hci.HCI_LE_Set_Event_Mask_Command(b'\xff' * 8))
+        else:
+            enable_extended(iut, on=0)
+            if action == 'reuse-handle':
+                iut.ut(hci.HCI_LE_Remove_Advertising_Set_Command(0))
+        if action in ('reuse-handle', 'reset'):
+            iut.ut(
+                extended_parameters(
+                    properties=properties, scan_request_notification_enable=1
+                )
+            )
+        iut.ut(
+            hci.HCI_LE_Set_Extended_Scan_Response_Data_Command(
+                0, Operation.COMPLETE_DATA, 0, b'new'
+            )
+        )
+        if action != 'disable':
+            enable_extended(iut, max_events=1)
+    iut.lt_script_is_consumed()
+    iut.lt_rx_q_is_empty()
+    iut.ut_rx_q_is_empty()
+
+    if action == 'disable':
+        enable_extended(iut, max_events=1)
+    iut.lt_tx(scan_req())
+    packets = one_event(iut)
+    if legacy:
+        (response,) = [packet for packet in packets if packet.kind == PduType.SCAN_RSP]
+        assert response.pdu[8:] == b'new'
+    else:
+        _, auxiliary = split_primary_auxiliary(packets)
+        advertisement, response = auxiliary
+        assert advertisement.ext.mode == AdvertisingMode.SCANNABLE
+        assert response.ext.data == b'new'
+    iut.ut_rx(
+        hci.HCI_LE_Scan_Request_Received_Event,
+        advertising_handle=0,
+        scanner_address=PEER,
+    )
+    iut.run(1)
+    iut.ut_rx(
+        TERMINATED,
+        status=ErrorCode.LIMIT_REACHED_ERROR,
+        advertising_handle=0,
+        num_completed_extended_advertising_events=1,
+    )
+    iut.ut_rx_q_is_empty()
+
+
+@pytest.mark.parametrize('legacy', [True, False], ids=['legacy', 'extended'])
+def test_reenable_preserves_scan_exchange_and_starts_new_event_count(iut, legacy):
+    """An in-flight scan exchange keeps its address across a repeated enable.
+
+    Steps:
+        1. Open a scannable event using a random address.
+        2. While waiting for the scan request, change the address and re-enable
+           with a one-event limit (Vol 4, Part E, 7.8.52 and 7.8.56).
+        3. Send one request to each address in its respective event.
+
+    Expected:
+        Both requests receive a response from the address they saw. The new
+        enable keeps its anchor and counts only the event using the new address.
+    """
+    old, new = hci.Address('C2:00:00:00:00:01'), OTHER
+    properties = SCANNABLE | (Properties.USE_LEGACY_ADVERTISING_PDUS if legacy else 0)
+    configure_extended(
+        iut,
+        properties,
+        scan_response=b'rsp',
+        own_address_type=hci.OwnAddressType.RANDOM,
+        scan_request_notification_enable=1,
+    )
+    iut.ut(hci.HCI_LE_Set_Advertising_Set_Random_Address_Command(0, old))
+    enable_extended(iut)
+    iut.lt_tx(scan_req(advertiser=old))
+    with iut.pause_radio(iut.link.advance_to_us(iut.now_us + 1), 'receive'):
+        iut.ut(hci.HCI_LE_Set_Advertising_Set_Random_Address_Command(0, new))
+        enable_extended(iut, max_events=1)
+        anchor = iut.link.advertisers[0].next_us
+        random_state = iut.link.random.getstate()
+    assert iut.link.advertisers[0].next_us == anchor
+    assert iut.link.random.getstate() == random_state
+    for address in (old, new):
+        if address == new:
+            iut.lt_tx(scan_req(advertiser=new))
+            iut.run(1)
+        packets = iut.lt_rx_all()
+        if legacy:
+            (response,) = [
+                packet for packet in packets if packet.kind == PduType.SCAN_RSP
+            ]
+            assert response.pdu[2:] == bytes(address) + b'rsp'
+        else:
+            _, (_, response) = split_primary_auxiliary(packets)
+            assert (
+                response.ext.address == bytes(address) and response.ext.data == b'rsp'
+            )
+        iut.ut_rx(hci.HCI_LE_Scan_Request_Received_Event, scanner_address=PEER)
+    iut.run(1)
+    iut.ut_rx(
+        TERMINATED,
+        status=ErrorCode.LIMIT_REACHED_ERROR,
+        num_completed_extended_advertising_events=1,
+    )
+    iut.ut_rx_q_is_empty()
+
+
 # ---------------------------------------------------------------------------
 # Scannable (4.4.2.5.2): AUX_SCAN_REQ / AUX_SCAN_RSP
 # ---------------------------------------------------------------------------
@@ -389,6 +595,60 @@ def test_aux_scan_request_answered_with_scan_response(iut, notify):
             scanner_address=PEER,
         )
     iut.ut_rx_q_is_empty()
+
+
+def test_disabling_during_scan_response_stops_the_auxiliary_chain(iut, monkeypatch):
+    """Disabling a set lets its in-flight PDU finish and cancels the remaining chain.
+
+    Purpose: Verify that an extended scan response stops at the next PDU boundary
+    when the Host disables the set (Vol 4, Part E, 7.8.56).
+
+    Steps:
+        1. Enable a scannable set with a 300-byte scan response and notifications.
+        2. Send an AUX_SCAN_REQ and disable the set as its first response PDU
+           finishes transmitting.
+
+    Expected:
+        - The Host receives the scan request notification and successful command
+          completion. The response carries an AuxPtr and no continuation is sent.
+    """
+    configure_extended(iut, SCANNABLE, scan_request_notification_enable=1)
+    set_data = hci.HCI_LE_Set_Extended_Scan_Response_Data_Command
+    iut.ut(set_data(0, Operation.FIRST_FRAGMENT, 0, b'a' * 150))
+    iut.ut(set_data(0, Operation.LAST_FRAGMENT, 0, b'b' * 150))
+    enable_extended(iut)
+    transmit = iut.radio.transmit
+
+    async def disable_after_response(*args, **kwargs):
+        end = await transmit(*args, **kwargs)
+        packet = iut.radio.sent[-1]
+        if (
+            packet.channel not in (37, 38, 39)
+            and packet.ext.data
+            and packet.ext.aux_ptr
+        ):
+            iut.controller.on_packet(
+                bytes(
+                    hci.HCI_LE_Set_Extended_Advertising_Enable_Command(0, [0], [0], [0])
+                )
+            )
+        return end
+
+    monkeypatch.setattr(iut.radio, 'transmit', disable_after_response)
+    iut.lt_tx(scan_req())
+    _, auxiliary = split_primary_auxiliary(one_event(iut))
+    advertisement, response = auxiliary
+    assert advertisement.ext.mode == AdvertisingMode.SCANNABLE
+    assert response.ext.aux_ptr is not None
+    assert (b'a' * 150 + b'b' * 150).startswith(response.ext.data)
+    iut.ut_rx(
+        hci.HCI_LE_Scan_Request_Received_Event,
+        advertising_handle=0,
+        scanner_address=PEER,
+    )
+    (complete,) = iut.events
+    assert isinstance(complete, hci.HCI_Command_Complete_Event)
+    assert complete.return_parameters.status == ErrorCode.SUCCESS
 
 
 def test_aux_scan_request_for_other_advertiser_is_ignored(iut):
@@ -527,6 +787,73 @@ def test_aux_connect_request_creates_connection(iut, secondary_phy):
     (connection,) = iut.link.connections.values()
     assert connection.tx_phy == connection.rx_phy == secondary_phy
     assert connection.parameters.interval == CONNECT_PARAMETERS.interval
+
+
+@pytest.mark.parametrize('phase', ['request-rx', 'response-tx'])
+@pytest.mark.parametrize(
+    'action', ['disable', 'reenable', 'restart', 'reuse-handle', 'reset']
+)
+def test_host_command_during_aux_connection_exchange(iut, phase, action):
+    """An AUX_CONNECT_RSP creates the Peripheral connection (Vol 6, Part B, 4.5).
+
+    Steps:
+        1. Enable connectable advertising and send AUX_CONNECT_REQ.
+        2. While receiving the request or transmitting the response, disable,
+           repeat enable, stop and restart, reuse the handle, or issue HCI Reset.
+
+    Expected:
+        Re-enable preserves the exchange. Stopping the set before the request
+        is accepted suppresses the response. Once transmitting, the response
+        creates a connection unless Reset releases it. The completion cannot
+        terminate a newer enable or a replacement set.
+    """
+    configure_extended(iut, CONNECTABLE, primary_advertising_channel_map=1)
+    enable_extended(iut)
+    iut.lt_tx(connect_ind())
+    method, occurrence = ('receive', 1) if phase == 'request-rx' else ('transmit', 3)
+    with iut.pause_radio(
+        iut.link.advance_to_us(iut.now_us + 1), method, occurrence=occurrence
+    ):
+        if action == 'reset':
+            iut.ut(hci.HCI_Reset_Command())
+            iut.ut(hci.HCI_Set_Event_Mask_Command(b'\xff' * 8))
+            iut.ut(hci.HCI_LE_Set_Event_Mask_Command(b'\xff' * 8))
+        elif action == 'reenable':
+            enable_extended(iut)
+        else:
+            enable_extended(iut, on=0)
+            if action == 'reuse-handle':
+                iut.ut(hci.HCI_LE_Remove_Advertising_Set_Command(0))
+                configure_extended(iut, CONNECTABLE)
+            if action != 'disable':
+                enable_extended(iut)
+
+    responses = [
+        packet for packet in iut.lt_rx_all() if packet.kind == PduType.AUX_CONNECT_RSP
+    ]
+    sent = phase == 'response-tx' or action == 'reenable'
+    assert len(responses) == int(sent)
+    assert bool(iut.link.connections) == (sent and action != 'reset')
+    assert iut.ll.advertising.any_enabled() == (action in ('restart', 'reuse-handle'))
+    if sent:
+        assert responses[0].ext.target == bytes(PEER)
+    if sent and action != 'reset':
+        handle = iut.ut_rx(
+            CONNECTED, status=0, role=hci.Role.PERIPHERAL, peer_address=PEER
+        ).connection_handle
+        assert handle in iut.link.connections
+        iut.ut_rx(
+            hci.HCI_LE_Channel_Selection_Algorithm_Event, connection_handle=handle
+        )
+        if action == 'reenable':
+            iut.ut_rx(
+                TERMINATED,
+                status=0,
+                connection_handle=handle,
+                advertising_handle=0,
+                num_completed_extended_advertising_events=0,
+            )
+    iut.ut_rx_q_is_empty()
 
 
 def test_connectable_data_must_fit_one_pdu(iut):
@@ -812,7 +1139,7 @@ def test_set_capacity(iut):
 
 
 def test_set_random_address(iut):
-    """A per-set random address is advertised and locked while enabled.
+    """A connectable set's random address is advertised and locked while enabled.
 
     Purpose: Verify that Set Advertising Set Random Address applies the address to
     a set's AUX_ADV_IND with the random flag, is disallowed while the set is
@@ -833,7 +1160,9 @@ def test_set_random_address(iut):
           UNKNOWN_ADVERTISING_IDENTIFIER_ERROR.
     """
     random = hci.Address('C2:00:00:00:00:01', hci.AddressType.RANDOM_DEVICE)
-    configure_extended(iut, data=b'r', own_address_type=hci.OwnAddressType.RANDOM)
+    configure_extended(
+        iut, CONNECTABLE, data=b'r', own_address_type=hci.OwnAddressType.RANDOM
+    )
     iut.ut(hci.HCI_LE_Set_Advertising_Set_Random_Address_Command(0, random))
     enable_extended(iut)
     _, (aux,) = split_primary_auxiliary(one_event(iut))

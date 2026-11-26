@@ -137,7 +137,7 @@ class ConnectionSnapshot:
     data_lengths: DataLengths
     reported: bool
     advertising_handle: int | None
-    advertising_events: int
+    advertising_events: int | None
     csa2: bool
     peer_rpa: AddressSnapshot | None = None
     local_rpa: AddressSnapshot | None = None

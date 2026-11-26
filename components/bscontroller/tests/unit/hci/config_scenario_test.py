@@ -13,8 +13,6 @@ covered by ``tests/unit/config_test.py``. Uses the HCI harness in
 ``harness.py`` through the ``configured`` fixture.
 """
 
-import pytest
-
 from bscontroller import hci
 from bscontroller.config import ControllerConfig
 from bscontroller.linklayer import ControlOpcode as Opcode
@@ -89,11 +87,9 @@ def test_le_buffers_report_and_bound_host_acl(configured):
     connection = host.connection()
     host.acl(connection.handle, hci.HCI_ACL_PB_FIRST_NON_FLUSHABLE, bytes(600))
     assert sum(len(item.payload) for item in connection.event.queue) == 600
-    oversized = hci.HCI_AclDataPacket(
-        connection.handle, hci.HCI_ACL_PB_FIRST_NON_FLUSHABLE, 0, 601, bytes(601)
-    )
-    with pytest.raises(ValueError, match='exceeds the HCI buffer'):
-        host.controller.on_hci_acl_data_packet(oversized)
+    host.acl(connection.handle, hci.HCI_ACL_PB_FIRST_NON_FLUSHABLE, bytes(601))
+    assert sum(len(item.payload) for item in connection.event.queue) == 600
+    host.ut_rx_q_is_empty()
 
 
 def test_maximum_data_length_reports_and_caps_negotiation(configured):

@@ -7,16 +7,19 @@ contexts before any upper-layer publication, and HCI only sees detached views.
 LL Control Procedure behaviour is specified by the scenario matrix in llcp/.
 """
 
+import inspect
 import subprocess
 import sys
 from dataclasses import FrozenInstanceError, replace
 from types import SimpleNamespace
+from unittest.mock import create_autospec
 
 import pytest
 
 from bscontroller import hci
 from bscontroller.address import Address
 from bscontroller.errors import ErrorCode
+from bscontroller.hci.events import LeControllerEvents
 from bscontroller.linklayer import roles
 from bscontroller.linklayer.api import (
     AdvertisingConfig,
@@ -24,8 +27,10 @@ from bscontroller.linklayer.api import (
     PeriodicSyncConfig,
 )
 from bscontroller.linklayer.connection import Connection
-from bscontroller.linklayer.discovery import Advertising
+from bscontroller.linklayer.discovery import Advertising, PeriodicSync
 from bscontroller.linklayer.link import RadioLink
+from bscontroller.linklayer.listener import Listener
+from bscontroller.linklayer.notifications import NotificationAdapter, NotificationSink
 from bscontroller.linklayer.service import LinkLayerService
 from bscontroller.linklayer.state import Role
 from tests.unit.helpers import PARAMETERS, FakeRadio
@@ -501,6 +506,52 @@ def test_ll_callback_passes_a_snapshot_without_sharing_connection_state(
     assert len(observed) == 1
     assert isinstance(observed[0], ConnectionSnapshot)
     assert observed[0].peer_features is None
+
+
+def test_notification_contract_reaches_the_hci_receiver(connection):
+    """Every LL callback reaches the corresponding HCI receiver through the adapter.
+
+    Steps:
+        1. Call each Listener method on the real adapter, supplying its declared
+           positional and keyword-only arguments.
+        2. Bind the forwarded call against the sink protocol and the HCI receiver.
+
+    Expected:
+        - Both boundaries accept the call, including conversions of live LL state.
+        - A missing receiver, wrong target, or incompatible signature fails the check.
+    """
+    sink = create_autospec(NotificationSink, instance=True, spec_set=True)
+    adapter = NotificationAdapter(sink)
+    adapter.bind(connection.link)
+    address = connection.peer
+    item = Advertising(address)
+    connection.link.advertisers[0] = item
+    values = dict(
+        connection=connection,
+        item=item,
+        sync=PeriodicSync(address, 1, 10000, 10000),
+        address=address,
+        peer=address,
+        target=address,
+        data=b'abc',
+        responses=[],
+    )
+    names = {name for name in dir(Listener) if name.startswith('on_')}
+    for interface in (NotificationAdapter, NotificationSink, LeControllerEvents):
+        assert {name for name in dir(interface) if name.startswith('on_')} == names
+    for name in sorted(names):
+        declaration = inspect.signature(getattr(Listener, name))
+        for required_only in (True, False):
+            call = declaration.bind_partial(adapter)
+            for param in list(declaration.parameters.values())[1:]:
+                if not required_only or param.default is inspect.Parameter.empty:
+                    call.arguments[param.name] = values.get(param.name, 1)
+            getattr(NotificationAdapter, name)(*call.args, **call.kwargs)
+            (forwarded,) = sink.method_calls
+            assert forwarded[0] == name
+            receiver = inspect.signature(getattr(LeControllerEvents, name))
+            receiver.bind(None, *forwarded.args, **forwarded.kwargs)
+            sink.reset_mock()
 
 
 def test_masked_remote_parameter_request_uses_the_ll_service(connection, monkeypatch):

@@ -359,6 +359,8 @@ class ConnectionEvent:
                 item.payload if item.llid == LlId.CONTROL else None
             ),
         )
+        if self.connection.closed:
+            return False, end_us
         self.control.sent(
             item.payload if item.llid == LlId.CONTROL else None,
             first=not self.sent_pending,
@@ -387,6 +389,8 @@ class ConnectionEvent:
             accept_bad_crc=True,
             phy=self.connection.rx_phy,
         )
+        if self.connection.closed:
+            return None
         if packet is not None:
             self.connection.link.trace(
                 f"LL RX event={self.connection.event_counter} "
@@ -482,6 +486,8 @@ class ConnectionEvent:
     async def _receive_response(
         self, channel: int, end_us: int, deadline_us: int
     ) -> Received | None:
+        if self.connection.closed:
+            return None
         low, high = self.control.rx_spacing_window_us()
         start_us = max(
             self.connection.radio.now_us + 1,
