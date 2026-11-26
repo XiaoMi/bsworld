@@ -97,17 +97,19 @@ class LeControllerProcedures(
         # Drop active LL procedures first, then remove Host-facing views and HCI
         # staging buffers so no record can refer to a pre-reset connection or train.
         self.ll.reset(self.controller.public_address)
+        self.acl_buffers.reset()
+        self.iso_buffers.reset()
+        self.cis_established.clear()
         self.controller.le_connections.clear()
         self.controller.advertising_sets.clear()
         self.fragments.clear()
-        self.seen.clear()
+        self.duplicate_filter = None
         self.extended_scan = False
         # Recreate the record to restore parameters as well as payload/enabled state.
         self.controller.le_legacy_advertiser = LegacyAdvertiser(self.controller)
         self.controller.event_mask = HCI_EVENT_MASK_DEFAULT
         self.controller.event_mask_page_2 = 0
         self.controller.le_event_mask = HCI_LE_EVENT_MASK_DEFAULT
-        self.period_duplicate_reset = False
         self.extended_commands = None
         self._p256_private_key = None
         return hci.HCI_StatusReturnParameters(SUCCESS)

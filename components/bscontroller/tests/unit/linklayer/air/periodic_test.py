@@ -110,23 +110,21 @@ def test_periodic_train_interval_and_csa2_channels(iut):
         assert packet.ext.data == b'periodic' and packet.ext.address is None
 
 
-def test_periodic_chain_for_long_data(iut):
-    """Long periodic data is sent as an AUX_CHAIN_IND sequence.
-
-    Purpose: Verify that periodic data too large for one PDU is transmitted as a
-    chained AUX_SYNC_IND / AUX_CHAIN_IND sequence whose payloads reassemble to the
-    input, with only the last PDU lacking an AuxPtr (Vol 6, Part B, 2.3.4,
-    4.4.2.12).
+@pytest.mark.parametrize('action', ['continue', 'toggle-primary', 'restart-periodic'])
+def test_periodic_chain_for_long_data(iut, action):
+    """Transmit a chained periodic advertisement (Vol 6, Part B, 4.4.2.12).
 
     Steps:
-        1. Configure extended parameters and periodic parameters with interval
-           400.
-        2. Load 500 octets of periodic data in two fragments and enable the train.
-        3. Run one periodic interval and take the train PDUs.
+        1. Load 500 octets in two fragments and enable periodic advertising.
+        2. During the first AUX_SYNC_IND transmission, leave the train running,
+           toggle primary advertising or restart the periodic train on its handle.
+        3. For a restart, wait for the replacement train's first event.
 
     Expected:
-        - The joined train payloads equal the full data.
-        - The first PDU carries an AuxPtr and the last does not.
+        - An uninterrupted train transmits all fragments even when primary
+          advertising changes. Only the last PDU lacks an AuxPtr.
+        - A stopped train sends no further fragment. Its replacement retains
+          its initial anchor and counter and transmits all 500 octets.
     """
     data = bytes(range(250)) * 2
     configure_extended(iut)
@@ -143,10 +141,25 @@ def test_periodic_chain_for_long_data(iut):
     )
     iut.ut(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 0))
     item = iut.link.advertisers[0]
-    iut.run(400 * LL_PERIODIC_INTERVAL_UNIT_US + 10_000)
-    train = trains(iut.lt_rx_all(), item)
+    event = iut.link.advance_to_us(item.periodic_next_us)
+    with iut.pause_radio(event, 'transmit'):
+        if action == 'restart-periodic':
+            iut.ut(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(0, 0))
+            iut.ut(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 0))
+        elif action == 'toggle-primary':
+            enable_extended(iut)
+            enable_extended(iut, on=0)
+        anchor = item.periodic_next_us
+    train = iut.lt_rx_all()
+    if action == 'restart-periodic':
+        assert len(train) == 1 and train[0].ext.aux_ptr is not None
+        assert item.periodic_next_us == anchor
+        assert item.periodic_counter == 0 and item.periodic_last_counter is None
+        iut.run_until(anchor)
+        train = iut.lt_rx_all()
     assert b''.join(packet.ext.data for packet in train) == data
     assert train[0].ext.aux_ptr is not None and train[-1].ext.aux_ptr is None
+    assert item.periodic_counter == 1 and item.periodic_last_counter == 0
 
 
 def test_aux_adv_ind_carries_syncinfo_to_the_train(iut):
@@ -531,6 +544,55 @@ def establish(iut, train, data=b'first', **sync):
         advertiser_address=train.address,
         advertising_sid=train.sid,
     )
+
+
+@pytest.mark.parametrize('occurrence', [1, 2], ids=['primary', 'auxiliary'])
+@pytest.mark.parametrize('restart', ['scan', 'sync'])
+def test_scan_and_sync_have_independent_receive_lifetimes(iut, restart, occurrence):
+    """Receive one advertising event for scanning and periodic sync acquisition.
+
+    Steps:
+        1. Enable extended scanning and request a sync with the same advertiser.
+        2. During primary or auxiliary RX, restart the scan or cancel and reissue
+           Create Sync for the same address and SID.
+        3. Complete the announcement and receive the first periodic PDU.
+
+    Expected:
+        - Only the unchanged role consumes the old announcement. A replacement
+          sync can establish from the next announcement (Vol 4, Part E, 7.8.65, 7.8.67).
+    """
+    iut.ut(
+        hci.HCI_LE_Set_Extended_Scan_Parameters_Command(
+            0, 0, 1, [0], [WINDOW], [WINDOW]
+        )
+    )
+    iut.ut(hci.HCI_LE_Set_Extended_Scan_Enable_Command(1, 0, 0, 0))
+    create_sync(iut)
+    train = Train(iut)
+    train.announce()
+    window = iut.link.roles.scanning.run(iut.link.scan, iut.now_us + WINDOW_US)
+    with iut.pause_radio(window, 'receive', occurrence=occurrence):
+        if restart == 'scan':
+            iut.ut(hci.HCI_LE_Set_Extended_Scan_Enable_Command(1, 0, 0, 0))
+        else:
+            iut.ut(hci.HCI_LE_Periodic_Advertising_Create_Sync_Cancel_Command())
+            create_sync(iut)
+    if restart == 'scan':
+        iut.ut_rx_q_is_empty()
+    else:
+        iut.ut_rx(ESTABLISHED, status=ErrorCode.OPERATION_CANCELLED_BY_HOST_ERROR)
+        iut.ut_rx_report(address=PEER, advertising_sid=train.sid)
+        assert iut.link.sync.info is None
+        train.announce()
+        iut.run(10_000)
+        iut.ut_rx_report(address=PEER, advertising_sid=train.sid)
+    assert iut.link.sync.info is not None
+    train.first_anchor()
+    train.send(b'first')
+    train.run_through()
+    iut.ut_rx(ESTABLISHED, status=0, advertiser_address=PEER)
+    assert drain_periodic(iut) == [b'first']
+    iut.ut_rx_q_is_empty()
 
 
 def test_sync_established_and_reports(iut):

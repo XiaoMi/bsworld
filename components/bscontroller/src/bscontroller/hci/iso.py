@@ -3,6 +3,8 @@
 
 """CIG, BIG and ISO commands and Host data input (Core Vol 4, Part E)."""
 
+import logging
+
 from bscontroller import hci
 from bscontroller.hci.context import SUCCESS, LeControllerContext
 from bscontroller.linklayer.api import (
@@ -12,6 +14,8 @@ from bscontroller.linklayer.api import (
     CigConfig,
     CisConfig,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class LeIsoCommands(LeControllerContext):
@@ -47,6 +51,9 @@ class LeIsoCommands(LeControllerContext):
                 **parameters,
             )
         )
+        if status == SUCCESS:
+            for handle in handles:
+                self.cis_established[handle] = False
         return hci.HCI_LE_Set_CIG_Parameters_ReturnParameters(
             status, command.cig_id, handles
         )
@@ -131,12 +138,18 @@ class LeIsoCommands(LeControllerContext):
                 )
             )
         )
+        if status == SUCCESS:
+            for handle in command.cis_connection_handle:
+                self.cis_established[handle] = False
         self.controller._send_hci_command_status(status, command.op_code)
 
     def on_hci_le_remove_cig_command(self, command):
-        return hci.HCI_LE_Remove_CIG_ReturnParameters(
-            self.ll.cig.remove_cig(command.cig_id), command.cig_id
-        )
+        status = self.ll.cig.remove_cig(command.cig_id)
+        if status == SUCCESS:
+            for handle in tuple(self.cis_established):
+                if not self.ll.cig.contains(handle):
+                    self._release_cis_buffers(handle)
+        return hci.HCI_LE_Remove_CIG_ReturnParameters(status, command.cig_id)
 
     def on_hci_le_accept_cis_request_command(self, command):
         status = self.ll.cig.accept_cis(command.connection_handle)
@@ -144,6 +157,8 @@ class LeIsoCommands(LeControllerContext):
 
     def on_hci_le_reject_cis_request_command(self, command):
         status = self.ll.cig.reject_cis(command.connection_handle, command.reason)
+        if status == SUCCESS:
+            self._release_cis_buffers(command.connection_handle)
         return hci.HCI_StatusAndConnectionHandleReturnParameters(
             status, command.connection_handle
         )
@@ -282,8 +297,20 @@ class LeIsoCommands(LeControllerContext):
         )
 
     def on_iso_packet(self, packet):
+        handle = packet.connection_handle
+        active = self.ll.iso.accepts_data(handle)
+        if not active and handle not in self.cis_established:
+            if not self.ll.cig.contains(handle):
+                logger.warning('No active ISO data handle 0x%04X', handle)
+            return
+        if not self.iso_buffers.acquire(handle, packet.data_total_length):
+            return
+        # The packet is flushed; its credit follows the events visible to the Host.
+        if not active:
+            self.on_iso_completed(handle, 1)
+            return
         self.ll.iso.input(
-            packet.connection_handle,
+            handle,
             packet.iso_sdu_fragment,
             packet.pb_flag,
             packet.packet_sequence_number,

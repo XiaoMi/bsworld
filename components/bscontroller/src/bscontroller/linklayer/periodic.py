@@ -62,19 +62,23 @@ async def periodic_transmit(link: RadioLink, item: Advertising, handle: int) -> 
     ):
         link.roles.advertising.periodic_completed(item, missed=True)
         return
-    await link.extended.transmit_chain(
-        channel,
-        periodic_pdu(item),
-        item.periodic_data,
-        item.periodic_next_us,
-        item.secondary_phy,
-        coding=item.secondary_coding.factor(),
-        access_address=item.periodic_aa,
-        crc_init=item.periodic_crc,
-        power_dbm=item.tx_power_dbm,
-    )
-    item.periodic_last_counter = item.periodic_counter
-    link.roles.advertising.periodic_completed(item)
+    advertising = link.roles.advertising
+    with advertising.transmitting(item, periodic=True):
+        await link.extended.transmit_chain(
+            channel,
+            periodic_pdu(item),
+            item.periodic_data,
+            item.periodic_next_us,
+            item.secondary_phy,
+            coding=item.secondary_coding.factor(),
+            advertising_event=item,
+            access_address=item.periodic_aa,
+            crc_init=item.periodic_crc,
+            power_dbm=item.tx_power_dbm,
+        )
+        if advertising.event_is_current(item):
+            item.periodic_last_counter = item.periodic_counter
+            advertising.periodic_completed(item)
 
 
 async def periodic_receive(link: RadioLink, sync: PeriodicSync) -> None:
@@ -137,6 +141,7 @@ async def periodic_receive(link: RadioLink, sync: PeriodicSync) -> None:
             data, status, _ = await link.extended.collect(
                 packet,
                 ext,
+                is_current=lambda: link.syncs.get(sync.handle) is sync,
                 on_fragment=report_fragment,
                 access_address=info.access_address,
                 crc_init=info.crc_init,

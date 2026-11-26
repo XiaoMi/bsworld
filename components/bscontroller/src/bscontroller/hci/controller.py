@@ -28,12 +28,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import struct
 from typing import TYPE_CHECKING
 
 from bscontroller import hci
 from bscontroller.colors import color
 from bscontroller.config import ControllerConfig
+from bscontroller.errors import InvalidPacketError
 from bscontroller.hci.records import AdvertisingSet, ConnectionRecord, LegacyAdvertiser
 from bscontroller.hci.transport import TransportSink
 from bscontroller.linklayer.features import (
@@ -48,20 +48,6 @@ if TYPE_CHECKING:
     from bscontroller.hci.snoop import BtsnoopWriter
 
 logger = logging.getLogger(__name__)
-
-# Core Vol 4, Part E, 7.8.97–99: offset of CIS_Count and width of a CIS record.
-CIS_COMMAND_ARRAYS = {
-    hci.HCI_LE_SET_CIG_PARAMETERS_COMMAND: (14, 9),
-    hci.HCI_LE_SET_CIG_PARAMETERS_TEST_COMMAND: (14, 14),
-    hci.HCI_LE_CREATE_CIS_COMMAND: (0, 4),
-}
-
-# Core Vol 4, Part E, 7.8.36–37: parameter sizes for the asynchronous P-256 commands.
-P256_COMMAND_SIZES = {
-    hci.HCI_LE_READ_LOCAL_P_256_PUBLIC_KEY_COMMAND: 0,
-    hci.HCI_LE_GENERATE_DHKEY_COMMAND: 64,
-    hci.HCI_LE_GENERATE_DHKEY_V2_COMMAND: 65,
-}
 
 
 class Controller:
@@ -155,48 +141,41 @@ class Controller:
     def on_packet(self, packet: bytes) -> None:
         if self._snoop is not None:
             self._snoop.capture(packet, received=False)
-        if len(packet) >= 4 and packet[0] == hci.HCI_COMMAND_PACKET:
-            opcode, size = struct.unpack_from('<HB', packet, 1)
-            if opcode not in self.supported_commands and len(packet) == size + 4:
-                # An unsupported opcode has no parameter schema at this Controller.
-                command_class = hci.HCI_Command.command_classes.get(
-                    opcode, hci.HCI_Command
-                )
-                generic = (
-                    hci.HCI_AsyncCommand
-                    if issubclass(command_class, hci.HCI_AsyncCommand)
-                    else hci.HCI_Command
-                )
-                self.on_hci_packet(generic(packet[4:], op_code=opcode))
+        if not packet or packet[0] != hci.HCI_COMMAND_PACKET:
+            try:
+                decoded = hci.HCI_Packet.from_bytes(packet)
+            except hci.InvalidIsoDataError as error:
+                logger.warning('Dropping %s', error)
                 return
-            if opcode in P256_COMMAND_SIZES and (
-                size != P256_COMMAND_SIZES[opcode] or len(packet) != size + 4
-            ):
-                self._send_hci_command_status(
-                    hci.HCI_ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR, opcode
+            self.on_hci_packet(decoded)
+            return
+        opcode, parameters = hci.HCI_Command.split_packet(packet)
+        command_class = hci.HCI_Command.command_classes.get(opcode)
+        if command_class is None or opcode not in self.supported_commands:
+            # Unknown commands have no parameter schema at this Controller.
+            generic = (
+                hci.HCI_AsyncCommand
+                if command_class and issubclass(command_class, hci.HCI_AsyncCommand)
+                else hci.HCI_Command
+            )
+            self.on_hci_packet(generic(parameters, op_code=opcode))
+            return
+        try:
+            command = command_class.decode_parameters(parameters)
+        except InvalidPacketError:
+            status = hci.HCI_ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
+            if issubclass(command_class, hci.HCI_AsyncCommand):
+                self._send_hci_command_status(status, opcode)
+            else:
+                self.send_hci_packet(
+                    hci.HCI_Command_Complete_Event(
+                        1,
+                        opcode,
+                        command_class.error_return_parameters(status, parameters),
+                    )
                 )
-                return
-            if opcode in CIS_COMMAND_ARRAYS and len(packet) == size + 4:
-                offset, record_size = CIS_COMMAND_ARRAYS[opcode]
-                if (
-                    size <= offset
-                    or size != offset + 1 + packet[4 + offset] * record_size
-                ):
-                    status = hci.HCI_ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
-                    if opcode == hci.HCI_LE_CREATE_CIS_COMMAND:
-                        self._send_hci_command_status(status, opcode)
-                    else:
-                        self.send_hci_packet(
-                            hci.HCI_Command_Complete_Event(
-                                num_hci_command_packets=1,
-                                command_opcode=opcode,
-                                return_parameters=hci.HCI_StatusReturnParameters(
-                                    status
-                                ),
-                            )
-                        )
-                    return
-        self.on_hci_packet(hci.HCI_Packet.from_bytes(packet))
+            return
+        self.on_hci_packet(command)
 
     def on_hci_packet(self, packet: hci.HCI_Packet) -> None:
         logger.debug(
@@ -242,8 +221,8 @@ class Controller:
                     hci.HCI_ErrorCode.COMMAND_DISALLOWED_ERROR, command.op_code
                 )
                 return
-            result = hci.HCI_StatusReturnParameters(
-                hci.HCI_ErrorCode.COMMAND_DISALLOWED_ERROR
+            result = command.error_return_parameters(
+                hci.HCI_ErrorCode.COMMAND_DISALLOWED_ERROR, command.parameters
             )
         else:
             result = handler(command)

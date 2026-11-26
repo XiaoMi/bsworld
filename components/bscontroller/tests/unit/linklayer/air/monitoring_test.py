@@ -78,6 +78,32 @@ def test_monitoring_thresholds_and_filter_accept_list(iut, extended, policy):
     iut.ut_rx_q_is_empty()
 
 
+@pytest.mark.parametrize('extended', [False, True])
+def test_monitoring_an_extended_only_advertiser(iut, extended):
+    """Only an extended scanner follows the monitored peer's ADV_EXT_IND.
+
+    Steps:
+        Receive an extended advertisement after 600 ms, cross the original
+        loss deadline, then let supervision expire and receive another one.
+
+    Expected:
+        Extended scanning refreshes the timer and reports recovery. Legacy
+        scanning reports loss at the original deadline (Vol 4, Part E, 7.8.11).
+    """
+    _start(iut, extended=extended)
+    iut.run_until(600_000)
+    _advertise(iut, -40, extended=True)
+    iut.run_until(SECOND)
+    if extended:
+        iut.ut_rx_q_is_empty()
+        iut.run(SECOND)
+    iut.ut_rx(REPORT, address=PEER, condition=0)
+    _advertise(iut, -40, extended=True)
+    if extended:
+        iut.ut_rx(REPORT, address=PEER, condition=1)
+    iut.ut_rx_q_is_empty()
+
+
 def test_duplicate_filter_does_not_suppress_monitoring(iut):
     """Repeated identical advertisements still refresh the monitor timer.
 

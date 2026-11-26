@@ -38,6 +38,9 @@ class AdvertisingReport:
     data_status: DataStatus = DataStatus.COMPLETE
     primary_coding: int = 0
     secondary_coding: int = 0
+    # AdvDataInfo (SID and DID) of an extended report, or None when the PDUs carry
+    # no ADI field (Vol 6, Part B, 2.3.4.4, 4.4.3.5).
+    adi: int | None = None
 
 
 LL_ADV_FILTER_SCAN_MASK = 1

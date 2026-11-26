@@ -20,7 +20,6 @@ from bscontroller.capabilities import (
 )
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
-    LL_ADV_DIRECT_HIGH_DUTY_TIMEOUT_US,
     LL_MAFS_US,
     LL_PERIODIC_INTERVAL_UNIT_US,
     LL_SCA_500_PPM,
@@ -56,7 +55,6 @@ from bscontroller.linklayer.discovery import (
     Advertising,
     Initiating,
     PeriodicSync,
-    ScanBackoff,
     Scanning,
     ScanWindow,
 )
@@ -160,8 +158,10 @@ class AdvertisingService:
         )
 
     def configure_legacy(self, config: AdvertisingConfig) -> None:
-        candidate = self._candidate(-1, config)
         current = self.link.advertisers.get(-1)
+        if current is not None and current.enabled:
+            return
+        candidate = self._candidate(-1, config)
         if current is None:
             self.link.roles.advertising.publish(-1, candidate)
         else:
@@ -269,13 +269,16 @@ class AdvertisingService:
         item = self.link.advertisers.get(handle)
         if item is None:
             return UNKNOWN_ADV
-        if item.enabled:
+        if item.enabled and item.mode & AdvertisingMode.CONNECTABLE:
             return DISALLOWED
         address = AddressSnapshot(address)
         item.random_address = address
         if OwnAddressType(item.own_address_type).uses_random_fallback:
             item.identity_address = address
-            item.address = address
+            # Keep the address already sent in the current event through its
+            # response. AdvertisingManager.run selects the next event's address.
+            if not item.enabled:
+                item.address = address
         return SUCCESS
 
     def store_data(
@@ -343,16 +346,12 @@ class AdvertisingService:
 
     def enable_legacy(self, enable: bool) -> int:
         item = self.link.advertisers[-1]
-        if enable and not self._address_available(item):
-            return INVALID
-        item.enabled = enable
-        item.next_us = self.link.now_us + 1
-        item.events = 0
-        item.deadline_us = (
-            self.link.now_us + LL_ADV_DIRECT_HIGH_DUTY_TIMEOUT_US
-            if item.high_duty
-            else 0
-        )
+        if enable:
+            if not self._address_available(item):
+                return INVALID
+            self.link.roles.advertising.start(item)
+        else:
+            self.link.roles.advertising.stop(item)
         return SUCCESS
 
     def _address_available(self, item: Advertising) -> bool:
@@ -397,24 +396,11 @@ class AdvertisingService:
         for handle, duration, max_events in selected:
             item = self.link.advertisers[handle]
             if enable:
-                airtime = advertising_time_us(item)
-                item.interval_us = max(
-                    item.interval_us,
-                    (airtime + interval_unit_us - 1)
-                    // interval_unit_us
-                    * interval_unit_us,
+                self.link.roles.advertising.start(
+                    item, duration, max_events, interval_unit_us=interval_unit_us
                 )
-            item.enabled = enable
-            item.next_us = self.link.now_us + 1
-            item.events = 0
-            item.max_events = max_events
-            if item.high_duty:
-                # TODO: reject invalid high-duty Duration instead of clamping (7.8.56).
-                duration = min(
-                    duration or LL_ADV_DIRECT_HIGH_DUTY_TIMEOUT_US,
-                    LL_ADV_DIRECT_HIGH_DUTY_TIMEOUT_US,
-                )
-            item.deadline_us = self.link.now_us + duration if duration else 0
+            else:
+                self.link.roles.advertising.stop(item)
         return SUCCESS
 
     def remove(self, handle: int) -> int:
@@ -653,7 +639,7 @@ class LinkLayerService:
 
     @property
     def scan_parameters(self) -> ScanningSnapshot:
-        scan = self._scan_parameters
+        scan = self.link.scan or self._scan_parameters
         return ScanningSnapshot(
             AddressSnapshot(scan.address),
             scan.interval_us,
@@ -690,6 +676,7 @@ class LinkLayerService:
         *,
         own_address_type: int = OwnAddressType.PUBLIC,
         extended: bool = False,
+        windows: tuple[ScanWindowConfig, ...] = (),
     ) -> int:
         if self.link.scan is not None:
             return DISALLOWED
@@ -702,6 +689,10 @@ class LinkLayerService:
             own_address_type=own_address_type,
             identity_address=AddressSnapshot(address),
             extended=extended,
+            windows=tuple(
+                ScanWindow(item.phy, item.interval_us, item.window_us, item.active)
+                for item in windows
+            ),
         )
         return SUCCESS
 
@@ -727,30 +718,33 @@ class LinkLayerService:
         self.link.random_address = AddressSnapshot(address)
         return SUCCESS
 
-    def configure_scan_windows(self, windows: tuple[ScanWindowConfig, ...]) -> None:
-        self._scan_parameters.windows = tuple(
-            ScanWindow(item.phy, item.interval_us, item.window_us, item.active)
-            for item in windows
-        )
-
-    def enable_scanning(self, enable: bool) -> int:
+    def enable_scanning(
+        self,
+        enable: bool,
+        *,
+        extended: bool | None = None,
+        duration_us: int = 0,
+        period_us: int = 0,
+    ) -> int:
+        scanning = self.link.roles.scanning
+        if not enable:
+            scanning.stop()
+            return SUCCESS
         scan = self._scan_parameters
-        if enable:
-            fallback = scan.identity_address or scan.address
-            # 7.8.11/65: own 0x01/0x03 need the random address regardless of
-            # the resolving list.
-            if not self.privacy.address_available(scan.own_address_type, fallback):
-                return INVALID
-            scan.address = self.privacy.local_address(scan.own_address_type, fallback)
-        scan.start_us = self.link.now_us
-        scan.backoff = ScanBackoff()
-        self.link.roles.scanning.enable(scan if enable else None)
+        if extended is not None and scan.extended != extended:
+            # The Host may enable scanning with the default parameters.
+            scan = replace(scan, extended=extended)
+        if scanning.active is not None and not scan.extended:
+            # A repeated legacy enable only updates Filter_Duplicates (7.8.11).
+            return SUCCESS
+        fallback = scan.identity_address or scan.address
+        # 7.8.11/65: own 0x01/0x03 need the random address regardless of
+        # the resolving list.
+        if not self.privacy.address_available(scan.own_address_type, fallback):
+            return INVALID
+        address = self.privacy.local_address(scan.own_address_type, fallback)
+        scanning.start(scan, address, duration_us, period_us)
         return SUCCESS
-
-    def set_scan_period(self, duration_us: int, period_us: int) -> None:
-        scan = self._scan_parameters
-        scan.duration_us, scan.period_us = duration_us, period_us
-        scan.deadline_us = self.link.now_us + duration_us if duration_us else 0
 
     def initiating_status(self, peer: Address, use_list: bool) -> int:
         if not use_list and any(

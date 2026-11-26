@@ -21,6 +21,7 @@ class CigCommands(Protocol):
     def connection_accept_timeout(self) -> int: ...
 
     def set_accept_timeout(self, timeout: int) -> int: ...
+    def contains(self, handle: int) -> bool: ...
     def set_cig_parameters(self, config: CigConfig) -> tuple[int, tuple[int, ...]]: ...
     def create_cis(self, pairs: tuple[tuple[int, int], ...]) -> int: ...
     def remove_cig(self, cig_id: int) -> int: ...
@@ -85,6 +86,12 @@ class IsoService:
 
     def read_tx_sync(self, handle: int) -> tuple[int, IsoTxSync | None]:
         return self._paths.read_tx_sync(handle)
+
+    def accepts_data(self, handle: int) -> bool:
+        # A Central retains its CIS handle and configured paths after disconnect.
+        return self._paths.contains(handle) and not self._cig.waiting_for_establishment(
+            handle
+        )
 
     def input(
         self,

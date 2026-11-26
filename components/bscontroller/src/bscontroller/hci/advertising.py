@@ -802,8 +802,7 @@ class LeAdvertisingCommands(LeControllerContext):
             else self.ll.advertising.pawr_status(handle)
         )
         if status == SUCCESS and (
-            not command.complete
-            or not 1 <= len(command.subevent) <= HCI_LE_PAWR_SUBEVENT_DATA_ENTRIES_MAX
+            not 1 <= len(command.subevent) <= HCI_LE_PAWR_SUBEVENT_DATA_ENTRIES_MAX
             or any(subevent >= LL_PAWR_SUBEVENTS_MAX for subevent in command.subevent)
             or len(set(command.subevent)) != len(command.subevent)
             or any(

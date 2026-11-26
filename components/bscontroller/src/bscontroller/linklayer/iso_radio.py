@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 async def run_big_event(link: RadioLink, manager: BroadcastManager, group: Big) -> None:
     info = group.info
     assert info is not None
-    window = group.reservation()
+    window = group.reservation(link.sleep_clock_accuracy)
     admitted = link.resource.admit(
         group, window.start_us, window.start_us + window.duration_us, window.priority
     )
@@ -94,7 +94,9 @@ async def run_big_event(link: RadioLink, manager: BroadcastManager, group: Big) 
                 return
             manager.iso.get_stream(handle, True).transmitted(payload_count)
         else:
-            widening = group.receive_window_us(nominal, active=received)
+            widening = group.receive_window_us(
+                nominal, link.sleep_clock_accuracy, active=received
+            )
             until = nominal + widening + info.phy.address_us
             if group.deadline_us:
                 until = min(until, group.deadline_us)
@@ -179,7 +181,7 @@ async def _control(link: RadioLink, manager: BroadcastManager, group: Big) -> No
                 phy=info.phy,
             )
         return
-    widening = group.receive_window_us(nominal, active=True)
+    widening = group.receive_window_us(nominal, link.sleep_clock_accuracy, active=True)
     start = max(link.now_us + 1, nominal - widening)
     until = min(nominal + widening + info.phy.address_us, group.deadline_us)
     if start >= until:

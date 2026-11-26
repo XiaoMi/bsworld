@@ -12,6 +12,7 @@ from bscontroller.hci import (
     HCI_LE_SCAN_INTERVAL_UNIT_US,
     HCI_LE_SCAN_WINDOW_DEFAULT,
 )
+from bscontroller.hci.buffers import DataBuffers
 from bscontroller.hci.events import LeControllerEvents
 from bscontroller.linklayer.link import RadioLink
 from bscontroller.linklayer.notifications import NotificationAdapter
@@ -36,6 +37,15 @@ class LeControllerContext(LeControllerEvents):
 
     def __init__(self, controller: 'Controller', radio: Radio, le_features: int):
         self.controller = controller
+        config = controller.config
+        self.acl_buffers = DataBuffers(
+            f'{controller.name} ACL', config.acl_packet_length, config.acl_packet_count
+        )
+        self.iso_buffers = DataBuffers(
+            f'{controller.name} ISO', config.iso_packet_length, config.iso_packet_count
+        )
+        # CIS handles known to the Host and whether CIS Established was sent for each.
+        self.cis_established: dict[int, bool] = {}
         notifications = NotificationAdapter(self)
         self.link = RadioLink(
             radio,
@@ -52,10 +62,8 @@ class LeControllerContext(LeControllerEvents):
             HCI_LE_SCAN_INTERVAL_DEFAULT * HCI_LE_SCAN_INTERVAL_UNIT_US,
             HCI_LE_SCAN_WINDOW_DEFAULT * HCI_LE_SCAN_INTERVAL_UNIT_US,
         )
-        self.filter_duplicates = False
-        self.seen: set[tuple] = set()
+        self.duplicate_filter = None
         self.fragments: dict[tuple[int, str], bytes] = {}
-        self.period_duplicate_reset = False
         self.extended_commands: bool | None = None
         self._p256_private_key: EllipticCurvePrivateKey | None = None
 

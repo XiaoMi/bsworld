@@ -107,13 +107,13 @@ class Big:
     # and repetition must use identical plaintext and CCM nonce.
     payloads: dict[int, dict[int, tuple[IsoPdu, ...]]] = field(default_factory=dict)
 
-    def reservation(self) -> RadioReservation:
+    def reservation(self, local_sca: int) -> RadioReservation:
         assert self.info is not None
         start = self.next_us - RADIO_SWITCH_TIME_US
         end = self.next_us + self.info.duration_us
         if not self.transmit:
-            start -= self.receive_window_us(self.next_us)
-            end += self.receive_window_us(end)
+            start -= self.receive_window_us(self.next_us, local_sca)
+            end += self.receive_window_us(end, local_sca)
         return RadioReservation(
             start, end - start, self.info.interval_us, RadioPriority.ISOCHRONOUS
         )
@@ -126,9 +126,11 @@ class Big:
         group = subevent // self.info.bn
         return self.counter + max(0, group - self.info.irc + 1) * self.info.pto
 
-    def receive_window_us(self, target_us: int, *, active: bool = False) -> int:
+    def receive_window_us(
+        self, target_us: int, local_sca: int, *, active: bool = False
+    ) -> int:
         return self.widening_us + window_widening(
-            target_us - self.last_rx_us, self.sca, active=active
+            target_us - self.last_rx_us, self.sca, local_sca=local_sca, active=active
         )
 
 
@@ -805,7 +807,7 @@ class BroadcastManager:
                 continue
             operations.append(
                 PendingOperation(
-                    group.reservation().start_us,
+                    group.reservation(self.link.sleep_clock_accuracy).start_us,
                     RadioPriority.ISOCHRONOUS,
                     group,
                     partial(self._run, group),
@@ -873,7 +875,7 @@ class BroadcastManager:
 
     def reservations(self, exclude: object = None) -> list[RadioReservation]:
         return [
-            group.reservation()
+            group.reservation(self.link.sleep_clock_accuracy)
             for group in self.groups.values()
             if group is not exclude and group.info is not None
         ]

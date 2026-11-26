@@ -85,7 +85,12 @@ from bscontroller.linklayer.timing import window_widening
 from bscontroller.radio.base import PHY_CODED_S8_FACTOR, RADIO_SWITCH_TIME_US, Phy
 
 if TYPE_CHECKING:
-    from bscontroller.linklayer.discovery import Advertising, Initiating, PeriodicSync
+    from bscontroller.linklayer.discovery import (
+        Advertising,
+        Initiating,
+        PeriodicSync,
+        Scanning,
+    )
     from bscontroller.linklayer.link import RadioLink
     from bscontroller.radio.base import Received
 
@@ -387,11 +392,22 @@ class ExtendedProcedures:
         self.link = link
 
     async def transmit_chain(
-        self, channel, first, data, start, phy, *, coding, **parameters
+        self,
+        channel,
+        first,
+        data,
+        start,
+        phy,
+        *,
+        coding,
+        advertising_event: Advertising,
+        **parameters,
     ):
         for pdu in fragments(
             self.link.with_radiative_power(first), data, channel, phy, coding=coding
         ):
+            if not self.link.roles.advertising.event_is_current(advertising_event):
+                return
             await self.link._transmit(
                 channel,
                 pdu.encode(),
@@ -434,7 +450,13 @@ class ExtendedProcedures:
         )
 
     async def collect(
-        self, packet: Received, first: ExtendedPdu, *, on_fragment=None, **parameters
+        self,
+        packet: Received,
+        first: ExtendedPdu,
+        *,
+        is_current,
+        on_fragment=None,
+        **parameters,
     ):
         """Follow an auxiliary chain, retaining a bounded prefix on failure.
 
@@ -461,8 +483,10 @@ class ExtendedProcedures:
                     packet,
                 )
                 data = b''
+            if not is_current():
+                break
             received = await self.follow(packet, current, **parameters)
-            if received is None:
+            if received is None or not is_current():
                 break
             try:
                 ext = ExtendedPdu.decode(received.pdu)
@@ -536,6 +560,8 @@ class ExtendedProcedures:
         for bit, channel in enumerate(LL_ADV_PRIMARY_CHANNELS):
             if not item.channel_map & (1 << bit):
                 continue
+            if not link.roles.advertising.event_is_current(item):
+                return
             start = link.radio.earliest_start_us(
                 channel, item.primary_phy, transmit=True
             )
@@ -560,15 +586,16 @@ class ExtendedProcedures:
             aux_start,
             item.secondary_phy,
             coding=item.secondary_coding.factor(),
+            advertising_event=item,
             power_dbm=item.tx_power_dbm,
         )
-        if item.mode:
+        if item.mode and link.roles.advertising.event_is_current(item):
             packet = await link.receive_response(
                 aux_channel,
                 link.now_us + 1,
                 item.secondary_phy,
             )
-            if packet:
+            if packet and link.roles.advertising.event_is_current(item):
                 await self.request(item, aux_channel, packet)
 
     async def request(self, item: Advertising, channel: int, packet: Received) -> bool:
@@ -606,6 +633,7 @@ class ExtendedProcedures:
                 packet.end_us + LL_IFS_US,
                 item.secondary_phy,
                 coding=item.secondary_coding.factor(),
+                advertising_event=item,
                 power_dbm=item.tx_power_dbm,
             )
         elif (
@@ -632,38 +660,44 @@ class ExtendedProcedures:
                 target=bytes(peer),
                 random_target=peer.is_random,
             )
+            result = ConnectionAccepted(
+                parameters,
+                peer,
+                Role.PERIPHERAL,
+                packet.end_us,
+                csa2=True,
+                self_address=item.address,
+                local_rpa=item.local_rpa,
+                advertiser=item,
+                window_delay_us=(
+                    LL_CONN_AUX_WINDOW_DELAY_CODED_US
+                    if packet.phy == Phy.LE_CODED
+                    else LL_CONN_AUX_WINDOW_DELAY_UNCODED_US
+                ),
+                phy=packet.phy,
+            )
             # Unlike a legacy CONNECT_IND, an auxiliary request needs an explicit
             # AUX_CONNECT_RSP before this advertiser can become a Peripheral.
-            await link._transmit(
-                channel,
-                response.encode(),
-                start_us=packet.end_us + LL_IFS_US,
-                phy=item.secondary_phy,
-                coding=item.secondary_coding.factor(),
-                power_dbm=item.tx_power_dbm,
-            )
-            link.roles.connections.accepted(
-                ConnectionAccepted(
-                    parameters,
-                    peer,
-                    Role.PERIPHERAL,
-                    packet.end_us,
-                    csa2=True,
-                    self_address=item.address,
-                    local_rpa=item.local_rpa,
-                    advertiser=item,
-                    window_delay_us=(
-                        LL_CONN_AUX_WINDOW_DELAY_CODED_US
-                        if packet.phy == Phy.LE_CODED
-                        else LL_CONN_AUX_WINDOW_DELAY_UNCODED_US
-                    ),
-                    phy=packet.phy,
+            with link.roles.connections.sending_connect_response(result):
+                await link._transmit(
+                    channel,
+                    response.encode(),
+                    start_us=packet.end_us + LL_IFS_US,
+                    phy=item.secondary_phy,
+                    coding=item.secondary_coding.factor(),
+                    power_dbm=item.tx_power_dbm,
                 )
-            )
             return True
         return False
 
-    async def scan(self, packet: Received, *, initiating: bool = False) -> None:
+    async def scan(
+        self,
+        packet: Received,
+        *,
+        scan: Scanning | None,
+        sync: PeriodicSync | None,
+        initiator: Initiating | None,
+    ) -> None:
         """Follow ADV_EXT_IND to its AUX_ADV_IND and report it (Core Vol 6, Part B,
         4.4.3.3, 4.4.3.4).
         """
@@ -671,14 +705,11 @@ class ExtendedProcedures:
         # Primary SyncInfo,CTEInfo,ACAD and AdvData are context-reserved CEAP fields.
         primary = ExtendedPdu.decode(packet.pdu)
         decision = primary.kind == AdvertisingPduType.ADV_DECISION_IND
-        local = link.initiating if initiating else link.scan
-        if local is None and decision:
-            return
         mode = (
-            InitiatorFilterPolicy(local.filter_policy).decision_mode
-            if initiating
-            else scanning_decision_mode(local.filter_policy)
-            if local is not None
+            InitiatorFilterPolicy(initiator.filter_policy).decision_mode
+            if initiator is not None
+            else scanning_decision_mode(scan.filter_policy)
+            if scan is not None
             else DecisionMode.IGNORE_DECISION_PDUS
         )
         if (
@@ -708,18 +739,13 @@ class ExtendedProcedures:
             acad=b'',
             data=b'',
         )
-        if primary.kind not in (
-            AdvertisingPduType.ADV_EXT_IND,
-            AdvertisingPduType.ADV_DECISION_IND,
-        ):
-            return
         primary_addresses_valid = decision or (
             not primary.mode and packet.phy == Phy.LE_1M
         )
         primary_identity = None
         if (
-            not initiating
-            and link.scan is not None
+            initiator is None
+            and scan is not None
             and link.monitoring.enabled
             and primary.aux_ptr is not None
             and primary_addresses_valid
@@ -731,11 +757,23 @@ class ExtendedProcedures:
                 # A valid addressed primary PDU is an observation even if its
                 # auxiliary PDU is missed (Vol 6, Part B, 4.4.3.8).
                 link.monitoring.received(primary_identity, packet.rssi)
+                if link.scan is not scan and (sync is None or sync is not link.sync):
+                    return
         ext, received, channel = primary, packet, None
         if primary.aux_ptr:
             channel = primary.aux_ptr.channel
             received = await self.follow(packet, primary)
             if received is None:
+                return
+            if initiator is not None and initiator is not link.initiating:
+                return
+            if scan is not link.scan:
+                scan = None
+            if (
+                initiator is None
+                and scan is None
+                and (sync is None or sync is not link.sync)
+            ):
                 return
             ext = ExtendedPdu.decode(received.pdu)
             if (
@@ -776,12 +814,12 @@ class ExtendedProcedures:
         identity = primary_identity or link.privacy.identity(address)
         if identity is None:
             return
-        if not initiating and link.scan is not None and ext.address is not None:
+        if initiator is None and scan is not None and ext.address is not None:
             link.monitoring.received(identity, received.rssi)
         target = (
             Address(ext.target, AddressType(ext.random_target)) if ext.target else None
         )
-        local = link.initiating if initiating else link.scan
+        local = initiator or scan
         target_matches = target is None or (
             local is not None
             and link.privacy.accept_target(target, local.address, address)
@@ -791,31 +829,28 @@ class ExtendedProcedures:
             and not target_matches
             and (
                 local is None
-                or initiating
+                or initiator is not None
                 or not local.filter_policy
                 & ScanningFilterPolicy.ACCEPT_ALL_DIRECTED_RPAS
                 or not target.is_resolvable
             )
         ):
             return
-        if initiating:
+        if initiator is not None:
             # Initiation consumes only eligible connectable auxiliary events;
             # it does not produce the scanner reports or active-scan exchange below.
-            item = link.initiating
-            if item is None:
-                return
             if (
                 target is not None
-                and OwnAddressType(item.own_address_type).uses_resolvable_address
+                and OwnAddressType(initiator.own_address_type).uses_resolvable_address
                 and not target.is_resolvable
             ):
                 return
-            policy = InitiatorFilterPolicy(item.filter_policy)
+            policy = InitiatorFilterPolicy(initiator.filter_policy)
             accepted = (
                 (
                     identity in link.accept_list
                     if policy.filters_non_decision_pdus
-                    else identity == item.peer
+                    else identity == initiator.peer
                 )
                 if not decision
                 else (
@@ -829,24 +864,38 @@ class ExtendedProcedures:
                 and channel is not None
                 and accepted
             ):
-                await self.initiate(channel, received, ext, address)
+                await self.initiate(initiator, channel, received, address)
             return
         sid = ext.adi >> PDU_ADV_ADI_DID_BITS if ext.adi is not None else None
         info = ext.sync_info
-        if info is not None and sid is not None:
+        if (
+            sync is not None
+            and link.sync is sync
+            and info is not None
+            and sid is not None
+        ):
             link.roles.synchronization.acquired(
                 SyncInfoReceived(identity, sid, info, received, address, ext.acad)
             )
         if (
-            link.scan
-            and link.scan.filter_policy & ScanningFilterPolicy.FILTER_ACCEPT_LIST
-            and identity not in link.accept_list
+            scan is None
+            or link.scan is not scan
+            or (
+                scan.filter_policy & ScanningFilterPolicy.FILTER_ACCEPT_LIST
+                and identity not in link.accept_list
+            )
         ):
             return
-        data, status, tx_power = await self.collect(received, ext)
+
+        def scanning():
+            return link.scan is scan
+
+        data, status, tx_power = await self.collect(received, ext, is_current=scanning)
+        if not scanning():
+            return
         if target is not None:
             target = link.privacy.report_target(
-                target, local.identity_address or local.address, address
+                target, scan.identity_address or scan.address, address
             )
         flags = ext.mode | (AdvertisingProperties.DIRECTED_ADVERTISING if target else 0)
         link.listener.on_advertisement(
@@ -858,6 +907,7 @@ class ExtendedProcedures:
                 status,
                 primary_coding=packet.coding,
                 secondary_coding=received.coding if channel is not None else 0,
+                adi=ext.adi,
             ),
             sid,
             info.interval if info else 0,
@@ -867,68 +917,82 @@ class ExtendedProcedures:
             secondary_phy=received.phy if channel is not None else 0,
         )
         if (
-            link.scan
-            and link.scan.active
-            and ext.mode == AdvertisingMode.SCANNABLE
-            and target_matches
-            and channel is not None
-            and not ext.aux_ptr
-            and link.scan.backoff.permit()
+            not scanning()
+            or not scan.active
+            or ext.mode != AdvertisingMode.SCANNABLE
+            or not target_matches
+            or channel is None
+            or not scan.backoff.permit()
         ):
-            scan = link.scan
-            scan.address = link.privacy.local_address(
-                scan.own_address_type, scan.identity_address or scan.address, identity
+            return
+        result = await self.request_scan_response(
+            scan, channel, received, ext, address, identity
+        )
+        if result is None:
+            return
+        response, rsp = result
+        data, status, tx_power = await self.collect(response, rsp, is_current=scanning)
+        if scanning():
+            link.listener.on_advertisement(
+                identity,
+                data,
+                response.rssi,
+                AdvertisingReport(
+                    AdvertisingProperties(flags) | AdvertisingProperties.SCAN_RESPONSE,
+                    status,
+                    primary_coding=packet.coding,
+                    secondary_coding=response.coding,
+                    adi=ext.adi,
+                ),
+                sid,
+                0,
+                tx_power,
+                target=target,
+                primary_phy=packet.phy,
+                secondary_phy=received.phy,
             )
-            request = scan_request(scan.address, address)
-            end_us = await link._transmit(
-                channel, request, start_us=received.end_us + LL_IFS_US, phy=received.phy
-            )
-            response = await link.receive_response(channel, end_us, received.phy)
-            if response:
-                try:
-                    rsp = ExtendedPdu.decode(response.pdu)
-                except ValueError:
-                    scan.backoff.complete(False, link.random)
-                    return
-                if (
-                    rsp.kind == AdvertisingPduType.AUX_SCAN_RSP
-                    and not rsp.mode
-                    and rsp.address == ext.address
-                    and rsp.random_address == ext.random_address
-                    and (rsp.adi is None or rsp.adi == ext.adi)
-                ):
-                    # Bind AUX_SCAN_RSP to this advertiser and data identity before
-                    # following its chain or declaring the active-scan attempt
-                    # successful.
-                    scan.backoff.complete(True, link.random)
-                    data, status, tx_power = await self.collect(response, rsp)
-                    link.listener.on_advertisement(
-                        identity,
-                        data,
-                        response.rssi,
-                        AdvertisingReport(
-                            AdvertisingProperties(flags)
-                            | AdvertisingProperties.SCAN_RESPONSE,
-                            status,
-                            primary_coding=packet.coding,
-                            secondary_coding=response.coding,
-                        ),
-                        sid,
-                        0,
-                        tx_power,
-                        target=target,
-                        primary_phy=packet.phy,
-                        secondary_phy=received.phy,
-                    )
-                    return
-            scan.backoff.complete(False, link.random)
 
-    async def initiate(self, channel, packet, ext, address):
+    async def request_scan_response(
+        self, scan, channel, received, ext, address, identity
+    ):
+        """Send AUX_SCAN_REQ and bind AUX_SCAN_RSP to this advertiser and ADI."""
+        link = self.link
+        scan.address = link.privacy.local_address(
+            scan.own_address_type, scan.identity_address or scan.address, identity
+        )
+        end_us = await link._transmit(
+            channel,
+            scan_request(scan.address, address),
+            start_us=received.end_us + LL_IFS_US,
+            phy=received.phy,
+        )
+        if link.scan is not scan:
+            return None
+        response = await link.receive_response(channel, end_us, received.phy)
+        if link.scan is not scan:
+            return None
+        try:
+            rsp = ExtendedPdu.decode(response.pdu) if response else None
+        except ValueError:
+            rsp = None
+        if (
+            rsp is not None
+            and rsp.kind == AdvertisingPduType.AUX_SCAN_RSP
+            and not rsp.mode
+            and rsp.address == ext.address
+            and rsp.random_address == ext.random_address
+            and (rsp.adi is None or rsp.adi == ext.adi)
+        ):
+            scan.backoff.complete(True, link.random)
+            return response, rsp
+        scan.backoff.complete(False, link.random)
+        return None
+
+    async def initiate(self, item, channel, packet, address):
         """AUX_CONNECT_REQ / AUX_CONNECT_RSP exchange on the secondary channel (Core Vol
         6, Part B, 4.4.4.2).
         """
-        link, item = self.link, self.link.initiating
-        assert item is not None
+        link = self.link
         if not link.roles.connections.can_accept(address):
             return
         # 4.4.4.2 reuses the scanner backoff after an unanswered AUX_CONNECT_REQ.
@@ -963,6 +1027,8 @@ class ExtendedProcedures:
         request_end = await link._transmit(
             channel, request, start_us=packet.end_us + LL_IFS_US, phy=packet.phy
         )
+        if link.initiating is not item:
+            return
         response = await link.receive_response(channel, request_end, packet.phy)
         if link.initiating is not item:
             return
@@ -1029,6 +1095,7 @@ class ExtendedProcedures:
         """
         link = self.link
         peer, phy = initiating.peer, item.secondary_phy
+        state = item.pawr_state
         coding = item.secondary_coding.factor()
         initiating.address, generated = link.privacy.select_local_address(
             initiating.own_address_type,
@@ -1074,8 +1141,10 @@ class ExtendedProcedures:
                 power_dbm=item.tx_power_dbm,
                 **train,
             )
+            if link.initiating is not initiating or item.pawr_state is not state:
+                return
             response = await link.receive_response(channel, request_end, phy, **train)
-        if link.initiating is not initiating:
+        if link.initiating is not initiating or item.pawr_state is not state:
             return
         try:
             rsp = ExtendedPdu.decode(response.pdu) if response is not None else None

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from functools import partial
 from typing import TYPE_CHECKING
@@ -20,6 +21,7 @@ from bscontroller.address import AddressType
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
     LL_ADV_DELAY_MAX_US,
+    LL_ADV_DIRECT_HIGH_DUTY_TIMEOUT_US,
     LL_ADV_PRIMARY_CHANNELS,
     LL_CONN_INTERVAL_UNIT_US,
     LL_DATA_CHANNEL_MAP_ALL,
@@ -46,12 +48,17 @@ from bscontroller.linklayer.discovery import (
     Advertising,
     Initiating,
     PeriodicSync,
+    ScanBackoff,
     Scanning,
     ScanWindow,
     TransferOrigin,
     scan_window_at,
 )
-from bscontroller.linklayer.extended import periodic_time_us, subevent_pdu
+from bscontroller.linklayer.extended import (
+    advertising_time_us,
+    periodic_time_us,
+    subevent_pdu,
+)
 from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.iso import IsoDataPaths
 from bscontroller.linklayer.pawr import (
@@ -322,6 +329,7 @@ class ConnectionManager:
     def __init__(self, link: RadioLink):
         self.link = link
         self.contexts: dict[int, Connection] = {}
+        self._pending_response: ConnectionAccepted | None = None
 
     def allocate_handle(self) -> int:
         """Allocate the LL identity; HCI only serializes the assigned handle."""
@@ -351,17 +359,42 @@ class ConnectionManager:
         """Release only the current owner, even if an old handle has been reused."""
         if self.contexts.get(connection.handle) is not connection:
             return False
+        connection.closed = True
         del self.contexts[connection.handle]
         return True
 
-    def accepted(self, result: ConnectionAccepted) -> Connection | None:
+    def reset(self) -> None:
+        # Pending radio operations can still return after HCI Reset.
+        self._pending_response = None
+        for connection in self.contexts.values():
+            connection.closed = True
+        self.contexts.clear()
+
+    @contextmanager
+    def sending_connect_response(self, result: ConnectionAccepted) -> Iterator[None]:
+        """TX completion creates the Peripheral even if the Host has stopped the set."""
+        assert result.advertiser is not None
+        handle = self.link.roles.advertising.handle_of(result.advertiser)
+        assert handle is not None
+        self._pending_response = result
+        try:
+            yield
+            if self._pending_response is result:
+                self.accepted(result, response_handle=handle)
+        finally:
+            self._pending_response = None
+
+    def accepted(
+        self, result: ConnectionAccepted, *, response_handle: int | None = None
+    ) -> Connection | None:
         """Commit a validated connection exchange before publishing its outcome."""
         link = self.link
         # An asynchronous RF exchange may have yielded to another allocation.
         if not self.has_capacity():
             return None
         item = result.advertiser
-        advertising_handle = None
+        advertising_handle = response_handle
+        completed_events = None
         if result.pawr_sync is not None and (
             self.link.syncs.get(result.pawr_sync.handle) is not result.pawr_sync
         ):
@@ -372,25 +405,22 @@ class ConnectionManager:
         ):
             return None
         if item is not None:
-            advertising_handle = next(
-                (
-                    handle
-                    for handle, current in link.roles.advertising.contexts.items()
-                    if current is item
-                ),
-                None,
-            )
-            # A response TX may yield to reset/disable/removal. Its old context
-            # cannot create a connection or look up an already released handle.
-            if advertising_handle is None or not item.enabled:
-                return None
+            if response_handle is None:
+                advertising_handle = link.roles.advertising.handle_of(item)
+                if advertising_handle is None or not item.enabled:
+                    return None
+                completed_events = item.events
+            elif link.roles.advertising.event_is_current(item):
+                # Only the original event can terminate its advertising set
+                # and report its completed-event count (Vol 4, Part E, 7.7.65.18).
+                completed_events = item.events
         if result.initiator is not None:
             # A delayed RF result cannot cancel a newer Host initiation request.
             if link.roles.scanning.initiating is not result.initiator:
                 return None
             link.roles.scanning.cancel_initiating()
-        if item is not None:
-            item.enabled = False
+        if item is not None and completed_events is not None:
+            link.roles.advertising.stop(item, event_completed=True)
         connection = Connection(
             link,
             result.parameters,
@@ -404,15 +434,10 @@ class ConnectionManager:
         )
         if item is not None and advertising_handle != -1:
             connection.advertising_handle = advertising_handle
-            connection.advertising_events = item.events
+            connection.advertising_events = completed_events
         if result.pawr_advertiser is not None:
-            connection.pawr_advertising_handle = next(
-                (
-                    handle
-                    for handle, current in link.roles.advertising.contexts.items()
-                    if current is result.pawr_advertiser
-                ),
-                None,
+            connection.pawr_advertising_handle = link.roles.advertising.handle_of(
+                result.pawr_advertiser
             )
         if result.pawr_sync is not None:
             connection.pawr_sync_handle = result.pawr_sync.handle
@@ -468,23 +493,88 @@ class AdvertisingManager:
     def __init__(self, link: RadioLink):
         self.link = link
         self.contexts: dict[int, Advertising] = {}
-        # The Host channel classification new periodic trains start with.
+        self._current_event: Advertising | None = None
+        self._periodic_event = False
 
     def publish(self, handle: int, item: Advertising) -> None:
         self.contexts[handle] = item
 
     def remove(self, handle: int) -> None:
-        del self.contexts[handle]
+        if self.contexts.pop(handle) is self._current_event:
+            self._current_event = None
 
     def clear(self) -> None:
         self.contexts.clear()
+        self._current_event = None
+
+    def handle_of(self, item: Advertising) -> int | None:
+        return next(
+            (handle for handle, current in self.contexts.items() if current is item),
+            None,
+        )
 
     def _owns(self, item: Advertising) -> bool:
-        return any(current is item for current in self.contexts.values())
+        return self.handle_of(item) is not None
+
+    @contextmanager
+    def transmitting(
+        self, item: Advertising, *, periodic: bool = False
+    ) -> Iterator[None]:
+        """One radio runs one event. Each advertising enable controls its own train."""
+        self._current_event = item
+        self._periodic_event = periodic
+        try:
+            yield
+        finally:
+            self._current_event = None
+
+    def _end_event(self, item: Advertising, *, periodic: bool = False) -> None:
+        if self._current_event is item and self._periodic_event == periodic:
+            self._current_event = None
+
+    def stop(self, item: Advertising, *, event_completed: bool = False) -> None:
+        item.enabled = False
+        # A Host stop cancels the remaining event after the current radio PDU.
+        # A connection ends the advertising event through its normal completion.
+        if not event_completed:
+            self._end_event(item)
+
+    def start(
+        self,
+        item: Advertising,
+        duration_us: int = 0,
+        max_events: int = 0,
+        *,
+        interval_unit_us: int | None = None,
+    ) -> None:
+        """Start a new duration and event count, including on re-enable (7.8.56)."""
+        if not item.enabled:
+            self._end_event(item)
+        if interval_unit_us is not None:
+            airtime = advertising_time_us(item)
+            item.interval_us = max(
+                item.interval_us,
+                (airtime + interval_unit_us - 1) // interval_unit_us * interval_unit_us,
+            )
+        if item.high_duty:
+            # TODO: reject an invalid extended high-duty Duration at admission (7.8.56).
+            duration_us = min(
+                duration_us or LL_ADV_DIRECT_HIGH_DUTY_TIMEOUT_US,
+                LL_ADV_DIRECT_HIGH_DUTY_TIMEOUT_US,
+            )
+        item.enabled = True
+        item.enable_count += 1
+        item.next_us = self.link.now_us + 1
+        item.events = 0
+        item.max_events = max_events
+        item.deadline_us = self.link.now_us + duration_us if duration_us else 0
+
+    def event_is_current(self, item: Advertising) -> bool:
+        return self._current_event is item and self._owns(item)
 
     def expire(self, item: Advertising, reason: int) -> None:
         if item.enabled and self._owns(item):
-            item.enabled = False
+            self.stop(item)
             self.link.listener.on_advertising_ended(item, reason)
 
     async def expire_deadline(self, item: Advertising) -> None:
@@ -719,7 +809,11 @@ class AdvertisingManager:
     ) -> None:
         """Record one slot; report the subevent once its last slot has passed."""
         state = item.pawr_state
-        if state is None or not any(entry is responses for entry in state.listening):
+        if (
+            not self._owns(item)
+            or state is None
+            or not any(entry is responses for entry in state.listening)
+        ):
             return
         responses.slots.popleft()
         responses.responses.append(result)
@@ -792,11 +886,15 @@ class AdvertisingManager:
                     else (item.deadline_us or start + item.interval_us)
                 )
                 return
+        enable_count = item.enable_count
         item.events += 1
-        if item.extended:
-            await link.extended.advertise(item)
-        else:
-            await advertise_legacy(link, item)
+        with self.transmitting(item):
+            if item.extended:
+                await link.extended.advertise(item)
+            else:
+                await advertise_legacy(link, item)
+            if not self.event_is_current(item) or item.enable_count != enable_count:
+                return
         item.next_us = max(
             start
             + item.interval_us
@@ -808,6 +906,7 @@ class AdvertisingManager:
         link = self.link
         if item.periodic_enabled == enable:
             return
+        self._end_event(item, periodic=True)
         interval_us = item.periodic_interval * LL_PERIODIC_INTERVAL_UNIT_US
         next_us = link.now_us + interval_us
         item.pawr_state = None
@@ -858,8 +957,22 @@ class ScanningManager:
         self.initiating: Initiating | None = None
         self.cursor = 0
 
-    def enable(self, scan: Scanning | None) -> None:
-        self.active = scan
+    def start(
+        self, parameters: Scanning, address: Address, duration_us: int, period_us: int
+    ) -> None:
+        now = self.link.now_us
+        self.active = replace(
+            parameters,
+            address=address,
+            start_us=now,
+            backoff=ScanBackoff(),
+            duration_us=duration_us,
+            period_us=period_us,
+            deadline_us=now + duration_us if duration_us else 0,
+        )
+
+    def stop(self) -> None:
+        self.active = None
 
     def start_initiating(self, item: Initiating) -> None:
         self.initiating = item
@@ -914,12 +1027,14 @@ class ScanningManager:
         now = link.now_us
         if isinstance(scan, Scanning) and scan.deadline_us and now >= scan.deadline_us:
             if not scan.period_us:
-                self.active = None
+                self.stop()
                 link.listener.on_scan_timeout()
                 return
             scan.start_us += scan.period_us
             scan.deadline_us = scan.start_us + scan.duration_us
             link.listener.on_scan_period()
+            if self.active is not scan:
+                return None
         if scan.start_us > now:
             return ScanEvent(min(end, scan.start_us))
         windows = scan.windows or (
@@ -1505,10 +1620,10 @@ class LinkRoles:
         self.broadcast.reset()
         self.cig.reset()
         self.iso.reset()
-        self.connections.contexts.clear()
+        self.connections.reset()
         self.advertising.clear()
         self.host_channel_map = LL_DATA_CHANNEL_MAP_ALL
-        self.scanning.enable(None)
+        self.scanning.stop()
         self.scanning.cancel_initiating()
         self.scanning.cursor = 0
         self.synchronization.cancel()

@@ -214,10 +214,9 @@ def test_record_without_ll_state_uses_its_own_storage(host):
 def test_random_address_record_selection(host):
     """A set's advertising address follows its own-address type and random addr.
 
-    Purpose: Verify Set Advertising Set Random Address is disallowed while the
-    set is enabled, that once disabled it updates the record and live address,
-    and that the chosen advertising address depends on the own-address type, for
-    public and random sets (Vol 4, Part E, 7.8.52).
+    Purpose: Verify Set Advertising Set Random Address is disallowed while a
+    connectable set is enabled. Once disabled, the command updates the record.
+    The advertising address depends on the own-address type (Vol 4, Part E, 7.8.52).
 
     Steps:
         1. For a public and a random set, try the random-address command while
@@ -234,7 +233,13 @@ def test_random_address_record_selection(host):
     for handle, own in enumerate(
         (hci.OwnAddressType.PUBLIC, hci.OwnAddressType.RANDOM)
     ):
-        host.cmd(extended_parameters(advertising_handle=handle, own_address_type=own))
+        host.cmd(
+            extended_parameters(
+                advertising_handle=handle,
+                own_address_type=own,
+                advertising_event_properties=Properties.CONNECTABLE_ADVERTISING,
+            )
+        )
         live = host.link.advertisers[handle]
         original = live.address
         command = hci.HCI_LE_Set_Advertising_Set_Random_Address_Command(handle, random)
@@ -1740,7 +1745,18 @@ def test_duplicate_history_resets_each_period_only_when_asked(host):
     assert len(host.events) == 1
 
 
-def test_masked_report_is_not_counted_as_seen(host):
+@pytest.mark.parametrize(
+    'mask', [hci.HCI_Set_Event_Mask_Command, hci.HCI_LE_Set_Event_Mask_Command]
+)
+@pytest.mark.parametrize(
+    'event',
+    [
+        hci.HCI_LE_Advertising_Report_Event,
+        hci.HCI_LE_Directed_Advertising_Report_Event,
+        hci.HCI_LE_Extended_Advertising_Report_Event,
+    ],
+)
+def test_masked_report_is_not_counted_as_seen(host, mask, event):
     """A masked report is not recorded in the duplicate-filter history.
 
     Purpose: Verify that when the advertising-report event is masked, a dropped
@@ -1748,15 +1764,38 @@ def test_masked_report_is_not_counted_as_seen(host):
     (Vol 4, Part E, 7.3.1, 7.8.10).
 
     Steps:
-        1. Enable duplicate-filtered scanning, then clear the event mask.
-        2. Raise a report.
+        1. Enable duplicate filtering and mask the LE Meta event or this subevent.
+        2. Receive a report, restore the mask, and receive it twice more.
 
     Expected:
-        - The Host queue stays empty (the report was masked, not just filtered).
+        - The Host receives only the first copy received after unmasking.
     """
-    enable_scan(host, duplicates=1)
-    host.cmd(hci.HCI_LE_Set_Event_Mask_Command(bytes(8)))
-    report(host)
+    extended = event is hci.HCI_LE_Extended_Advertising_Report_Event
+    enable_scan(host, extended=extended, duplicates=1)
+    properties = 0 if extended else LEGACY
+    target = None
+    if event is hci.HCI_LE_Directed_Advertising_Report_Event:
+        properties |= (
+            AdvertisingProperties.DIRECTED_ADVERTISING
+            | AdvertisingProperties.CONNECTABLE_ADVERTISING
+        )
+        target = hci.Address(
+            bytes.fromhex('112233445566'), hci.AddressType.UNABLE_TO_RESOLVE
+        )
+    bit = (
+        hci.HCI_LE_META_EVENT
+        if mask is hci.HCI_Set_Event_Mask_Command
+        else event.subevent_code
+    )
+    mask_without_report = ((1 << 64) - 1) ^ (1 << (bit - 1))
+    host.cmd(mask(mask_without_report.to_bytes(8, 'little')))
+    report(host, b'', properties, target=target)
+    host.ut_rx_q_is_empty()
+    host.cmd(mask(b'\xff' * 8))
+    host.ut_rx_q_is_empty()
+    report(host, b'', properties, target=target)
+    host.ut_rx(event)
+    report(host, b'', properties, target=target)
     host.ut_rx_q_is_empty()
 
 

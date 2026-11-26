@@ -247,6 +247,72 @@ def test_data_request_callback_can_release_train(iut, request_number, action):
             assert iut.now_us == 110_000
 
 
+@pytest.mark.parametrize('action', ['continue', 'restart', 'reset-reuse'])
+def test_response_slot_completes_only_on_its_original_train(iut, action):
+    """Receive a PAwR response across a Host command (Vol 4, Part E, 7.7.65.37).
+
+    Steps:
+        1. Configure subevent zero with one response slot and transmit its indication.
+        2. While receiving the response, keep the train, restart it, or reset the
+           Controller and configure another train at the same handle.
+
+    Expected:
+        - The uninterrupted train reports the slot data. A released train
+          produces no response report and leaves its replacement at subevent zero.
+    """
+
+    def configure_train():
+        configure_extended(iut)
+        iut.ut(
+            hci.HCI_LE_Set_Periodic_Advertising_Parameters_V2_Command(
+                0, 80, 80, 0, 3, 16, 8, 10, 2
+            )
+        )
+        iut.ut(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 0))
+
+    configure_train()
+    item = iut.link.advertisers[0]
+    iut.run(1)
+    iut.ut(
+        hci.HCI_LE_Set_Periodic_Advertising_Subevent_Data_Command(
+            0, [0], [0], [1], [b'ind']
+        )
+    )
+    iut.run_until(item.periodic_next_us)
+    indication = iut.lt_rx()
+    slot = indication.start_us + TIMING.slot_offset_us(0)
+    iut.lt_tx(
+        ExtendedPdu(data=b'echo'),
+        channel=indication.channel,
+        at=slot,
+        access_address=item.pawr_state.rsp_aa,
+    )
+    with iut.pause_radio(iut.link.advance_to_us(slot + 1), 'receive'):
+        if action == 'reset-reuse':
+            iut.ut(hci.HCI_Reset_Command())
+            iut.ut(hci.HCI_Set_Event_Mask_Command(b'\xff' * 8))
+            iut.ut(hci.HCI_LE_Set_Event_Mask_Command(b'\xff' * 8))
+            configure_train()
+        elif action == 'restart':
+            iut.ut(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(0, 0))
+            iut.ut(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 0))
+    iut.lt_script_is_consumed()
+    reports = [
+        event
+        for event in iut.events
+        if isinstance(event, hci.HCI_LE_Periodic_Advertising_Response_Report_Event)
+    ]
+    if action == 'continue':
+        (report,) = reports
+        assert report.advertising_handle == report.subevent == report.tx_status == 0
+        (response,) = report.responses
+        assert response.response_slot == 0 and response.data == b'echo'
+    else:
+        assert not reports
+        current = iut.link.advertisers[0]
+        assert current.periodic_counter == current.pawr_state.subevent == 0
+
+
 def test_restarted_train_ignores_old_subevent_completion(iut):
     """A completion from the old train cannot advance its replacement.
 

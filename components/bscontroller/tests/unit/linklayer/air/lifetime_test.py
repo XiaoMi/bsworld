@@ -31,6 +31,7 @@ from dataclasses import replace
 
 import pytest
 
+from bscontroller import hci
 from bscontroller.address import Address
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
@@ -43,8 +44,11 @@ from bscontroller.linklayer import (
     LL_SCA_500_PPM,
     PDU_ADV_TXADD_MASK,
     PDU_CRC_SIZE,
+    PDU_DATA_NESN_MASK,
+    PDU_DATA_SN_MASK,
     AdvertisingMode,
     AdvertisingPduType,
+    ControlOpcode,
     LlId,
 )
 from bscontroller.linklayer.advertising import ExtendedPdu, SyncInfo
@@ -284,46 +288,60 @@ def test_old_connection_cannot_release_reused_handle(link):
     assert manager.contexts[current.handle] is current
 
 
-@pytest.mark.parametrize('action', ['reset', 'disable', 'remove', 'replace'])
-def test_aux_connect_response_cannot_commit_released_advertiser(link, action):
-    """An AUX_CONNECT_RSP cannot commit an advertiser released mid-exchange.
-
-    Purpose: Verify that if the advertiser is reset, disabled, removed or replaced
-    while the AUX_CONNECT_RSP is being transmitted, no connection is committed and
-    no event is raised (Vol 6, Part B, 4.4.2.7).
+@pytest.mark.parametrize(
+    'llid,payload',
+    [
+        (LlId.START, b'abc'),
+        (
+            LlId.CONTROL,
+            bytes(
+                (
+                    ControlOpcode.LL_TERMINATE_IND,
+                    ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR,
+                )
+            ),
+        ),
+    ],
+    ids=['ACL', 'LL_TERMINATE_IND'],
+)
+@pytest.mark.parametrize('reuse', [False, True])
+@pytest.mark.parametrize('role', [Role.CENTRAL, Role.PERIPHERAL])
+def test_reset_discards_in_flight_acl_receive(iut, role, llid, payload, reuse):
+    """An RX started before HCI Reset cannot deliver data, disconnect or send an ACK.
 
     Steps:
-        1. Publish an enabled connectable extended advertiser.
-        2. Patch the radio transmit to release the advertiser per the action
-           while sending the response.
-        3. Run the extended connect-request handling for a CONNECT_IND.
+        Exchange an empty PDU to establish the ACL. Reset during its next
+        receive window, optionally reuse the handle, then finish receiving
+        the old peer's data or termination.
 
     Expected:
-        - No connection exists and no listener event was raised.
-
-    Parameters range over reset, disable, remove and replace of the advertiser.
+        After Command Complete, the old PDU produces no HCI event, ACL data or
+        radio transmission. Any new connection keeps its handle.
     """
-    item = Advertising(
-        SELF, enabled=True, extended=True, mode=AdvertisingMode.CONNECTABLE
+    connections = iut.link.roles.connections
+    old = connections.accepted(accepted(role=role))
+    iut.lt_tx(
+        bytes((LlId.CONTINUATION, 0)), access_address=old.parameters.access_address
     )
-    advertising = link.roles.advertising
-    advertising.publish(4, item)
-    packet = Received(connect_ind(PEER, SELF), -40, 100, 200, True)
-
-    async def transmit(channel, pdu, **_):
-        if action == 'reset':
-            link.reset()
-        elif action == 'disable':
-            item.enabled = False
-        elif action == 'remove':
-            advertising.remove(4)
-        else:
-            advertising.publish(4, replace(item))
-        return 500
-
-    link.radio.transmit = transmit
-    assert run(link, link.extended.request(item, 1, packet))
-    assert not link.connections and not link.listener.events
+    iut.run_until(old.anchor_us + 5000)
+    assert old.established
+    pdu = bytes((llid | PDU_DATA_NESN_MASK | PDU_DATA_SN_MASK, len(payload))) + payload
+    iut.lt_tx(pdu, access_address=old.parameters.access_address)
+    with iut.pause_radio(iut.link.advance_to_us(old.anchor_us + 5000), 'receive'):
+        iut.ut(hci.HCI_Reset_Command())
+        iut.ut(hci.HCI_Set_Event_Mask_Command(b'\xff' * 8))
+        iut.ut(hci.HCI_LE_Set_Event_Mask_Command(b'\xff' * 8))
+        if reuse:
+            current = connections.accepted(
+                accepted('C0:11:22:33:44:66', end_us=iut.now_us + 20000)
+            )
+            assert current.handle == old.handle
+        iut.events.clear()
+        iut.lt_rx_all()
+    assert iut.radio.delivered[-1].pdu == pdu
+    iut.ut_rx_q_is_empty()
+    iut.lt_rx_q_is_empty()
+    assert connections.contexts == ({current.handle: current} if reuse else {})
 
 
 @pytest.mark.parametrize('extended', [False, True])
@@ -389,7 +407,7 @@ def test_aux_connect_without_radio_room_is_not_attempted(link):
         mode=AdvertisingMode.CONNECTABLE, address=bytes(PEER), random_address=True
     )
     packet = Received(aux.encode(), -40, 1, 300, True)
-    run(link, link.extended.initiate(12, packet, aux, PEER))
+    run(link, link.extended.initiate(link.initiating, 12, packet, PEER))
     assert not link.radio.sent
 
 
@@ -530,9 +548,9 @@ def test_scan_duration_timeout_vs_period(link, period_us):
 
     Parameters range over no period and a 100 us period.
     """
-    scan = Scanning(SELF, 20, 10, duration_us=10, period_us=period_us, deadline_us=10)
     manager = link.roles.scanning
-    manager.enable(scan)
+    manager.start(Scanning(SELF, 20, 10), SELF, 10, period_us)
+    scan = manager.active
     link.radio.now_us = 10
     run(link, manager.run(scan, 20))
     if period_us:

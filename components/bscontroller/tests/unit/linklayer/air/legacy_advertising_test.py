@@ -410,7 +410,8 @@ def test_scan_request_filter_policy(iut, policy, listed):
 # Connectable: CONNECT_IND (4.4.2.4)
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize('chsel', [False, True])
-def test_connect_request_creates_peripheral_connection(iut, chsel):
+@pytest.mark.parametrize('reenable', [False, True])
+def test_connect_request_creates_peripheral_connection(iut, chsel, reenable):
     """A CONNECT_IND makes the IUT a Peripheral and ends the event.
 
     Purpose: Verify that a CONNECT_IND to a connectable advertiser creates a
@@ -423,7 +424,7 @@ def test_connect_request_creates_peripheral_connection(iut, chsel):
         1. Upper Tester configures ADV_IND and enables advertising.
         2. Lower Tester scripts a CONNECT_IND on channel 38, with the parametrized
            ChSel bit.
-        3. Run one advertising event and read every transmission.
+        3. Optionally repeat enable during RX on channel 38. Finish the event.
 
     Expected:
         - Transmissions stop after channel 38 (no channel 39).
@@ -438,7 +439,14 @@ def test_connect_request_creates_peripheral_connection(iut, chsel):
     configure_legacy(iut)
     enable_legacy(iut)
     iut.lt_tx(connect_ind(chsel=chsel), channel=38)
-    packets = one_event(iut)
+    if reenable:
+        with iut.pause_radio(
+            iut.link.advance_to_us(iut.now_us + 1), 'receive', occurrence=2
+        ):
+            enable_legacy(iut)
+        packets = iut.lt_rx_all()
+    else:
+        packets = one_event(iut)
     # The connection ends the event: nothing is sent on channel 39.
     assert [packet.channel for packet in packets] == [37, 38]
     event = iut.ut_rx(

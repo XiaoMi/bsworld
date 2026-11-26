@@ -475,6 +475,42 @@ def iso_packet(handle, sequence, data, *, timestamp=None):
     )
 
 
+async def expect_iso_credits(tester, handle, count):
+    """Account for every Host packet on the procedure's single transmitting CIS."""
+    while count:
+        event = await tester.event(hci.HCI_Number_Of_Completed_Packets_Event)
+        assert event.connection_handles == [handle]
+        (completed,) = event.num_completed_packets
+        assert 0 < completed <= count
+        count -= completed
+
+
+async def send_iso_sdu(tester, handle, sequence, data, buffers):
+    """Send one SDU in HCI-sized fragments and return its outstanding credits."""
+    limit = buffers.iso_data_packet_length
+    assert limit >= 4 and buffers.total_num_iso_data_packets > 0
+    first = iso_packet(handle, sequence, data[: limit - 4])
+    remaining = data[len(first.iso_sdu_fragment) :]
+    first.iso_sdu_length = len(data)
+    first.pb_flag = 0 if remaining else 2
+    tester.send(bytes(first))
+    pending = 1
+    while remaining:
+        if pending == buffers.total_num_iso_data_packets:
+            await expect_iso_credits(tester, handle, pending)
+            pending = 0
+        fragment, remaining = remaining[:limit], remaining[limit:]
+        tester.send(
+            bytes(
+                hci.HCI_IsoDataPacket(
+                    handle, len(fragment), fragment, 1 if remaining else 3
+                )
+            )
+        )
+        pending += 1
+    return pending
+
+
 async def data_path(tester, handle, direction):
     return await tester.command(
         hci.HCI_LE_Setup_ISO_Data_Path_Command(
