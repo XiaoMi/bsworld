@@ -341,8 +341,8 @@ async def _past_phy_update_outcome(link, update):
     await tester.wait(max(0, deadline - tester.radio.now_us))
 
 
-async def _invalid_phy_update_outcome(link, update, declared):
-    """Accept disconnection or verify Feature Exchange on the unchanged active PHY."""
+async def _require_invalid_phy_update_maintains_link(link, update, declared):
+    """Verify Feature Exchange on the unchanged active PHY (Core 6.B.5.1.10)."""
     tester = link.tester
     pending = deque(
         [
@@ -352,19 +352,7 @@ async def _invalid_phy_update_outcome(link, update, declared):
     )
     deadline = tester.radio.now_us + LL_RESPONSE_TIMEOUT_US
     while link.anchor < deadline:
-        event = _disconnected(tester)
-        if event is not None:
-            assert (event.status, event.connection_handle) == (
-                ErrorCode.SUCCESS,
-                link.handle,
-            )
-            for value in list(tester.events):
-                if isinstance(value, hci.HCI_LE_PHY_Update_Complete_Event):
-                    assert value.connection_handle == link.handle
-                    assert value.status != ErrorCode.SUCCESS
-                    tester.events.remove(value)
-            await _check_rf_stopped(link)
-            return True
+        assert _disconnected(tester) is None, 'invalid PHY field disconnected the ACL'
         data = pending[0] if pending else b''
         sent_sn = link.sn
         packet, sent = await _wire_event(
@@ -399,10 +387,8 @@ async def _invalid_phy_update_outcome(link, update, declared):
                 isinstance(value, hci.HCI_LE_PHY_Update_Complete_Event)
                 for value in tester.events
             ), 'invalid-PHY maintenance reported a PHY completion'
-            return False
-    raise AssertionError(
-        'invalid PHY update neither disconnected nor maintained LL traffic'
-    )
+            return
+    raise AssertionError('invalid PHY update did not maintain LL traffic')
 
 
 async def _invalid_update(tester, *, past=False, rfu=False):
@@ -445,8 +431,7 @@ async def _invalid_update(tester, *, past=False, rfu=False):
             )
             await _past_phy_update_outcome(link, update)
             return
-        if await _invalid_phy_update_outcome(link, update, declared):
-            link = await establish(tester, peer_address=LOWER_CENTRAL_PUBLIC_ADDRESS)
+        await _require_invalid_phy_update_maintains_link(link, update, declared)
     await link.disconnect(local=True)
 
 
@@ -2727,30 +2712,24 @@ async def phy_update_procedure_invalid_or_unsupported_phy_central_initiated(
            Table 4.3-49 row, using a valid future Instant. For BI-20 use
            (0x03,0x03), (0x03,0x01), (0x01,0x03); for BI-21 use
            (0x80,0x80), (0x80,0x01), (0x01,0x80).
-        4. Follow the IUT's chosen outcome:
-           Alternative 4A, disconnection:
-               4A.1 Require HCI Disconnection Complete for the active handle.
-               4A.2 Reestablish the connection between IUT and Lower Tester.
-               4A.3 Require Connection Complete for the new Peripheral ACL.
-           Alternative 4B, maintenance on the active PHY:
-               4B.1 Require no HCI PHY Update Complete event.
-               4B.2 Send LL_FEATURE_REQ on the unchanged active PHY with the
-                    Lower Tester feature set; select zero features here.
-               4B.3 Receive a valid LL_FEATURE_RSP on that PHY with the
-                    permitted IUT feature set.
-               4B.4 If PHY_C_TO_P is an unsupported defined PHY and not RFU,
-                    transmit on the unsupported PHY and require no response.
+        4. Follow alternative 4B with the connection still active:
+           4B.1 Require no HCI PHY Update Complete event.
+           4B.2 Send LL_FEATURE_REQ on LE 1M with zero Lower Tester features.
+           4B.3 Receive a valid LL_FEATURE_RSP on LE 1M with the permitted
+                IUT feature set.
 
         Repeat the complete procedure for all three rows of the selected case.
 
     Expected Outcome:
         Pass verdict:
-            Complete the selected disconnect/reestablish or maintained-link
-            alternative. Maintenance produces a valid Feature Response and no
-            Host PHY completion. Any applicable unsupported-PHY probe receives
-            no response.
+            The same connection remains active on LE 1M in both directions and
+            produces a valid Feature Response for each row. No Host PHY
+            completion is reported.
 
     Source Correction:
+        LL.TS lists disconnection as alternative 4A. Core Vol 6, Part B,
+        Section 5.1.10 requires the invalid direction to keep its active PHY.
+        Every selected row leaves both directions on LE 1M, so require 4B.
         The outcome addresses the HCI PHY completion check to the Lower Tester.
         HCI events belong to the Upper Tester, as Step 4B.1 specifies. Amber
         corroborates this local destination correction; no adopted erratum is
@@ -2763,11 +2742,8 @@ async def phy_update_procedure_invalid_or_unsupported_phy_central_initiated(
         Amber corroborates that applicability distinction. Keep each on-air
         control payload unchanged until acknowledged before advancing to the
         Feature Request, and require its acknowledgement before accepting the
-        response. Reestablish after every 4A result, including the final row;
-        retain a 4B connection for the next row, then disconnect through HCI.
-        Boundary units cover both paths, retries and invalid notifications;
-        native trials currently exercise 4A. A failed optional PHY notification
-        on 4A must have the right handle and may not claim successful change.
+        response. Use the same connection for all rows and disconnect through
+        HCI after the last row.
 
     Reference:
         LL.TS.p28, Section 4.3.5.3, Table 4.3-49, Figure 4.3-125;
@@ -2778,9 +2754,8 @@ async def phy_update_procedure_invalid_or_unsupported_phy_central_initiated(
     await _invalid_update(tester, past=False, rfu=rfu)
 
 
-# Verify that a Peripheral handles a Central PHY update containing invalid multiple-PHY
-# or RFU selections, either disconnecting or keeping its active PHY without an
-# inappropriate Host PHY-change notification.
+# Verify that a Peripheral keeps its active PHY and connection when a Central sends
+# invalid multiple-PHY or RFU selections with no valid PHY change.
 PROCEDURES |= procedure_cases(
     phy_update_procedure_invalid_or_unsupported_phy_central_initiated,
     {
