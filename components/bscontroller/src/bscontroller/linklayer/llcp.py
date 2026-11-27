@@ -92,7 +92,7 @@ class LlcpCoordinator:
     @property
     def local_procedure_busy(self) -> bool:
         return (
-            self.controls.blocks_local_procedure
+            self.controls.pending is not None
             or self.encryption.busy
             or any(
                 procedure.active
@@ -116,9 +116,13 @@ class LlcpCoordinator:
     def has_pending(self, kind: str) -> bool:
         return any(procedure.kind == kind for procedure in self._deferred)
 
+    def register(self, procedure: ProcedureContext) -> None:
+        """Track a procedure as soon as it takes a slot, even before sending."""
+        self._procedures[procedure] = None
+
     def start_response_timer(self, procedure: ProcedureContext) -> None:
         """Register a procedure waiting on the peer or Host without an outgoing PDU."""
-        self._procedures[procedure] = None
+        self.register(procedure)
         procedure.response_timer = self._response_timer
         self._response_timer.restart(self.connection.radio.now_us)
 
@@ -131,7 +135,7 @@ class LlcpCoordinator:
         priority: bool = False,
     ) -> Outbound:
         """Continue an admitted procedure and attach it to the ACL transmission."""
-        self._procedures[procedure] = None
+        self.register(procedure)
         if timed:
             procedure.response_timer = self._response_timer
         return self._enqueue(payload, priority=priority, procedure=procedure)

@@ -413,6 +413,7 @@ class FrameSpaceProcedure(LocalProcedure):
             frozenset(),
             None,
             origin=ProcedureOrigin.REMOTE,
+            blocks_local=True,
             completion=ProcedureCompletion.SENT,
             on_sent=self._response_sent,
         )

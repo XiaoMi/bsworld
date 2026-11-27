@@ -100,9 +100,11 @@ class ConnectionParametersProcedure:
 
     @property
     def request_pending(self) -> bool:
-        return self.parameter_request or bool(
-            self.remote_context and self.remote_context.active
-        )
+        return self.parameter_request or self.remote_pending
+
+    @property
+    def remote_pending(self) -> bool:
+        return self.remote_context is not None and self.remote_context.active
 
     @property
     def requested_parameters(self) -> tuple[int, int, int, int] | None:
@@ -134,8 +136,10 @@ class ConnectionParametersProcedure:
             self.control,
             origin=ProcedureOrigin.REMOTE,
             phase=ProcedurePhase.WAIT_HOST,
+            blocks_local=True,
             peer_payload=payload,
         )
+        self.connection.llcp.register(self.remote_context)
 
     def finish(self) -> None:
         for context in (self.local_context, self.remote_context):
@@ -428,19 +432,14 @@ class ConnectionParametersProcedure:
                 elif (
                     connection.role == Role.PERIPHERAL
                     and (self.parameter_request or self.owner.phy.phy_request_local)
-                    and not (
-                        self.remote_parameters
-                        or self.owner.pending
-                        or self.owner.phy.remote_phy_request
-                        or self.owner.data_length.pending
-                    )
+                    and not self.owner.peer_instant_blocked(allow_local_collision=True)
                 ):
                     # Preserve the Central's request across local rejection. Only a
                     # same-procedure collision delays its Host notification.
                     self.receive_request(payload[PDU_CONTROL_OPCODE_SIZE:])
                     if self.owner.phy.phy_request_local:
                         self.notify_remote_parameters()
-                elif self.owner.peer_instant_blocked:
+                elif self.owner.peer_instant_blocked():
                     self.owner.reject(
                         opcode,
                         (

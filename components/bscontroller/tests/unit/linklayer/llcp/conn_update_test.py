@@ -96,6 +96,36 @@ def complete_update_at_instant(iut, update, *, notify=True, interval=None):
     assert_idle(iut)
 
 
+def test_peer_parameter_request_holds_slot_through_instant(peripheral):
+    """Defer a new local procedure until the peer's timing update applies."""
+    peripheral.event_prepare()
+    peripheral.lt_tx(connection_param_req(30, 40))
+    peripheral.ut_rx(REMOTE_REQUEST)
+    assert peripheral.host('reply_parameters', 30, 40, 0, 100) == ErrorCode.SUCCESS
+    peripheral.lt_rx(Opcode.LL_CONNECTION_PARAM_RSP)
+    peripheral.tx_ack()
+    peripheral.host_start('read_remote_version')
+    peripheral.event_done()
+    peripheral.event_prepare()
+    peripheral.lt_rx_q_is_empty()
+
+    peripheral.lt_tx(connection_param_req(32, 40))
+    peripheral.lt_rx(
+        Opcode.LL_REJECT_EXT_IND,
+        reject_ext_ind(Opcode.LL_CONNECTION_PARAM_REQ, PROCEDURE_COLLISION),
+    )
+    peripheral.tx_ack()
+    peripheral.ut_rx_q_is_empty()
+
+    instant = peripheral.event_counter + 6
+    peripheral.lt_tx(connection_update_ind(36, instant))
+    peripheral.event_done()
+    peripheral.wait_instant(instant)
+    peripheral.event_prepare()
+    peripheral.ut_rx(UPDATE_DONE, status=0, connection_interval=36)
+    peripheral.lt_rx(Opcode.LL_VERSION_IND)
+
+
 # ---------------------------------------------------------------------------
 # Central, local
 # ---------------------------------------------------------------------------

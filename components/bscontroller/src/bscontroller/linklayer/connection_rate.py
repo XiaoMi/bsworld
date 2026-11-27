@@ -437,7 +437,7 @@ class ConnectionRateProcedure(LocalProcedure):
             self.owner.reject(opcode, UNSUPPORTED)
             return
         if (
-            self.owner.peer_instant_blocked
+            self.owner.peer_instant_blocked()
             or self.owner.subrating.pending
             or self.pending
             or llcp.has_pending('peer_rate')
