@@ -172,27 +172,6 @@ class LlcpCoordinator:
                 DeferredProcedure('channel_map', self.controls.update_channel_map)
             )
 
-    def schedule_indication(self, payload: bytes) -> None:
-        opcode = Opcode(payload[0])
-        assert opcode in (Opcode.LL_MIN_USED_CHANNELS_IND, Opcode.LL_POWER_CHANGE_IND)
-
-        def start() -> None:
-            if self.connection.termination_deadline_us is not None:
-                return
-            # Power Change Indication completes on first transmission (6.B.5.1.18).
-            # Minimum Number Of Used Channels completes on acknowledgment (6.B.5.1.11).
-            completion = (
-                ProcedureCompletion.SENT
-                if opcode == Opcode.LL_POWER_CHANGE_IND
-                else ProcedureCompletion.ACKNOWLEDGED
-            )
-            self.send(
-                ProcedureContext(opcode, frozenset(), None, completion=completion),
-                payload,
-            )
-
-        self.initiate(DeferredProcedure(opcode.name, start))
-
     def _request(self, procedure: DeferredProcedure, *, active: bool = False) -> int:
         if active or self.has_pending(procedure.kind):
             return DISALLOWED
@@ -673,10 +652,8 @@ class LlcpCoordinator:
                     allowed_minimum, maximum, latency, timeout
                 )
 
-        return self._request(
-            DeferredProcedure('parameters', request, complete),
-            active=self.controls.connection_parameters.parameter_request,
-        )
+        self.initiate(DeferredProcedure('parameters', request, complete))
+        return SUCCESS
 
     def supply_key(self, key: bytes | None) -> int:
         if (

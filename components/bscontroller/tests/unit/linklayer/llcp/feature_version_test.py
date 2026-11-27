@@ -97,7 +97,7 @@ def test_extended_feature_wrong_page_keeps_exchange(iut, role):
         max_valid_page=1,
         le_features=(1 << 63).to_bytes(8, 'little') + b'\x01' + bytes(239),
     )
-    assert not dut.controls.feature_request
+    assert not dut.controls.features.pending
 
 
 @pytest.mark.parametrize('role', ROLES)
@@ -131,7 +131,7 @@ def test_feature_loc(iut, role):
     assert le_features(event) == PEER_FEATURES
     dut.ut_rx_q_is_empty()
     assert (
-        not dut.controls.feature_request
+        not dut.controls.features.pending
         and dut.connection.llcp.response_deadline_us is None
     )
     # The second request is served from the cache, without air traffic.
@@ -205,7 +205,7 @@ def test_feature_loc_refused(iut, role, response, status):
     dut.ut_rx_q_is_empty()
     # UNKNOWN_RSP is never answered with another UNKNOWN_RSP.
     dut.lt_rx_q_is_empty()
-    assert not dut.controls.feature_request
+    assert not dut.controls.features.pending
 
 
 @pytest.mark.parametrize('role', ROLES)
@@ -291,7 +291,7 @@ def test_feature_loc_wrong_length_response_is_unknown(iut, role):
     dut.event_done()
     dut.event_prepare()
     dut.lt_rx(Opcode.LL_UNKNOWN_RSP, unknown_rsp(Opcode.LL_FEATURE_RSP))
-    assert dut.controls.feature_request
+    assert dut.controls.features.pending
     dut.ut_rx_q_is_empty()
 
 
@@ -446,7 +446,7 @@ def test_feature_collision_loc_and_rem(iut, role):
     dut.tx_ack()
     dut.event_done()
     # Peer features learned from its request do not finish our own request.
-    assert dut.controls.feature_request
+    assert dut.controls.features.pending
     dut.event_prepare()
     dut.lt_rx(request_opcode(role))
     dut.lt_tx(feature(Opcode.LL_FEATURE_RSP, PEER_FEATURES))
@@ -638,7 +638,7 @@ def test_version_loc_disconnect_reports_only_disconnection(iut, role):
 def test_version_timer_starts_after_feature_exchange(central):
     """A queued Version Exchange gets a full timeout after Feature Exchange."""
     central.host_start('read_remote_features')
-    first = central.controls.features.deadline_us
+    first = central.connection.llcp.deadline_for(central.controls.features.context)
     central.elapse(1000)
     central.host_start('read_remote_version')
     assert central.controls.version_deadline_us is None

@@ -1442,7 +1442,7 @@ def test_all_remote_features_failure_completion(host, reason):
         status = ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR
         host.in_loop(connection.complete, status)
     host.ut_rx(hci.HCI_LE_Read_All_Remote_Features_Complete_Event, status=status)
-    assert not connection.controls.feature_request
+    assert not connection.controls.features.pending
 
 
 def test_all_remote_features_rejects_invalid_pages_and_cross_connection_overlap(host):
@@ -1555,4 +1555,4 @@ def test_all_remote_features_extended_page_rejected(host, reply, status):
     host.ut_rx_q_is_empty()
     host.in_loop(connection.llcp.control, reply)
     host.ut_rx(hci.HCI_LE_Read_All_Remote_Features_Complete_Event, status=status)
-    assert not connection.controls.feature_request
+    assert not connection.controls.features.pending

@@ -13,12 +13,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import TYPE_CHECKING
 
 from bscontroller.errors import ErrorCode
-
-if TYPE_CHECKING:
-    from bscontroller.linklayer.connection import Connection
 
 PROCEDURE_COLLISION = (
     ErrorCode.LMP_ERROR_TRANSACTION_COLLISION_OR_LL_PROCEDURE_COLLISION_ERROR
@@ -81,15 +77,10 @@ class ProcedureContext:
 
 
 class LocalProcedure:
-    """A local control exchange and its response deadline while active."""
+    """A local control exchange with its current procedure context."""
 
     context: ProcedureContext | None
-    connection: Connection
 
     @property
     def pending(self) -> bool:
         return self.context is not None and self.context.active
-
-    @property
-    def deadline_us(self) -> int | None:
-        return self.connection.llcp.deadline_for(self.context)

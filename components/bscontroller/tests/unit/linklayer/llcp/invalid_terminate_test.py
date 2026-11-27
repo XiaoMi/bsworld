@@ -430,7 +430,7 @@ def test_terminate_rem_during_procedure(iut, role):
     dut.lt_rx_empty(ack=False)
     dut.ut_rx(hci.HCI_LE_Read_Remote_Features_Complete_Event, status=REMOTE)
     dut.ut_rx(DISCONNECTED, reason=REMOTE)
-    assert not dut.controls.feature_request
+    assert not dut.controls.features.pending
     assert dut.connection.llcp.response_deadline_us is None
     assert not dut.connection.llcp.local_procedure_busy
 
