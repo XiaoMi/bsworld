@@ -12,6 +12,7 @@ collision_test.py.
 import pytest
 
 from bscontroller.linklayer import LL_RESPONSE_TIMEOUT_US
+from bscontroller.linklayer import phy as phy_procedure
 from bscontroller.radio.base import PHY_CODED_S8_FACTOR, Phy
 from tests.unit.linklayer.llcp.harness import (
     CENTRAL,
@@ -698,31 +699,76 @@ def test_periph_loc_no_actual_change(peripheral):
 
 
 @pytest.mark.parametrize(
-    'central_phy,peripheral_phy',
-    [(PHY_1M | PHY_2M, PHY_2M), (PHY_2M, 0x08), (0x03, 0)],
-    ids=['two-bits', 'rfu-bit', 'two-bits-one-side'],
+    'host_initiated', [True, False], ids=['host-initiated', 'peer-initiated']
 )
-def test_periph_invalid_update_closes_link(peripheral, central_phy, peripheral_phy):
-    """An UPDATE_IND with an illegal PHY field closes the link.
+@pytest.mark.parametrize(
+    'supported_phys,central_phy,peripheral_phy,expected',
+    [
+        (ALL_PHYS, PHY_1M | PHY_2M, PHY_2M, (Phy.LE_2M, Phy.LE_1M)),
+        (ALL_PHYS, PHY_2M, PHY_2M | 0x80, (Phy.LE_1M, Phy.LE_2M)),
+        (PHY_1M | PHY_2M, PHY_2M, PHY_CODED, (Phy.LE_1M, Phy.LE_2M)),
+        (ALL_PHYS, PHY_1M, 0x80, (Phy.LE_1M, Phy.LE_1M)),
+        (ALL_PHYS, 0x80, PHY_1M | PHY_2M, (Phy.LE_1M, Phy.LE_1M)),
+    ],
+    ids=['multiple-bits', 'reserved-and-valid-bits', 'unsupported', 'current', 'both'],
+)
+def test_periph_invalid_update_keeps_phy_in_affected_direction(
+    peripheral,
+    monkeypatch,
+    host_initiated,
+    supported_phys,
+    central_phy,
+    peripheral_phy,
+    expected,
+):
+    """Invalid UPDATE_IND fields leave their directions unchanged (Core 6.B.5.1.10).
 
-    Purpose: Verify that a Peripheral rejects an UPDATE_IND that sets more than
-    one PHY bit, an RFU bit, or two bits on one side, closing the connection with
-    invalid parameters, across those three malformed cases.
+    Purpose: Verify directional handling of multiple bits, reserved bits and a
+    defined PHY outside the Controller's supported mask.
 
     Steps:
-        1. Lower Tester sends UPDATE_IND with the malformed PHY fields.
+        1. Start a PHY Update from the Host or the Lower Tester.
+        2. Exchange the PHY request or response and send UPDATE_IND with an
+           invalid field and a future Instant.
+        3. If a PHY will change, advance to the Instant.
 
     Expected:
-        - The connection is closed.
-        - Host gets Disconnection Complete (invalid parameters).
+        - The connection stays open and each invalid direction keeps its PHY.
+        - A valid change applies at the Instant and reports the resulting PHYs.
+        - With no change, only a Host-initiated procedure reports completion.
     """
+    monkeypatch.setattr(phy_procedure, 'CONTROLLER_SUPPORTED_PHY_MASK', supported_phys)
+    if host_initiated:
+        peripheral.host_start(
+            'prepare_phy', supported_phys, supported_phys, PHY_CODED_S8_FACTOR
+        )
+        peripheral.event_prepare()
+        peripheral.lt_rx(Opcode.LL_PHY_REQ)
+    else:
+        peripheral.event_prepare()
+        peripheral.lt_tx(phy_req(supported_phys, supported_phys))
+        peripheral.event_done()
+        peripheral.event_prepare()
+        peripheral.lt_rx(Opcode.LL_PHY_RSP)
+    peripheral.tx_ack()
+    peripheral.event_done()
+    instant = peripheral.event_counter + 6
     peripheral.event_prepare()
-    peripheral.lt_tx(phy_update_ind(central_phy, peripheral_phy, 10))
-    assert peripheral.connection.closed
-    peripheral.ut_rx(
-        hci.HCI_Disconnection_Complete_Event,
-        reason=ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR,
-    )
+    peripheral.lt_tx(phy_update_ind(central_phy, peripheral_phy, instant))
+    assert not peripheral.connection.closed
+    assert peripheral.controls.next_deadline_us == 0
+    current = (Phy.LE_1M, Phy.LE_1M)
+    assert_phys(peripheral, *current)
+    if expected != current:
+        peripheral.event_done()
+        peripheral.wait_instant(instant)
+        assert_phys(peripheral, *current)
+        peripheral.event_prepare()
+    assert_phys(peripheral, *expected)
+    if expected != current or host_initiated:
+        peripheral.ut_rx(PHY_DONE, status=0, tx_phy=expected[0], rx_phy=expected[1])
+    peripheral.ut_rx_q_is_empty()
+    assert_idle(peripheral)
 
 
 @pytest.mark.parametrize('counter', [0, 0xFFFF])

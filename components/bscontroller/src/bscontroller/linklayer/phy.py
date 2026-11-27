@@ -112,6 +112,14 @@ class PhyProcedure:
             current,
         )
 
+    @staticmethod
+    def _indicated_change(mask: int, current: Phy) -> int:
+        """An invalid selection leaves this direction unchanged (Core 6.B.5.1.10)."""
+        if mask.bit_count() != 1 or mask & ~CONTROLLER_SUPPORTED_PHY_MASK:
+            return 0
+        phy = mask.bit_length()
+        return phy if phy != current else 0
+
     def _phy_update(self, peer_tx: int, peer_rx: int) -> None:
         """Central chooses PHYs and sends LL_PHY_UPDATE_IND (Core Vol 6, Part B,
         5.1.10).
@@ -196,17 +204,14 @@ class PhyProcedure:
         if (
             opcode == Opcode.LL_PHY_UPDATE_IND
             and len(payload) == PDU_CONTROL_PHY_UPDATE_SIZE
+            and connection.role == Role.PERIPHERAL
         ):
             central, peripheral, instant = PHY_UPDATE.unpack_from(
                 payload, PDU_CONTROL_OPCODE_SIZE
             )
-            if (
-                connection.role != Role.PERIPHERAL
-                or central not in (0, *(1 << (phy - 1) for phy in Phy))
-                or peripheral not in (0, *(1 << (phy - 1) for phy in Phy))
-            ):
-                connection.complete(ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR)
-            elif central or peripheral:
+            central_change = self._indicated_change(central, connection.rx_phy)
+            peripheral_change = self._indicated_change(peripheral, connection.tx_phy)
+            if central_change or peripheral_change:
                 if self.context is not None:
                     # Acceptance at the current event can apply synchronously and
                     # finish this context. Publish the wait phase before that call.
@@ -215,13 +220,13 @@ class PhyProcedure:
                 self.owner.accept_instant(
                     InstantUpdate(
                         instant,
-                        central_tx_phy=central.bit_length(),
-                        peripheral_tx_phy=peripheral.bit_length(),
+                        central_tx_phy=central_change,
+                        peripheral_tx_phy=peripheral_change,
                     )
                 )
             else:
-                # An all-zero update completes negotiation without changing PHYs. A Host
-                # request still needs a completion event (Vol 6, Part B, 5.1.10).
+                # With no effective PHY change, only a Host request needs a completion
+                # event (Vol 6, Part B, 5.1.10).
                 self.finish(ErrorCode.SUCCESS, notify=self.phy_request_local)
             return True
 
