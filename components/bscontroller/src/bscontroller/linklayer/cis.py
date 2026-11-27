@@ -11,8 +11,7 @@ from typing import TYPE_CHECKING
 from cryptography.exceptions import InvalidTag
 
 from bscontroller.linklayer import (
-    LL_ENCRYPTION_COUNTER_SIZE,
-    LL_ENCRYPTION_DIRECTION_MASK,
+    LL_ENCRYPTION_COUNTER_BITS,
     LL_EVENT_COUNTER_MASK,
     LL_IFS_US,
     LL_SUPERVISION_TIMEOUT_UNIT_US,
@@ -42,6 +41,7 @@ if TYPE_CHECKING:
 
     from bscontroller.linklayer.connection import Connection
     from bscontroller.linklayer.iso import IsoDataPaths
+    from bscontroller.linklayer.packet_security import PacketCipher
     from bscontroller.radio.base import Received
 
 
@@ -52,7 +52,7 @@ CIS_CIE = 0x10
 CIS_NPI = 0x40
 CIS_AUTHENTICATED_MASK = 0xFF ^ (CIS_NESN | CIS_SN | CIS_CIE | CIS_NPI)
 CIS_ESTABLISHMENT_EVENTS = 6
-CIS_PAYLOAD_COUNTER_LIMIT = (1 << 39) - 1
+CIS_PAYLOAD_COUNTER_LIMIT = (1 << LL_ENCRYPTION_COUNTER_BITS) - 1
 
 
 @dataclass(frozen=True)
@@ -187,7 +187,8 @@ class CisEvent:
         self._tx_next = self._rx_next = self._delivered = 0
         self._tx_sent = False
         self._quality = CisLinkQuality()
-        self._iv_xor = access_address.to_bytes(4, 'little') + bytes(4)
+        self._acl_cipher: PacketCipher | None = None
+        self._iv = b''
 
     @property
     def _anchor_fixed(self) -> int:
@@ -430,11 +431,15 @@ class CisEvent:
             return payload
         cipher = security.cipher
         assert cipher is not None
-        iv = bytes(x ^ y for x, y in zip(cipher.iv, self._iv_xor))
+        if cipher is not self._acl_cipher:
+            # CIS XORs the access address into the low four octets of the ACL
+            # IV (Core Vol 6, Part E, 2). Recompute when the ACL cipher changes.
+            self._iv = (
+                int.from_bytes(cipher.iv, 'little') ^ self.access_address
+            ).to_bytes(len(cipher.iv), 'little')
+            self._acl_cipher = cipher
         from_central = self.central if transmit else not self.central
-        nonce = (
-            counter | (LL_ENCRYPTION_DIRECTION_MASK if from_central else 0)
-        ).to_bytes(LL_ENCRYPTION_COUNTER_SIZE, 'little') + iv
+        nonce = cipher.nonce(counter, from_central, iv=self._iv)
         associated = bytes([header & CIS_AUTHENTICATED_MASK])
         if transmit:
             return cipher.aes.encrypt(nonce, payload, associated)

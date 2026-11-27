@@ -35,12 +35,12 @@ class PacketCipher:
         self.central = central
         self.tx_counter = self.rx_counter = 0
 
-    def nonce(self, counter: int, central: bool) -> bytes:
+    def nonce(self, counter: int, central: bool, *, iv: bytes | None = None) -> bytes:
         if not 0 <= counter < 1 << LL_ENCRYPTION_COUNTER_BITS:
             raise OverflowError('LE encryption packet counter exhausted')
         return (counter | (LL_ENCRYPTION_DIRECTION_MASK if central else 0)).to_bytes(
             LL_ENCRYPTION_COUNTER_SIZE, 'little'
-        ) + self.iv
+        ) + (self.iv if iv is None else iv)
 
     def encrypt(self, header: int, payload: bytes) -> bytes:
         """AES-CCM with a 4-octet MIC; nonce = packetCounter, direction bit and IV (Core
