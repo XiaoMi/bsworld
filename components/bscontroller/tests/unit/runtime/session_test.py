@@ -22,7 +22,7 @@ fixture supplies a FIFO-backed clock/PHY pair.
 import asyncio
 import os
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -244,6 +244,53 @@ async def test_session_worker_failure_preserves_task_cancellation():
         await task
     assert task.cancelled()
     assert 'radio failed' in cancelled.value.__notes__[0]
+
+
+@pytest.mark.asyncio
+async def test_session_timeout_during_cleanup_overrides_body_error():
+    """A timeout during shutdown reaches the caller after the clock is closed."""
+    timeout = asyncio.timeout(None)
+
+    async def close_worker():
+        timeout.reschedule(asyncio.get_running_loop().time())
+        await asyncio.Future()
+
+    worker = SimpleNamespace(start=AsyncMock(), close=close_worker)
+    clock = SimpleNamespace(close=Mock(side_effect=OSError('clock close failed')))
+    body_error = ValueError('scenario failed')
+    with pytest.raises(TimeoutError) as timed_out:
+        async with timeout, BabbleSimSession('timeout', [(0, worker)]) as session:
+            session.clock = clock
+            raise body_error
+
+    clock.close.assert_called_once()
+    # Python 3.11's asyncio.timeout uses implicit exception chaining.
+    cancelled = timed_out.value.__cause__ or timed_out.value.__context__
+    assert isinstance(cancelled, asyncio.CancelledError)
+    assert cancelled.__context__ is body_error
+    assert 'clock close failed' in cancelled.__notes__[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stage', ['unbind', 'close'])
+async def test_session_cleanup_preserves_keyboard_interrupt(stage):
+    """KeyboardInterrupt during clock cleanup propagates over a scenario failure."""
+    interrupt = KeyboardInterrupt()
+    worker = SimpleNamespace(start=AsyncMock(), close=AsyncMock())
+    clock = SimpleNamespace(
+        close=Mock(side_effect=interrupt if stage == 'close' else None),
+    )
+    loop = SimpleNamespace(
+        unbind_clock=Mock(side_effect=interrupt if stage == 'unbind' else None),
+    )
+    with pytest.raises(KeyboardInterrupt) as interrupted:
+        async with BabbleSimSession('interrupt', [(0, worker)]) as session:
+            session.clock = clock
+            session.loop = loop
+            raise ValueError('scenario failed')
+
+    assert interrupted.value is interrupt
+    clock.close.assert_called_once()
 
 
 @pytest.mark.asyncio
