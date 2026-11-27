@@ -6,10 +6,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 
 from bscontroller import hci
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
+    LL_ENCRYPTION_COUNTER_BITS,
     LL_RESPONSE_TIMEOUT_US,
     LL_SCA_50_PPM,
     LL_SCA_500_PPM,
@@ -30,7 +32,7 @@ from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.frame_space import FrameSpaceRequest
 from bscontroller.linklayer.iso import IsoDataPaths
 from bscontroller.linklayer.isoal import IsoSdu, IsoStatus
-from bscontroller.linklayer.packet_security import PacketSecurity
+from bscontroller.linklayer.packet_security import PacketCipher, PacketSecurity
 from bscontroller.linklayer.resource import RadioResourceManager
 from bscontroller.linklayer.scheduler import RadioPriority, RadioReservation
 from bscontroller.linklayer.state import Role
@@ -102,6 +104,32 @@ def test_central_cis_supervision_waits_for_acl_ack():
     event.start_supervision()
     assert not event.awaiting_indication_ack
     assert event.deadline_us == ANCHOR_US + (3 + 6) * INTERVAL_US
+
+
+def test_cis_nonce_uses_current_acl_cipher_and_checks_counter():
+    """CIS derives its IV from the current ACL and shares its counter bound."""
+    direction = CisDirection(Phy.LE_1M, 20, 1, 1, INTERVAL_US, 20)
+    event, _, _ = make_event(direction, direction, [])
+    security = event.connection.packet_security
+    security.tx_enabled = security.rx_enabled = True
+    header, payload, count = 2, b'CIS payload', 7
+    access_address_mask = event.access_address.to_bytes(4, 'little') + bytes(4)
+    for marker in (0x2A, 0x55):
+        key, iv = bytes([marker]) * 16, bytes([marker]) * 8
+        security.cipher = PacketCipher(key, iv, central=True)
+        expected_iv = bytes(x ^ y for x, y in zip(iv, access_address_mask))
+        aes = AESCCM(key, tag_length=4)
+        central_counter = bytes([count, 0, 0, 0, 0x80])
+        peripheral_counter = bytes([count, 0, 0, 0, 0])
+        sent = aes.encrypt(central_counter + expected_iv, payload, bytes([header]))
+        assert event._crypt(header, payload, count, transmit=True) == sent
+        assert event._crypt(header, payload, count, transmit=True) == sent
+        wire = aes.encrypt(peripheral_counter + expected_iv, payload, bytes([header]))
+        assert event._crypt(header, wire, count, transmit=False) == payload
+        assert security.cipher.tx_counter == security.cipher.rx_counter == 0
+
+    with pytest.raises(OverflowError, match='packet counter exhausted'):
+        event._crypt(header, payload, 1 << LL_ENCRYPTION_COUNTER_BITS, transmit=True)
 
 
 def test_central_acl_and_cis_keep_fractional_phase_when_clock_accuracy_changes(
