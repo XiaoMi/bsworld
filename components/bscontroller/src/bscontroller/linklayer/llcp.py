@@ -106,13 +106,6 @@ class LlcpCoordinator:
             or self.cig.busy(self.connection)
         )
 
-    def _admit(self, procedure: DeferredProcedure) -> int:
-        """Start now, queue behind another procedure, or refuse a duplicate."""
-        if self._duplicate(procedure.kind):
-            return DISALLOWED
-        self._schedule(procedure)
-        return SUCCESS
-
     def _schedule(self, procedure: DeferredProcedure) -> None:
         if self.local_procedure_busy or self.deferred:
             self.deferred.append(procedure)
@@ -129,7 +122,7 @@ class LlcpCoordinator:
     def _prepare(self, procedure: DeferredProcedure) -> PreparedProcedure:
         if self._duplicate(procedure.kind):
             return PreparedProcedure(DISALLOWED)
-        return PreparedProcedure(SUCCESS, lambda: self._admit(procedure))
+        return PreparedProcedure(SUCCESS, lambda: self._schedule(procedure))
 
     def _duplicate(self, kind: str) -> bool:
         """The Host already has this procedure running or queued."""
@@ -531,7 +524,7 @@ class LlcpCoordinator:
             if features.can_report_cached(pages):
                 features.request(pages)
             else:
-                self._admit(
+                self._schedule(
                     DeferredProcedure(
                         kind,
                         lambda: features.request(pages),
@@ -542,13 +535,13 @@ class LlcpCoordinator:
         return PreparedProcedure(SUCCESS, start)
 
     def prepare_version(self) -> PreparedProcedure:
+        if self.controls.peer_version is None:
+            return self._prepare(
+                DeferredProcedure('version', self.controls.request_version)
+            )
         if self._duplicate('version'):
             return PreparedProcedure(DISALLOWED)
-        if self.controls.peer_version is not None:
-            return PreparedProcedure(SUCCESS, self.controls.request_version)
-        return self._prepare(
-            DeferredProcedure('version', self.controls.request_version)
-        )
+        return PreparedProcedure(SUCCESS, self.controls.request_version)
 
     def prepare_phy(self, tx: int, rx: int, coding: int) -> PreparedProcedure:
         def request():
@@ -662,7 +655,8 @@ class LlcpCoordinator:
             if self._peer_supports_data_length:
                 self.controls.data_length.request(octets, time_us)
 
-        return self._admit(DeferredProcedure('data_length', start))
+        self._schedule(DeferredProcedure('data_length', start))
+        return SUCCESS
 
     @property
     def _peer_supports_data_length(self) -> bool:

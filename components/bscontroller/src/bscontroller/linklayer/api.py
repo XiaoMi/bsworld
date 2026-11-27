@@ -37,9 +37,9 @@ if TYPE_CHECKING:
 class PreparedProcedure:
     """An admitted operation started after HCI has published Command Status.
 
-    Some procedures complete immediately from cached peer information. Keeping
-    admission separate from execution preserves Command Status before completion;
-    start consumes the action so a caller cannot accidentally initiate it twice.
+    The HCI command handler queues Command Status and starts the action in the
+    same callback. Some procedures complete immediately from cached information.
+    Starting consumes the action so a caller cannot accidentally run it twice.
     """
 
     status: int

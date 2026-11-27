@@ -149,10 +149,6 @@ class ControlProcedures:
             self._instant_timer_owner = None
 
     @property
-    def deadline_us(self) -> int:
-        return self.response_timer.deadline_us if self._instant_timer_owner else 0
-
-    @property
     def listener(self) -> ControlListener:
         return self.connection.link.listener
 

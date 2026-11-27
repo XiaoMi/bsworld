@@ -44,7 +44,7 @@ def assert_phys(iut, tx, rx):
 
 def assert_idle(iut):
     assert not iut.controls.busy and not iut.controls.phy.phy_request
-    assert iut.controls.deadline_us == 0
+    assert iut.controls.next_deadline_us == 0
     iut.lt_rx_q_is_empty()
 
 
@@ -103,7 +103,7 @@ def test_central_loc(central, host, peer, ind, result):
     assert update[1:3] == bytes(ind)
     central.tx_ack()
     # The response timer stops when UPDATE_IND is sent (5.1.10, 5.2).
-    assert central.controls.deadline_us == 0
+    assert central.controls.next_deadline_us == 0
     central.event_done()
 
     central.wait_instant(instant_of(update))
@@ -335,7 +335,7 @@ def test_peer_request_restarts_phy_response_timer(central, peer_request, respons
     """
     central.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     central.lt_rx(Opcode.LL_PHY_REQ)
-    old_deadline = central.controls.deadline_us
+    old_deadline = central.controls.next_deadline_us
     central.elapse(1_000_000)
     central.lt_tx(peer_request)
     deadline = central.radio.now_us + LL_RESPONSE_TIMEOUT_US
@@ -378,7 +378,7 @@ def test_loc_disconnect_during_procedure(iut, role):
         reason=ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR,
     )
     dut.ut_rx_q_is_empty()
-    assert dut.controls.deadline_us == 0
+    assert dut.controls.next_deadline_us == 0
 
 
 def pdu_terminate():
@@ -630,7 +630,7 @@ def test_periph_loc(peripheral):
     instant = peripheral.event_counter + 6
     peripheral.event_prepare()
     peripheral.lt_tx(phy_update_ind(PHY_2M, PHY_2M, instant))
-    assert peripheral.controls.deadline_us == 0
+    assert peripheral.controls.next_deadline_us == 0
     peripheral.event_done()
     peripheral.wait_instant(instant)
     assert_phys(peripheral, Phy.LE_1M, Phy.LE_1M)
@@ -870,12 +870,12 @@ def test_periph_rem(peripheral):
     peripheral.event_prepare()
     peripheral.lt_rx(Opcode.LL_PHY_RSP, phy_rsp(ALL_PHYS, ALL_PHYS))
     peripheral.tx_ack()
-    assert peripheral.controls.deadline_us
+    assert peripheral.controls.next_deadline_us
     peripheral.event_done()
     instant = peripheral.event_counter + 6
     peripheral.event_prepare()
     peripheral.lt_tx(phy_update_ind(PHY_2M, PHY_2M, instant))
-    assert peripheral.controls.deadline_us == 0
+    assert peripheral.controls.next_deadline_us == 0
     peripheral.event_done()
     peripheral.wait_instant(instant)
     peripheral.event_prepare()
