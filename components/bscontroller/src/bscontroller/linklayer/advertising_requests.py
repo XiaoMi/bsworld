@@ -28,19 +28,21 @@ from bscontroller.linklayer.timing import auxiliary_window_delay_us
 from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from bscontroller.address import Address
     from bscontroller.linklayer.advertiser import AdvertisingManager
     from bscontroller.linklayer.discovery import Advertising
-    from bscontroller.linklayer.link import RadioLink
+    from bscontroller.linklayer.privacy import Privacy
     from bscontroller.radio.base import Received
 
 
-def _identity(link: RadioLink, item: Advertising, peer: Address) -> Address | None:
-    identity = link.privacy.identity(peer)
+def _identity(privacy: Privacy, item: Advertising, peer: Address) -> Address | None:
+    identity = privacy.identity(peer)
     if (
         identity is not None
         and item.target is not None
-        and identity != link.privacy.identity(item.target)
+        and identity != privacy.identity(item.target)
     ):
         return None
     return identity
@@ -55,13 +57,12 @@ def accept_scan_request(
         pdu[0] & PDU_ADV_TYPE_MASK != AdvertisingPduType.SCAN_REQ
     ):
         return False
-    link = advertising.link
     peer = advertising_request_peer(pdu, item.address)
-    if peer is None or (identity := _identity(link, item, peer)) is None:
+    if peer is None or (identity := _identity(advertising.privacy, item, peer)) is None:
         return False
     if (
         item.filter_policy & LL_ADV_FILTER_SCAN_MASK
-        and identity not in link.accept_list
+        and identity not in advertising.accept_list
     ):
         return False
     if item.notify_scan_request:
@@ -71,12 +72,14 @@ def accept_scan_request(
     return True
 
 
-def connection_request_parameters(link: RadioLink, pdu: bytes) -> Parameters | None:
+def connection_request_parameters(
+    pdu: bytes, trace: Callable[[str], None]
+) -> Parameters | None:
     """Decode LLData after validating the request addresses."""
     try:
         return Parameters.decode(pdu[PDU_ADV_ADDRESSES_END:])
     except ValueError as error:
-        link.trace(f'LL CONNECT REJECTED {error}')
+        trace(f'LL CONNECT REJECTED {error}')
         return None
 
 
@@ -89,19 +92,18 @@ def accept_advertising_connection(
         pdu[0] & PDU_ADV_TYPE_MASK != AdvertisingPduType.CONNECT_IND
     ):
         return None
-    link = advertising.link
     peer = advertising_request_peer(pdu, item.address)
-    if peer is None or (identity := _identity(link, item, peer)) is None:
+    if peer is None or (identity := _identity(advertising.privacy, item, peer)) is None:
         return None
     if not advertising.can_accept_connection(peer):
         return None
     if (
         item.target is None
         and item.filter_policy & LL_ADV_FILTER_CONNECT_MASK
-        and identity not in link.accept_list
+        and identity not in advertising.accept_list
     ):
         return None
-    parameters = connection_request_parameters(link, pdu)
+    parameters = connection_request_parameters(pdu, advertising.trace)
     if parameters is None:
         return None
     return ConnectionAccepted(

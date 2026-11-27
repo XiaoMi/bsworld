@@ -73,15 +73,19 @@ from bscontroller.linklayer.timing import (
 from bscontroller.radio.base import PHY_OCTET_BITS, RADIO_SWITCH_TIME_US
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Container
     from contextlib import AbstractContextManager
+    from random import Random
 
     from bscontroller.address import Address
     from bscontroller.linklayer.connection import Connection
     from bscontroller.linklayer.discovery import Initiating
-    from bscontroller.linklayer.link import RadioLink
+    from bscontroller.linklayer.listener import AdvertisingListener
     from bscontroller.linklayer.pawr import PawrTiming
+    from bscontroller.linklayer.privacy import Privacy
+    from bscontroller.linklayer.resource import RadioResourceManager
     from bscontroller.linklayer.results import ConnectionAccepted
+    from bscontroller.radio.base import Radio, Received
 
 # A Channel Map Update Indication goes out in at least six events before its
 # Instant; one more covers a PAwR event already under way (LL.TS 4.2.3.13).
@@ -162,8 +166,19 @@ def response_receive_window(
 class AdvertisingManager:
     def __init__(
         self,
-        link: RadioLink,
+        radio: Radio,
+        resource: RadioResourceManager,
+        listener: AdvertisingListener,
+        privacy: Privacy,
         *,
+        random: Random,
+        public_address: Callable[[], Address | None],
+        accept_list: Container[Address],
+        new_access_address: Callable[..., int],
+        transmit: Callable[..., Awaitable[int]],
+        receive_response: Callable[..., Awaitable[Received | None]],
+        with_radiative_power: Callable[[ExtendedPdu], ExtendedPdu],
+        trace: Callable[[str], None],
         pending_initiation: Callable[[Advertising, int], Initiating | None],
         connect: Callable[[Advertising, Initiating, int, int], Awaitable[None]],
         can_accept_connection: Callable[[Address], bool],
@@ -174,7 +189,18 @@ class AdvertisingManager:
         channel_map: Callable[[], int],
         big_info: Callable[[int, int], bytes],
     ):
-        self.link = link
+        self.radio = radio
+        self.resource = resource
+        self.listener = listener
+        self.privacy = privacy
+        self.accept_list = accept_list
+        self.transmit = transmit
+        self.receive_response = receive_response
+        self.with_radiative_power = with_radiative_power
+        self.trace = trace
+        self._random = random
+        self._public_address = public_address
+        self._new_access_address = new_access_address
         self._pending_initiation = pending_initiation
         self._connect = connect
         self.can_accept_connection = can_accept_connection
@@ -203,7 +229,7 @@ class AdvertisingManager:
             current.identity_target = candidate.identity_target
         else:
             if current is None and candidate.handle != LEGACY_ADVERTISING_HANDLE:
-                candidate.did = self.link.random.randrange(PDU_ADV_ADI_DID_MASK + 1)
+                candidate.did = self._random.randrange(PDU_ADV_ADI_DID_MASK + 1)
             self.publish(candidate)
 
     def set_decision_data(self, item: Advertising, flags: int, data: bytes) -> None:
@@ -234,7 +260,7 @@ class AdvertisingManager:
         self, item: Advertising, payload: AdvertisingPayload
     ) -> None:
         """Choose a different DID for the set or train (Vol 6, Part B, 4.4.2.11)."""
-        value = self.link.random.randrange(PDU_ADV_ADI_DID_MASK)
+        value = self._random.randrange(PDU_ADV_ADI_DID_MASK)
         if payload is AdvertisingPayload.PERIODIC:
             item.periodic_did = value + (value >= item.periodic_did)
         else:
@@ -250,7 +276,7 @@ class AdvertisingManager:
     ) -> None:
         if not item.periodic_interval:
             # The first periodic configuration seeds a random DID (4.4.2.11).
-            item.periodic_did = self.link.random.randrange(PDU_ADV_ADI_DID_MASK + 1)
+            item.periodic_did = self._random.randrange(PDU_ADV_ADI_DID_MASK + 1)
         item.periodic_interval = interval
         item.periodic_interval_max = maximum
         item.pawr = pawr
@@ -319,9 +345,9 @@ class AdvertisingManager:
             if (
                 item.handle != LEGACY_ADVERTISING_HANDLE
                 and not OwnAddressType(item.own_address_type).uses_random_fallback
-                and self.link.public_address is not None
+                and (address := self._public_address()) is not None
             ):
-                item.address = item.identity_address = self.link.public_address
+                item.address = item.identity_address = address
         if interval_unit_us is not None:
             airtime = advertising_time_us(item)
             item.interval_us = max(
@@ -330,10 +356,10 @@ class AdvertisingManager:
             )
         item.enabled = True
         item.enable_count += 1
-        item.next_us = self.link.now_us + 1
+        item.next_us = self.radio.now_us + 1
         item.events = 0
         item.max_events = max_events
-        item.deadline_us = self.link.now_us + duration_us if duration_us else None
+        item.deadline_us = self.radio.now_us + duration_us if duration_us else None
 
     def event_is_current(self, item: Advertising) -> bool:
         return self._current_event is item and self.owns(item)
@@ -341,11 +367,11 @@ class AdvertisingManager:
     def expire(self, item: Advertising, reason: int) -> None:
         if item.enabled and self.owns(item):
             self.stop(item)
-            self.link.listener.on_advertising_ended(item, reason)
+            self.listener.on_advertising_ended(item, reason)
 
     def report_scan_request(self, item: Advertising, peer: Address) -> None:
         if self.owns(item):
-            self.link.listener.on_scan_request(item, peer)
+            self.listener.on_scan_request(item, peer)
 
     async def expire_deadline(self, item: Advertising) -> None:
         self.expire(item, ErrorCode.ADVERTISING_TIMEOUT_ERROR)
@@ -367,12 +393,13 @@ class AdvertisingManager:
                     yield response_receive_window(item, responses)
 
     def prepare(self) -> list[PendingOperation]:
-        link = self.link
         operations = []
         for item in tuple(self._contexts.values()):
             if not self.owns(item):
                 continue
-            expired = item.deadline_us is not None and link.now_us >= item.deadline_us
+            expired = (
+                item.deadline_us is not None and self.radio.now_us >= item.deadline_us
+            )
             if item.enabled and (
                 expired or (item.max_events and item.events >= item.max_events)
             ):
@@ -470,18 +497,15 @@ class AdvertisingManager:
             self.end_subevent(item, current, transmitted=False, sent=True)
             return
         pdu = self.subevent_indication(item, current).encode()
-        link = self.link
         sent = await subevent_transmit(
-            link.radio, link.resource, item, current, pdu, link.transmit
+            self.radio, self.resource, item, current, pdu, self.transmit
         )
         self.end_subevent(item, current, transmitted=sent)
 
     async def _listen_slot(
         self, item: Advertising, responses: SubeventResponses
     ) -> None:
-        result = await response_receive(
-            self.link.radio, self.link.resource, item, responses
-        )
+        result = await response_receive(self.radio, self.resource, item, responses)
         self.slot_completed(item, responses, result)
 
     def request_subevent_data(self, item: Advertising, current: int) -> None:
@@ -493,7 +517,7 @@ class AdvertisingManager:
         timing, state = item.pawr, item.pawr_state
         assert timing is not None and state is not None
         state.window = state.next_window(current, timing.num_subevents)
-        self.link.listener.on_subevent_data_request(
+        self.listener.on_subevent_data_request(
             item,
             state.window.start % timing.num_subevents,
             len(state.window),
@@ -502,7 +526,7 @@ class AdvertisingManager:
     def skip_missed_subevents(self, item: Advertising) -> None:
         """Pass, untransmitted, every instance the radio is already behind."""
         while (
-            item.pawr_state is not None and subevent_start_us(item) <= self.link.now_us
+            item.pawr_state is not None and subevent_start_us(item) <= self.radio.now_us
         ):
             current = self.begin_subevent(item, request=False)
             if current is None:
@@ -553,7 +577,7 @@ class AdvertisingManager:
         if current.data is None:
             return subevent_pdu(item)
         used = sorted({item.periodic_did, item.did})
-        value = self.link.random.randrange(PDU_ADV_ADI_DID_MASK + 1 - len(used))
+        value = self._random.randrange(PDU_ADV_ADI_DID_MASK + 1 - len(used))
         for did in used:
             value += value >= did
         item.periodic_did = value
@@ -607,7 +631,7 @@ class AdvertisingManager:
                     )
                 )
             else:
-                self.link.listener.on_response_report(
+                self.listener.on_response_report(
                     item,
                     current.subevent,
                     False,
@@ -638,7 +662,7 @@ class AdvertisingManager:
         responses.responses.append(result)
         if not responses.slots:
             state.listening.remove(responses)
-            self.link.listener.on_response_report(
+            self.listener.on_response_report(
                 item,
                 responses.subevent,
                 True,
@@ -677,22 +701,21 @@ class AdvertisingManager:
         """Prepare a complete event and commit its next advertising anchor."""
         if not self.owns(item) or not item.enabled:
             return
-        link = self.link
-        item.address, generated = link.privacy.select_local_address(
+        item.address, generated = self.privacy.select_local_address(
             item.own_address_type,
             item.identity_address or item.address,
             item.privacy_peer,
         )
         item.local_rpa = item.address if generated else None
         if item.identity_target is not None:
-            item.target = link.privacy.target_address(item.identity_target)
+            item.target = self.privacy.target_address(item.identity_target)
         channel = next(
             channel
             for bit, channel in enumerate(LL_ADV_PRIMARY_CHANNELS)
             if item.channel_map & (1 << bit)
         )
-        start = link.radio.earliest_start_us(channel, item.primary_phy, transmit=True)
-        reservations = link.resource.reservations()
+        start = self.radio.earliest_start_us(channel, item.primary_phy, transmit=True)
+        reservations = self.resource.reservations()
         if reservations:
             duration = advertising_event_time_us(item)
             retry_us = start + item.interval_us
@@ -722,8 +745,8 @@ class AdvertisingManager:
         item.next_us = max(
             start
             + item.interval_us
-            + (0 if item.high_duty else link.random.randint(0, LL_ADV_DELAY_MAX_US)),
-            link.now_us + 1,
+            + (0 if item.high_duty else self._random.randint(0, LL_ADV_DELAY_MAX_US)),
+            self.radio.now_us + 1,
         )
 
     def set_periodic_enabled(
@@ -738,31 +761,30 @@ class AdvertisingManager:
             item.periodic_interval = interval
         # Re-enabling a running train can still change whether it carries ADI.
         item.periodic_adi = enable and include_adi
-        link = self.link
         if item.periodic_enabled == enable:
             return
         self._end_event(item, periodic=True)
         interval_us = item.periodic_interval * LL_PERIODIC_INTERVAL_UNIT_US
-        next_us = link.now_us + interval_us
+        next_us = self.radio.now_us + interval_us
         item.pawr_state = None
         if enable:
             duration_us = periodic_time_us(item) + LL_MAFS_US
             phase = first_radio_gap(
-                link.resource.reservations(exclude=item),
+                self.resource.reservations(exclude=item),
                 next_us,
                 duration_us,
                 next_us + interval_us - duration_us,
             )
             if phase is not None:
                 next_us = phase
-            item.periodic_aa = link.new_access_address()
-            item.periodic_crc = link.random.getrandbits(PDU_CRC_SIZE * PHY_OCTET_BITS)
+            item.periodic_aa = self._new_access_address()
+            item.periodic_crc = self._random.getrandbits(PDU_CRC_SIZE * PHY_OCTET_BITS)
             item.periodic_channel_map = self._channel_map()
             item.periodic_channel_update = None
             if item.pawr is not None:
                 # RspAA differs from the train's own Access Address (2.1.2).
                 item.pawr_state = PawrAdvertiser(
-                    link.new_access_address(exclude={item.periodic_aa})
+                    self._new_access_address(exclude={item.periodic_aa})
                 )
         item.periodic_enabled = enable
         item.periodic_next_us = next_us
@@ -781,7 +803,7 @@ class AdvertisingManager:
             item.periodic_last_counter = item.periodic_counter
         interval_us = item.periodic_interval * LL_PERIODIC_INTERVAL_UNIT_US
         count = (
-            max(0, (self.link.now_us - item.periodic_next_us) // interval_us) + 1
+            max(0, (self.radio.now_us - item.periodic_next_us) // interval_us) + 1
             if missed
             else 1
         )

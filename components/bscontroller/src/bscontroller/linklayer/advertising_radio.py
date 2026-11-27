@@ -63,7 +63,7 @@ async def advertise_legacy(advertising: AdvertisingManager, item: Advertising) -
     """One legacy advertising event over the used primary channels in ascending order
     (Core Vol 6, Part B, 4.4.2.1-4.4.2.2).
     """
-    link = advertising.link
+    radio = advertising.radio
     payload = bytes(item.address) + (bytes(item.target) if item.target else item.data)
     chsel = (
         PDU_ADV_CHSEL_MASK
@@ -91,11 +91,13 @@ async def advertise_legacy(advertising: AdvertisingManager, item: Advertising) -
             if (
                 item.high_duty
                 and item.deadline_us is not None
-                and link.now_us + 1 + Phy.LE_1M.airtime_us(len(pdu)) > item.deadline_us
+                and radio.now_us + 1 + Phy.LE_1M.airtime_us(len(pdu)) > item.deadline_us
             ):
-                await link.radio.advance_to_us(item.deadline_us)
+                await radio.advance_to_us(item.deadline_us)
                 break
-            end_us = await link.transmit(channel, pdu, power_dbm=item.tx_power_dbm)
+            end_us = await advertising.transmit(
+                channel, pdu, power_dbm=item.tx_power_dbm
+            )
             if item.pdu_type in (
                 AdvertisingPduType.ADV_IND,
                 AdvertisingPduType.ADV_DIRECT_IND,
@@ -103,7 +105,7 @@ async def advertise_legacy(advertising: AdvertisingManager, item: Advertising) -
             ):
                 if not advertising.event_is_current(item):
                     return
-                packet = await link.receive_response(
+                packet = await advertising.receive_response(
                     channel,
                     end_us,
                     search_deadline_us=item.deadline_us if item.high_duty else None,
@@ -124,13 +126,12 @@ async def advertising_request(
     """Answer SCAN_REQ with SCAN_RSP or accept CONNECT_IND after T_IFS (Core Vol 6, Part
     B, 4.4.2.3-4.4.2.5, 4.3.2).
     """
-    link = advertising.link
     if item.pdu_type in (
         AdvertisingPduType.ADV_IND,
         AdvertisingPduType.ADV_SCAN_IND,
     ) and accept_scan_request(advertising, item, packet):
         payload = bytes(item.address) + item.scan_response
-        await link.transmit(
+        await advertising.transmit(
             channel,
             bytes(
                 [
@@ -162,8 +163,8 @@ async def advertise_extended(
     """One extended advertising event: ADV_EXT_IND on each used primary channel,
     then the AUX chain (Core Vol 6, Part B, 4.4.2.2.2).
     """
-    link = advertising.link
-    start = link.radio.earliest_start_us(
+    radio = advertising.radio
+    start = radio.earliest_start_us(
         next(
             channel
             for bit, channel in enumerate(LL_ADV_PRIMARY_CHANNELS)
@@ -203,14 +204,14 @@ async def advertise_extended(
             continue
         if not advertising.event_is_current(item):
             return
-        start = link.radio.earliest_start_us(channel, item.primary_phy, transmit=True)
+        start = radio.earliest_start_us(channel, item.primary_phy, transmit=True)
         offset = (
             (aux_start - start) // PDU_ADV_OFFSET_UNIT_30_US * PDU_ADV_OFFSET_UNIT_30_US
         )
         primary = primary_pdu(item, AuxPtr(aux_channel, offset, item.secondary_phy))
-        await link.transmit(
+        await advertising.transmit(
             channel,
-            link.with_radiative_power(primary).encode(),
+            advertising.with_radiative_power(primary).encode(),
             start_us=start,
             phy=item.primary_phy,
             coding=item.primary_coding.factor(),
@@ -228,9 +229,9 @@ async def advertise_extended(
         power_dbm=item.tx_power_dbm,
     )
     if item.mode and advertising.event_is_current(item):
-        packet = await link.receive_response(
+        packet = await advertising.receive_response(
             aux_channel,
-            link.now_us + 1,
+            radio.now_us + 1,
             item.secondary_phy,
         )
         if packet and advertising.event_is_current(item):
@@ -243,7 +244,6 @@ async def respond_to_aux_request(
     """Answer AUX_SCAN_REQ or AUX_CONNECT_REQ on the secondary channel (Core Vol 6,
     Part B, 4.4.2.5.2, 4.4.2.7, 4.4.4.2).
     """
-    link = advertising.link
     if item.mode == AdvertisingMode.SCANNABLE and accept_scan_request(
         advertising, item, packet
     ):
@@ -269,7 +269,7 @@ async def respond_to_aux_request(
         return False
     # The on-air acknowledgment creates the Peripheral (Core 6.B.4.4.2.7).
     with advertising.sending_connect_response(result):
-        await link.transmit(
+        await advertising.transmit(
             channel,
             connect_response(result.self_address, result.peer),
             start_us=packet.end_us + LL_IFS_US,
@@ -292,13 +292,12 @@ async def transmit_chain(
     advertising_event: Advertising,
     **parameters,
 ):
-    link = advertising.link
     for pdu in fragments(
-        link.with_radiative_power(first), data, channel, phy, coding=coding
+        advertising.with_radiative_power(first), data, channel, phy, coding=coding
     ):
         if not advertising.event_is_current(advertising_event):
             return
-        await link.transmit(
+        await advertising.transmit(
             channel,
             pdu.encode(),
             start_us=start,
@@ -318,16 +317,15 @@ async def periodic_transmit(
     """Transmit one AUX_SYNC_IND train on its CSA #2 channel (Core Vol 6, Part B,
     4.4.2.12, 4.5.8.3).
     """
-    link = advertising.link
     channel = channel_selection_2(
         item.periodic_counter, item.periodic_aa, item.periodic_channel_map
     )
-    if not link.resource.admit(
+    if not advertising.resource.admit(
         item,
         item.periodic_next_us - RADIO_SWITCH_TIME_US,
         item.periodic_next_us + periodic_time_us(item) + LL_MAFS_US,
         RadioPriority.PERIODIC_TX,
-        earliest_us=link.radio.earliest_start_us(
+        earliest_us=advertising.radio.earliest_start_us(
             channel, item.secondary_phy, transmit=True
         )
         - RADIO_SWITCH_TIME_US,

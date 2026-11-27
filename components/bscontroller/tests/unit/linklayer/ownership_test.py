@@ -522,7 +522,7 @@ def test_released_advertiser_cannot_notify_the_host_after_handle_reuse(connectio
     """Delayed scan, PAwR and termination notifications belong to their original set."""
     sink = create_autospec(NotificationSink, instance=True, spec_set=True)
     manager = connection.link.roles.advertising
-    connection.link.listener = NotificationAdapter(sink)
+    manager.listener = NotificationAdapter(sink)
     old = Advertising(
         connection.peer, handle=7, enabled=True, pawr=PawrTiming(1, 8, 1, 2)
     )

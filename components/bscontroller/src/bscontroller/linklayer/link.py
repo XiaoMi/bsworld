@@ -87,8 +87,8 @@ class RadioLink:
         self.resource = RadioResourceManager(
             lambda: self.now_us, lambda exclude: self.roles.reservations(exclude)
         )
-        self.roles = LinkRoles(self)
         self.accept_list: set[Address] = set()
+        self.roles = LinkRoles(self)
         self.periodic_advertiser_list: set[tuple[Address, int]] = set()
         # Host default transfer mode for subsequent connections (7.8.92).
         self.sync_transfer = SyncTransferConfig()

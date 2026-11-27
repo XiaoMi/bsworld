@@ -358,7 +358,18 @@ class LinkRoles:
         )
         self.scanning = ScanningManager(link, self.synchronization.scan_disabled)
         self.advertising = AdvertisingManager(
-            link,
+            link.radio,
+            link.resource,
+            link.listener,
+            link.privacy,
+            random=link.random,
+            public_address=lambda: link.public_address,
+            accept_list=link.accept_list,
+            new_access_address=link.new_access_address,
+            transmit=link.transmit,
+            receive_response=link.receive_response,
+            with_radiative_power=link.with_radiative_power,
+            trace=link.trace,
             pending_initiation=self.scanning.pawr_initiating,
             connect=partial(pawr_connect, link),
             can_accept_connection=self.connections.can_accept,
