@@ -9,6 +9,8 @@ import asyncio
 from pathlib import Path
 from typing import Protocol
 
+H4_CLOSE_TIMEOUT_SECONDS = 1.0
+
 
 class TransportSink(Protocol):
     def on_packet(self, packet: bytes) -> None: ...
@@ -84,6 +86,7 @@ class H4Server:
             self.finished.set_exception(
                 RuntimeError('HCI Host is not draining Controller output')
             )
+            self.writer.transport.abort()
 
     def on_packets(self, packets: list[bytes]) -> None:
         # The H4 byte stream preserves each frame header. Queue the fragments
@@ -106,12 +109,12 @@ class H4Server:
         # This endpoint belongs to one Host for its lifetime; do not let a late
         # connection replace the active writer or revive an already finished server.
         if self._closing or self.writer is not None or self.finished.done():
-            writer.close()
-            await writer.wait_closed()
+            writer.transport.abort()
             return
         self.writer = writer
         self.task = asyncio.current_task()
         tasks = []
+        flush = False
         try:
             if self.ready is not None:
                 await self.ready.wait()
@@ -131,21 +134,26 @@ class H4Server:
                 self.finished.set_exception(error)
         else:
             if not self.finished.done():
+                flush = True
                 self.finished.set_result(None)
         finally:
-            # Join both directions before releasing the writer so shutdown cannot
-            # leave an orphan task accessing a closed socket. A second cancellation
-            # can interrupt the join, so close the Host connection regardless.
             try:
                 for task in tasks:
                     task.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
+                if flush:
+                    # Peer EOF can be a half-close. Give buffered replies a
+                    # bounded chance to reach the Host before releasing the socket.
+                    writer.close()
+                    try:
+                        async with asyncio.timeout(H4_CLOSE_TIMEOUT_SECONDS):
+                            await writer.wait_closed()
+                    except (OSError, TimeoutError):
+                        pass
             finally:
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except OSError:
-                    pass
+                # Release immediately on error, timeout, or cancellation, even
+                # if the Host has stopped reading or the task join is interrupted.
+                writer.transport.abort()
 
     async def __aexit__(self, exc_type, exc, traceback):
         # A connection accepted by asyncio may still have its callback queued.

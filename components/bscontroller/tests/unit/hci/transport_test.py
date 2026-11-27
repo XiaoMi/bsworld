@@ -15,6 +15,7 @@ These tests use lightweight endpoint doubles, not a full Controller.
 """
 
 import asyncio
+import socket
 from types import SimpleNamespace
 
 import pytest
@@ -152,6 +153,40 @@ async def test_server_shutdown_closes_a_connected_host(tmp_path):
                 await received.wait()
             assert await reader.read(1) == b''
             assert not path.exists()
+    finally:
+        if writer is not None:
+            writer.close()
+            await writer.wait_closed()
+
+
+async def test_server_shutdown_discards_pending_output_to_a_stalled_host(tmp_path):
+    """Release the socket even when the Host stops consuming buffered output."""
+    received = asyncio.Event()
+    controller = SimpleNamespace(
+        set_packet_sink=lambda sink: None,
+        on_packet=lambda packet: received.set(),
+    )
+    path = tmp_path / 'hci.sock'
+    writer = None
+    try:
+        async with asyncio.timeout(1):
+            async with H4Server(controller, path) as endpoint:
+                reader, writer = await asyncio.open_unix_connection(path)
+                writer.transport.pause_reading()
+                writer.write(bytes.fromhex('01030c00'))
+                await writer.drain()
+                await received.wait()
+
+                # Start shutdown with bytes already buffered by the transport.
+                server_socket = endpoint.writer.get_extra_info('socket')
+                server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+                endpoint.writer.write(bytes.fromhex('040e0401030c00') * 10_000)
+                assert endpoint.writer.transport.get_write_buffer_size() > 0
+
+            assert not path.exists()
+            writer.transport.resume_reading()
+            await reader.read()
+            assert reader.at_eof()
     finally:
         if writer is not None:
             writer.close()
