@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from bscontroller.linklayer.api import (
     AddressSnapshot,
-    AdvertisingSnapshot,
+    AdvertisingTermination,
     BigSnapshot,
     ConnectionSnapshot,
     PeriodicSyncSnapshot,
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from bscontroller.address import Address
     from bscontroller.linklayer.api import CisEstablished
     from bscontroller.linklayer.connection import Connection
-    from bscontroller.linklayer.discovery import PeriodicSync
+    from bscontroller.linklayer.discovery import Advertising, PeriodicSync
     from bscontroller.linklayer.pawr import SlotResponse
 
 
@@ -125,19 +125,17 @@ class NotificationSink(IsoListener, Protocol):
     def on_authenticated_payload_timeout(
         self, connection: ConnectionSnapshot
     ) -> None: ...
-    def on_advertising_ended(self, item: AdvertisingSnapshot, status: int) -> None: ...
-    def on_scan_request(
-        self, item: AdvertisingSnapshot, peer: AddressSnapshot
+    def on_advertising_ended(
+        self, item: AdvertisingTermination, status: int
     ) -> None: ...
+    def on_scan_request(self, handle: int, peer: AddressSnapshot) -> None: ...
     def on_monitored_advertiser(
         self, address: AddressSnapshot, condition: int
     ) -> None: ...
-    def on_subevent_data_request(
-        self, item: AdvertisingSnapshot, start: int, count: int
-    ) -> None: ...
+    def on_subevent_data_request(self, handle: int, start: int, count: int) -> None: ...
     def on_response_report(
         self,
-        item: AdvertisingSnapshot,
+        handle: int,
         subevent: int,
         transmitted: bool,
         responses: tuple[SlotResponse, ...],
@@ -348,28 +346,35 @@ class NotificationAdapter:
     def on_authenticated_payload_timeout(self, connection: Connection) -> None:
         self.sink.on_authenticated_payload_timeout(connection_snapshot(connection))
 
-    def on_advertising_ended(self, item: AdvertisingSnapshot, status: int) -> None:
-        self.sink.on_advertising_ended(item, status)
+    def on_advertising_ended(self, item: Advertising, status: int) -> None:
+        self.sink.on_advertising_ended(
+            AdvertisingTermination(
+                item.handle, address_snapshot(item.target), item.events
+            ),
+            status,
+        )
 
     def on_monitored_advertiser(self, address: Address, condition: int) -> None:
         self.sink.on_monitored_advertiser(AddressSnapshot(address), condition)
 
-    def on_scan_request(self, item: AdvertisingSnapshot, peer: Address) -> None:
-        self.sink.on_scan_request(item, AddressSnapshot(peer))
+    def on_scan_request(self, item: Advertising, peer: Address) -> None:
+        self.sink.on_scan_request(item.handle, AddressSnapshot(peer))
 
     def on_subevent_data_request(
-        self, item: AdvertisingSnapshot, start: int, count: int
+        self, item: Advertising, start: int, count: int
     ) -> None:
-        self.sink.on_subevent_data_request(item, start, count)
+        self.sink.on_subevent_data_request(item.handle, start, count)
 
     def on_response_report(
         self,
-        item: AdvertisingSnapshot,
+        item: Advertising,
         subevent: int,
         transmitted: bool,
         responses: list[SlotResponse],
     ) -> None:
-        self.sink.on_response_report(item, subevent, transmitted, tuple(responses))
+        self.sink.on_response_report(
+            item.handle, subevent, transmitted, tuple(responses)
+        )
 
     def on_connect_failed(self, peer: Address, status: int) -> None:
         self.sink.on_connect_failed(AddressSnapshot(peer), status)

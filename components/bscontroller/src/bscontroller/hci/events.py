@@ -33,7 +33,7 @@ from bscontroller.linklayer import (
     PDU_CONTROL_FEATURE_SET_SIZE,
 )
 from bscontroller.linklayer.api import (
-    AdvertisingSnapshot,
+    AdvertisingTermination,
     BigSnapshot,
     CisEstablished,
     ConnectionSnapshot,
@@ -677,7 +677,7 @@ class LeControllerEvents:
                 )
             )
 
-    def on_advertising_ended(self, item: AdvertisingSnapshot, status):
+    def on_advertising_ended(self, item: AdvertisingTermination, status):
         """LE Advertising Set Terminated, or legacy completion (Vol 4, Part E,
         7.7.65.18).
         """
@@ -703,7 +703,7 @@ class LeControllerEvents:
                     advertising_handle=handle,
                     connection_handle=0,
                     num_completed_extended_advertising_events=min(
-                        HCI_LE_ADV_COMPLETED_EVENTS_MAX, item.events
+                        HCI_LE_ADV_COMPLETED_EVENTS_MAX, item.completed_events
                     ),
                 )
             )
@@ -716,8 +716,7 @@ class LeControllerEvents:
             )
         )
 
-    def on_scan_request(self, item: AdvertisingSnapshot, peer):
-        handle = item.handle
+    def on_scan_request(self, handle: int, peer):
         self._emit_hci_packet(
             hci.HCI_LE_Scan_Request_Received_Event(
                 advertising_handle=handle,
@@ -847,19 +846,17 @@ class LeControllerEvents:
                 )
             self._emit_hci_packet(event_type(**parameters))
 
-    def on_subevent_data_request(self, item: AdvertisingSnapshot, start, count):
+    def on_subevent_data_request(self, handle: int, start, count):
         """LE Periodic Advertising Subevent Data Request (Vol 4, Part E, 7.7.65.36)."""
         self._emit_hci_packet(
             hci.HCI_LE_Periodic_Advertising_Subevent_Data_Request_Event(
-                advertising_handle=item.handle,
+                advertising_handle=handle,
                 subevent_start=start,
                 subevent_data_count=count,
             )
         )
 
-    def on_response_report(
-        self, item: AdvertisingSnapshot, subevent, transmitted, responses
-    ):
+    def on_response_report(self, handle: int, subevent, transmitted, responses):
         """LE Periodic Advertising Response Report, one per requested slot (Vol 4,
         Part E, 7.7.65.37).
 
@@ -895,7 +892,7 @@ class LeControllerEvents:
                 used + needed > HCI_EVENT_PARAMETER_SIZE_MAX
                 or len(batch) == HCI_LE_RESPONSE_REPORT_RESPONSES_MAX
             ):
-                self._response_report(item, subevent, transmitted, batch)
+                self._response_report(handle, subevent, transmitted, batch)
                 batch, used = [], HCI_LE_RESPONSE_REPORT_OVERHEAD_SIZE
             batch.append(
                 ResponseReport.Response(
@@ -915,12 +912,12 @@ class LeControllerEvents:
             )
             used += needed
         if batch:
-            self._response_report(item, subevent, transmitted, batch)
+            self._response_report(handle, subevent, transmitted, batch)
 
-    def _response_report(self, item, subevent, transmitted, responses):
+    def _response_report(self, handle: int, subevent, transmitted, responses):
         self._emit_hci_packet(
             ResponseReport(
-                advertising_handle=item.handle,
+                advertising_handle=handle,
                 subevent=subevent,
                 tx_status=0 if transmitted else ResponseReport.TX_FAILED,
                 responses=responses,

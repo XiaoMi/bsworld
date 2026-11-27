@@ -132,6 +132,13 @@ def advertising_snapshot(item: Advertising) -> AdvertisingSnapshot:
 
 
 @dataclass(frozen=True)
+class AdvertisingTermination:
+    handle: int
+    target: AddressSnapshot | None
+    completed_events: int
+
+
+@dataclass(frozen=True)
 class ConnectionSnapshot:
     handle: int
     role: int

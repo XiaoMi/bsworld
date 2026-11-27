@@ -57,7 +57,6 @@ from bscontroller.linklayer.advertising_radio import (
     advertising_request,
     respond_to_aux_request,
 )
-from bscontroller.linklayer.api import advertising_snapshot
 from bscontroller.linklayer.bitstream import generate_access_address
 from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.discovery import (
@@ -459,7 +458,7 @@ def test_event_limit_ends_advertising_but_not_periodic_train(link):
     assert link.listener.events == [
         (
             'on_advertising_ended',
-            (advertising_snapshot(item), ErrorCode.LIMIT_REACHED_ERROR),
+            (item, ErrorCode.LIMIT_REACHED_ERROR),
         )
     ]
     link.roles.advertising.prepare()
@@ -496,7 +495,7 @@ def test_completion_callback_cannot_prepare_released_context(link, action):
     seen = []
 
     def ended(item, status):
-        seen.append(item)
+        seen.append(item.handle)
         if action == 'reset':
             link.reset()
         else:
@@ -504,9 +503,9 @@ def test_completion_callback_cannot_prepare_released_context(link, action):
 
     link.listener.on_advertising_ended = ended
     assert not manager.prepare()
-    assert seen == [advertising_snapshot(first)]
+    assert seen == [first.handle]
     manager.expire(second, ErrorCode.ADVERTISING_TIMEOUT_ERROR)
-    assert seen == [advertising_snapshot(first)]
+    assert seen == [first.handle]
 
 
 def test_queued_radio_work_cannot_transmit_after_advertising_handle_reuse(link):
