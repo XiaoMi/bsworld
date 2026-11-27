@@ -7,10 +7,14 @@ from bscontroller.linklayer import (
     LL_CONN_AUX_WINDOW_DELAY_CODED_US,
     LL_CONN_AUX_WINDOW_DELAY_UNCODED_US,
     LL_EVENT_COUNTER_MASK,
+    LL_IFS_US,
     LL_SCA_50_PPM,
     LL_SCA_PPM,
+    PDU_ADV_AUX_CONNECT_RSP_SIZE,
+    PDU_ADV_CONNECT_SIZE,
+    PDU_ADV_SCAN_REQ_SIZE,
 )
-from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND, Phy
+from bscontroller.radio.base import PHY_CODED_S8_FACTOR, PHY_TIME_UNITS_PER_SECOND, Phy
 
 
 def window_widening(
@@ -74,6 +78,30 @@ def auxiliary_window_delay_us(phy: Phy) -> int:
         LL_CONN_AUX_WINDOW_DELAY_CODED_US
         if phy == Phy.LE_CODED
         else LL_CONN_AUX_WINDOW_DELAY_UNCODED_US
+    )
+
+
+def connect_exchange_us(
+    phy: Phy,
+    *,
+    request_coding: int = PHY_CODED_S8_FACTOR,
+    response_coding: int = PHY_CODED_S8_FACTOR,
+) -> int:
+    """From the start of AUX_CONNECT_REQ to the end of AUX_CONNECT_RSP."""
+    return (
+        phy.airtime_us(PDU_ADV_CONNECT_SIZE, request_coding)
+        + LL_IFS_US
+        + phy.airtime_us(PDU_ADV_AUX_CONNECT_RSP_SIZE, response_coding)
+    )
+
+
+def scan_exchange_us(phy: Phy, response_size: int) -> int:
+    """Budget a scan request and its possible response at T_IFS."""
+    return (
+        phy.airtime_us(PDU_ADV_SCAN_REQ_SIZE)
+        + LL_IFS_US
+        + LL_RESPONSE_START_TOLERANCE_US
+        + phy.airtime_us(response_size)
     )
 
 
