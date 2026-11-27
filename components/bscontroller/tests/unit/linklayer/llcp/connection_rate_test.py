@@ -8,6 +8,7 @@ import struct
 import pytest
 
 from bscontroller.linklayer import LL_RESPONSE_TIMEOUT_US
+from bscontroller.linklayer.connection_rate import ConnectionRateParameters
 from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.subrating import SubrateRequest
 from bscontroller.radio.base import Phy
@@ -22,6 +23,7 @@ from tests.unit.linklayer.llcp.harness import (
     hci,
     phy_rsp,
     reject_ext_ind,
+    version_ind,
 )
 
 RateChange = hci.HCI_LE_Connection_Rate_Change_Event
@@ -97,6 +99,31 @@ def test_central_discovers_the_peer_host_bit_before_scheduling_rate(central):
     assert connection.parameters.interval_us == 1375
     assert connection.anchor_us == anchor
     assert connection.next_anchor_us == anchor + 1375
+
+
+@pytest.mark.parametrize('peer_features_known', [True, False])
+def test_peer_rate_request_waits_for_local_version(central, peer_features_known):
+    """Queue the rate update and prerequisite feature discovery (6.B.5.1.33)."""
+    if peer_features_known:
+        enable_rate(central)
+    else:
+        central.link.features |= HOST_BIT | SUBRATING
+        central.set_peer_features(LeFeatureMask.LL_EXTENDED_FEATURE_SET)
+
+    central.host_start('prepare_version')
+    central.lt_rx(Opcode.LL_VERSION_IND)
+    central.tx_ack()
+    request = ConnectionRateParameters(60, 70)
+    central.lt_tx(request.request(central.event_counter))
+    central.event_prepare()
+    central.lt_rx_q_is_empty()
+
+    central.lt_tx(version_ind())
+    central.event_prepare()
+    if not peer_features_known:
+        central.lt_rx(Opcode.LL_FEATURE_EXT_REQ)
+        central.lt_tx(feature_extension(Opcode.LL_FEATURE_EXT_RSP))
+    central.lt_rx(Opcode.LL_CONNECTION_RATE_IND)
 
 
 def test_rate_offset_and_legacy_instant_use_the_correct_time_units(peripheral):
@@ -289,14 +316,13 @@ def test_rate_hci_command_is_disallowed_while_peer_connection_update_is_pending(
 def test_rate_request_response_timer_starts_at_enqueue(peripheral):
     enable_rate(peripheral)
     request_rate(peripheral, 10)
-    rate = peripheral.controls.rate
     deadline = peripheral.radio.now_us + LL_RESPONSE_TIMEOUT_US
-    assert rate.deadline_us == deadline
+    assert peripheral.connection.llcp.response_deadline_us == deadline
     peripheral.elapse(2000)
     request = peripheral.lt_rx(Opcode.LL_CONNECTION_RATE_REQ)
-    assert rate.deadline_us == deadline
+    assert peripheral.connection.llcp.response_deadline_us == deadline
     peripheral.lt_rx(Opcode.LL_CONNECTION_RATE_REQ, request)
-    assert rate.deadline_us == deadline
+    assert peripheral.connection.llcp.response_deadline_us == deadline
 
     peripheral.loop.run_until_complete(peripheral.radio.advance_to_us(deadline))
     reason = ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR

@@ -218,9 +218,12 @@ class DataLengthProcedure(LocalProcedure):
                 rx_time=min(parameters.rx_time, PDU_DATA_PAYLOAD_TIME_UNCODED_MAX_US),
                 tx_time=min(parameters.tx_time, PDU_DATA_PAYLOAD_TIME_UNCODED_MAX_US),
             )
-        self.connection.enqueue_control(
-            bytes([opcode]) + parameters.encode(), priority=True
-        )
+        payload = bytes([opcode]) + parameters.encode()
+        llcp = self.connection.llcp
+        if opcode == Opcode.LL_LENGTH_REQ:
+            llcp.send(self.context, payload, priority=True)
+        else:
+            llcp.respond(payload, priority=True)
 
     def request(self, octets: int, time_us: int) -> None:
         """Start the Data Length Update procedure (Core Vol 6, Part B, 5.1.9)."""
@@ -233,8 +236,7 @@ class DataLengthProcedure(LocalProcedure):
         self.context = ProcedureContext(
             Opcode.LL_LENGTH_REQ,
             frozenset((Opcode.LL_LENGTH_RSP,)),
-            self,
-            response_timer=self.connection.llcp.response_timer,
+            self.control,
         )
         self.enqueue(Opcode.LL_LENGTH_REQ)
 

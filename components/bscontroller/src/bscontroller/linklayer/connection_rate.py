@@ -22,8 +22,10 @@ from bscontroller.linklayer.features import LeFeature, LeFeatureMask
 from bscontroller.linklayer.instant import InstantUpdate
 from bscontroller.linklayer.procedure import (
     DIFFERENT_TRANSACTION_COLLISION,
+    DeferredProcedure,
     LocalProcedure,
     ProcedureContext,
+    ProcedureOrigin,
     ProcedurePhase,
 )
 from bscontroller.linklayer.state import Role
@@ -178,6 +180,7 @@ class ConnectionRateProcedure(LocalProcedure):
         self.connection = owner.connection
         self.limits = self.connection.link.default_rate
         self.context: ConnectionRateContext | None = None
+        self.instant_context: ProcedureContext | None = None
 
     @property
     def instant_pending(self) -> bool:
@@ -187,13 +190,6 @@ class ConnectionRateProcedure(LocalProcedure):
     @property
     def in_progress(self) -> bool:
         return self.pending or self.instant_pending
-
-    @property
-    def deadline_us(self) -> int:
-        # The Connection Rate Update completes when its parameters apply (6.B.5.1.32).
-        if self.instant_pending:
-            return self.owner.response_timer.deadline_us
-        return super().deadline_us
 
     @property
     def can_send_request(self) -> bool:
@@ -264,7 +260,7 @@ class ConnectionRateProcedure(LocalProcedure):
                 if local_central
                 else (Opcode.LL_CONNECTION_RATE_IND,)
             ),
-            self,
+            self.control,
             parameters=parameters,
             host_initiated=True,
         )
@@ -278,9 +274,8 @@ class ConnectionRateProcedure(LocalProcedure):
                 self.limits = parameters
                 self._select_update(parameters)
             else:
-                self.context.response_timer = self.owner.response_timer
-                self.connection.enqueue_control(
-                    parameters.request(self.connection.event_counter)
+                self.connection.llcp.send(
+                    self.context, parameters.request(self.connection.event_counter)
                 )
 
         if self.peer_supported is None:
@@ -341,7 +336,12 @@ class ConnectionRateProcedure(LocalProcedure):
         )
         self.owner.pending = update
         self.owner.transmitted = self.owner.acknowledged = False
-        self.connection.enqueue_control(update.encode())
+        self.instant_context = (
+            ProcedureContext(Opcode.LL_CONNECTION_RATE_IND, frozenset(), None)
+            if peer
+            else self.context
+        )
+        self.connection.llcp.send(self.instant_context, update.encode())
 
     def prepare(self, update: InstantUpdate, instant: int) -> InstantUpdate:
         rate = update.rate
@@ -385,6 +385,11 @@ class ConnectionRateProcedure(LocalProcedure):
             if self.context.host_initiated:
                 self.report(status)
 
+    def _finish_instant(self) -> None:
+        if self.instant_context is not None:
+            self.instant_context.finish()
+            self.instant_context = None
+
     def apply(self, rate: ConnectionRateUpdate, *, received_at_instant: bool) -> None:
         connection = self.connection
         old = connection.parameters
@@ -420,6 +425,7 @@ class ConnectionRateProcedure(LocalProcedure):
             self.close(SUCCESS)
         elif changed:
             self.report(SUCCESS)
+        self._finish_instant()
 
     def _receive_request(self, payload: bytes) -> None:
         fields = REQUEST.unpack_from(payload, 1)
@@ -427,6 +433,7 @@ class ConnectionRateProcedure(LocalProcedure):
         periodicity, reference, *offsets = fields[7:]
         valid_offsets = [offset for offset in offsets if offset != NO_OFFSET]
         opcode = Opcode.LL_CONNECTION_RATE_REQ
+        llcp = self.connection.llcp
         if not (
             request.valid
             and periodicity <= request.connection_interval_max
@@ -445,6 +452,7 @@ class ConnectionRateProcedure(LocalProcedure):
             self.owner.peer_instant_blocked
             or self.owner.subrating.pending
             or self.pending
+            or llcp.has_pending('peer_rate')
         ):
             self.owner.reject(opcode, DIFFERENT_TRANSACTION_COLLISION)
             return
@@ -467,10 +475,14 @@ class ConnectionRateProcedure(LocalProcedure):
                     peer=True,
                 )
 
-        if self.peer_supported is None:
-            self.owner.features.discover(begin, pages=1)
-        else:
-            begin(SUCCESS)
+        def start() -> None:
+            if self.peer_supported is None:
+                self.owner.features.discover(begin, pages=1)
+            else:
+                begin(SUCCESS)
+
+        # The peer's request starts a local Connection Rate Update (6.B.5.1.33).
+        llcp.initiate(DeferredProcedure('peer_rate', start))
 
     def _receive_update(self, payload: bytes) -> None:
         instant, rate = ConnectionRateUpdate.decode(payload)
@@ -489,7 +501,7 @@ class ConnectionRateProcedure(LocalProcedure):
             or rate.interval_us < minimum_us
             or not self.connection.fits_cis_supervision_timeout(rate.timeout)
         ):
-            self.connection.enqueue_control(
+            self.connection.llcp.respond(
                 bytes([Opcode.LL_UNKNOWN_RSP, Opcode.LL_CONNECTION_RATE_IND])
             )
             if responds_to_local:
@@ -498,7 +510,13 @@ class ConnectionRateProcedure(LocalProcedure):
         if responds_to_local and request.parameters.accepts(rate):
             request.phase = ProcedurePhase.WAIT_INSTANT
         elif not responds_to_local:
-            self.owner.response_timer.restart(self.connection.radio.now_us)
+            self.instant_context = ProcedureContext(
+                Opcode.LL_CONNECTION_RATE_IND,
+                frozenset(),
+                None,
+                origin=ProcedureOrigin.REMOTE,
+            )
+            self.connection.llcp.start_response_timer(self.instant_context)
         self.owner.accept_instant(InstantUpdate(instant, rate=rate))
 
     def control(self, payload: bytes) -> bool:
@@ -525,6 +543,7 @@ class ConnectionRateProcedure(LocalProcedure):
             if update is not None and update.local and update.rate is not None:
                 self.owner.pending = None
                 self.close(UNSUPPORTED)
+                self._finish_instant()
                 return True
         if not self.pending or not self.context.transmitted:
             return False

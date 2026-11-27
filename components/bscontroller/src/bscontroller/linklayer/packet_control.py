@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
+from bscontroller.linklayer.procedure import ProcedureContext
 from bscontroller.radio.base import Phy, Received
 
 
@@ -55,9 +56,18 @@ class PacketControl(Protocol):
 
     def prepare(self, payload: bytes) -> bytes: ...
 
-    def sent(self, payload: bytes | None, *, length: int, first: bool) -> None: ...
+    def sent(
+        self,
+        payload: bytes | None,
+        *,
+        length: int,
+        first: bool,
+        procedure: ProcedureContext | None = None,
+    ) -> None: ...
 
-    def acknowledged(self, payload: bytes) -> int | None: ...
+    def acknowledged(
+        self, payload: bytes, procedure: ProcedureContext | None = None
+    ) -> int | None: ...
 
     def receive(self, context: ReceiveContext) -> bytes | None: ...
 

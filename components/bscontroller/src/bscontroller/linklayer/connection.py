@@ -43,7 +43,6 @@ from bscontroller.radio.base import (
 
 if TYPE_CHECKING:
     from bscontroller.address import Address
-    from bscontroller.linklayer.connection_event import Outbound
     from bscontroller.linklayer.link import RadioLink
     from bscontroller.linklayer.listener import ConnectionListener
 
@@ -160,12 +159,7 @@ class Connection:
                 self.radio.now_us
                 + self.parameters.timeout * LL_SUPERVISION_TIMEOUT_UNIT_US
             )
-        self.enqueue_control(bytes([Opcode.LL_TERMINATE_IND, reason]), priority=True)
-
-    def enqueue_control(self, payload: bytes, *, priority: bool = False) -> Outbound:
-        # All new LL Control PDUs reset T_PRT. ARQ retries reuse the pending PDU.
-        self.llcp.response_timer.restart(self.radio.now_us)
-        return self.event.enqueue_control(payload, priority=priority)
+        self.llcp.respond(bytes([Opcode.LL_TERMINATE_IND, reason]), priority=True)
 
     def complete(self, reason: int) -> None:
         """Exit the Connection state and report the loss reason to the Host (Core Vol 6,

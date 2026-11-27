@@ -212,7 +212,15 @@ def test_remote_power_read_preserves_unmanaged_phy_without_change_report(host):
     def read_power(power, flags):
         host.cmd_status(command)
         host.in_loop(connection.llcp.event_prepare)
-        host.in_loop(connection.llcp.sent, request, length=len(request), first=True)
+        packet = connection.event.queue.popleft()
+        assert packet.payload == request
+        host.in_loop(
+            connection.llcp.sent,
+            request,
+            length=len(request),
+            first=True,
+            procedure=packet.procedure,
+        )
         response = (
             bytes((ControlOpcode.LL_POWER_CONTROL_RSP, flags, 0))
             + power.to_bytes(1, 'little', signed=True)
@@ -414,28 +422,20 @@ def test_commands_route_to_the_selected_handle(host):
 
 
 @pytest.mark.parametrize(
-    'command,check',
+    'command',
     [
-        (lambda h: hci.HCI_LE_Read_Remote_Features_Command(h), 'feature_request'),
-        (
-            lambda h: hci.HCI_Read_Remote_Version_Information_Command(h),
-            'version_request',
-        ),
-        (lambda h: hci.HCI_LE_Set_PHY_Command(h, 0, 2, 2, 0), 'busy'),
-        (
-            lambda h: hci.HCI_LE_Connection_Update_Command(h, 30, 30, 0, 100, 0, 0),
-            'busy',
-        ),
+        hci.HCI_LE_Read_Remote_Features_Command,
+        hci.HCI_Read_Remote_Version_Information_Command,
+        lambda h: hci.HCI_LE_Set_PHY_Command(h, 0, 2, 2, 0),
+        lambda h: hci.HCI_LE_Connection_Update_Command(h, 30, 30, 0, 100, 0, 0),
     ],
     ids=['features', 'version', 'phy', 'update'],
 )
-def test_async_procedure_commands_start_on_the_selected_connection(
-    host, command, check
-):
+def test_async_procedure_commands_start_on_the_selected_connection(host, command):
     """An async procedure command starts the procedure on its own connection.
 
     Purpose: Verify each async procedure command (features, version, PHY,
-    connection update) marks only the addressed connection's control flag and
+    connection update) occupies only the addressed connection's LLCP slot and
     leaves the other connection idle (Vol 4, Part E, 7.8.x).
 
     Steps:
@@ -443,13 +443,13 @@ def test_async_procedure_commands_start_on_the_selected_connection(
         2. Send the parametrized command on the second connection.
 
     Expected:
-        - The second connection's checked control flag is set; the first
-          connection's is not and its event queue is empty.
+        - Only the second connection has an active LLCP procedure.
+        - The first connection's event queue is empty.
     """
     first, second = host.connection(), host.connection()
     host.cmd_status(command(second.handle))
-    assert getattr(second.controls, check)
-    assert not getattr(first.controls, check) and not first.event.queue
+    assert second.llcp.local_procedure_busy
+    assert not first.llcp.local_procedure_busy and not first.event.queue
 
 
 def test_cached_completion_follows_command_status(host):
@@ -561,7 +561,7 @@ def test_set_phy_parameter_validation(host, arguments, status):
     """
     connection = host.connection()
     host.cmd_status(hci.HCI_LE_Set_PHY_Command(connection.handle, *arguments), status)
-    assert not connection.controls.busy
+    assert not connection.llcp.local_procedure_busy
 
 
 @pytest.mark.parametrize('options,coding', [(0, 8), (1, 2), (2, 8)])

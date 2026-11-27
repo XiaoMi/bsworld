@@ -11,8 +11,6 @@ aggregates their deadlines (Core Vol 6, Part B, 5.1, 5.2 and 5.3).
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from bscontroller.errors import ErrorCode
@@ -34,6 +32,8 @@ from bscontroller.linklayer.frame_space import FrameSpaceRequest
 from bscontroller.linklayer.packet_control import PacketLimits, ReceiveContext
 from bscontroller.linklayer.parameters import valid_timing
 from bscontroller.linklayer.procedure import (
+    DeferredProcedure,
+    ProcedureCompletion,
     ProcedureContext,
     ProcedureOrigin,
     ProcedureResponseTimer,
@@ -44,6 +44,7 @@ from bscontroller.radio.base import Received
 if TYPE_CHECKING:
     from bscontroller.linklayer.cig import CigManager
     from bscontroller.linklayer.connection import Connection
+    from bscontroller.linklayer.connection_event import Outbound
     from bscontroller.linklayer.connection_rate import ConnectionRateParameters
     from bscontroller.linklayer.subrating import SubrateRequest
     from bscontroller.linklayer.transfer import TrainSource
@@ -51,13 +52,6 @@ if TYPE_CHECKING:
 SUCCESS = ErrorCode.SUCCESS
 DISALLOWED = ErrorCode.COMMAND_DISALLOWED_ERROR
 INVALID = ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
-
-
-@dataclass(frozen=True)
-class DeferredProcedure:
-    kind: str
-    start: Callable[[], None]
-    cancel: Callable[[int], None] | None = None
 
 
 Opcode = ControlOpcode
@@ -89,39 +83,82 @@ class LlcpCoordinator:
     def __init__(self, connection: Connection, cig: CigManager):
         self.connection = connection
         self.cig = cig
-        self.response_timer = ProcedureResponseTimer()
-        self.controls = ControlProcedures(connection, self.response_timer)
+        self._response_timer = ProcedureResponseTimer()
+        self.controls = ControlProcedures(connection)
         self.encryption = Encryption(connection)
-        self.local_exchanges: dict[int, ProcedureContext] = {}
-        self._local_indication: Opcode | None = None
+        self._procedures: dict[ProcedureContext, None] = {}
         # Vol 6, Part B, 5 permits only one locally initiated procedure per ACL.
-        self.deferred: deque[DeferredProcedure] = deque()
+        self._deferred: deque[DeferredProcedure] = deque()
 
     @property
     def local_procedure_busy(self) -> bool:
         return (
-            self._local_indication is not None
-            or self.controls.busy
+            self.controls.blocks_local_procedure
             or self.encryption.busy
-            or self.encryption.ping_pending
-            or self.cig.busy(self.connection)
+            or any(
+                procedure.active
+                and (
+                    procedure.origin == ProcedureOrigin.LOCAL or procedure.blocks_local
+                )
+                for procedure in self._procedures
+            )
         )
 
-    def _schedule(self, procedure: DeferredProcedure) -> None:
-        if self.local_procedure_busy or self.deferred:
-            self.deferred.append(procedure)
-        else:
-            procedure.start()
+    def initiate(self, procedure: DeferredProcedure, *, defer: bool = False) -> None:
+        """Queue one local LL procedure. A prerequisite may delay its start."""
+        self._deferred.append(procedure)
+        if not defer and len(self._deferred) == 1:
+            self.start_deferred()
+
+    def has_pending(self, kind: str) -> bool:
+        return any(procedure.kind == kind for procedure in self._deferred)
+
+    def start_response_timer(self, procedure: ProcedureContext) -> None:
+        """Register a procedure waiting on the peer or Host without an outgoing PDU."""
+        self._procedures[procedure] = None
+        procedure.response_timer = self._response_timer
+        self._response_timer.restart(self.connection.radio.now_us)
+
+    def send(
+        self,
+        procedure: ProcedureContext,
+        payload: bytes,
+        *,
+        timed: bool = True,
+        priority: bool = False,
+    ) -> Outbound:
+        """Continue an admitted procedure and attach it to the ACL transmission."""
+        self._procedures[procedure] = None
+        if timed:
+            procedure.response_timer = self._response_timer
+        return self._enqueue(payload, priority=priority, procedure=procedure)
+
+    def respond(self, payload: bytes, *, priority: bool = False) -> Outbound:
+        """Queue a peer response or the unconditional ACL Termination PDU."""
+        return self._enqueue(payload, priority=priority)
+
+    def cancel_queued(self, packet: Outbound | None) -> bool:
+        return self.connection.event.cancel_queued_control(packet)
+
+    def _enqueue(
+        self,
+        payload: bytes,
+        *,
+        priority: bool,
+        procedure: ProcedureContext | None = None,
+    ) -> Outbound:
+        # New control PDUs reset T_PRT (6.B.5.2). ARQ retries reuse the same PDU.
+        self._response_timer.restart(self.connection.radio.now_us)
+        return self.connection.event._enqueue_control(
+            payload, priority=priority, procedure=procedure
+        )
 
     def schedule_channel_map(self) -> None:
         """Use the latest classification when this ACL's turn arrives (6.B.5.1.2)."""
-        if not any(procedure.kind == 'channel_map' for procedure in self.deferred):
-            self._schedule(
+        if not self.has_pending('channel_map'):
+            self.initiate(
                 DeferredProcedure('channel_map', self.controls.update_channel_map)
             )
-
-    def schedule_cis_termination(self, start: Callable[[], None]) -> None:
-        self._schedule(DeferredProcedure('cis_termination', start))
 
     def schedule_indication(self, payload: bytes) -> None:
         opcode = Opcode(payload[0])
@@ -130,79 +167,54 @@ class LlcpCoordinator:
         def start() -> None:
             if self.connection.termination_deadline_us:
                 return
-            self._local_indication = opcode
-            self.connection.enqueue_control(payload)
+            # Power Change Indication completes on first transmission (6.B.5.1.18).
+            # Minimum Number Of Used Channels completes on acknowledgment (6.B.5.1.11).
+            completion = (
+                ProcedureCompletion.SENT
+                if opcode == Opcode.LL_POWER_CHANGE_IND
+                else ProcedureCompletion.ACKNOWLEDGED
+            )
+            self.send(
+                ProcedureContext(opcode, frozenset(), None, completion=completion),
+                payload,
+            )
 
-        self._schedule(DeferredProcedure(opcode.name, start))
+        self.initiate(DeferredProcedure(opcode.name, start))
 
-    def _prepare(self, procedure: DeferredProcedure) -> PreparedProcedure:
-        if self._duplicate(procedure.kind):
+    def _prepare(
+        self, procedure: DeferredProcedure, *, active: bool = False
+    ) -> PreparedProcedure:
+        if active or self.has_pending(procedure.kind):
             return PreparedProcedure(DISALLOWED)
-        return PreparedProcedure(SUCCESS, lambda: self._schedule(procedure))
-
-    def _duplicate(self, kind: str) -> bool:
-        """The Host already has this procedure running or queued."""
-        feature_kinds = ('features', 'all_features')
-        matching = feature_kinds if kind in feature_kinds else (kind,)
-        return self._local_pending(kind) or any(
-            item.kind in matching for item in self.deferred
-        )
-
-    def _local_pending(self, kind: str) -> bool:
-        controls = self.controls
-        if kind == 'phy':
-            return bool(controls.phy.phy_request)
-        if kind == 'parameters':
-            return bool(controls.connection_parameters.parameter_request)
-        if kind in ('features', 'all_features'):
-            return controls.features.pending
-        if kind == 'version':
-            return controls.version_request
-        if kind == 'encryption':
-            return self.encryption.busy
-        if kind == 'subrate':
-            return controls.subrating.pending
-        if kind == 'connection_rate':
-            return controls.rate.in_progress
-        if kind == 'frame_space':
-            return controls.frame_space.pending
-        if kind == 'data_length':
-            return controls.data_length.pending
-        raise ValueError(f'unknown local LL procedure: {kind}')
+        return PreparedProcedure(SUCCESS, lambda: self.initiate(procedure))
 
     @property
     def all_features_pending(self) -> bool:
-        return self.controls.features.all_pending or any(
-            procedure.kind == 'all_features' for procedure in self.deferred
-        )
+        return self.controls.features.all_pending or self.has_pending('all_features')
 
     def start_deferred(self) -> None:
         """Start the next queued local procedure once the link is idle."""
-        if (
-            self.deferred
-            and not self.local_procedure_busy
-            and not self.connection.closed
-        ):
-            self.deferred.popleft().start()
+        if not self._deferred or self.local_procedure_busy or self.connection.closed:
+            return
+        for procedure in self._deferred:
+            if procedure.ready is None or procedure.ready():
+                self._deferred.remove(procedure)
+                procedure.start()
+                return
+
+    @property
+    def response_deadline_us(self) -> int:
+        if any(procedure.deadline_us for procedure in self._procedures):
+            return self._response_timer.deadline_us
+        return 0
 
     @property
     def next_deadline_us(self) -> int:
-        deadlines = [
-            value
-            for value in (
-                self.controls.next_deadline_us,
-                self.encryption.next_deadline_us,
-                self._indication_deadline_us,
-            )
-            if value
-        ]
-        return min(deadlines, default=0)
-
-    @property
-    def _indication_deadline_us(self) -> int:
-        return (
-            self.response_timer.deadline_us if self._local_indication is not None else 0
+        deadlines = (
+            self.encryption.next_deadline_us,
+            self.response_deadline_us,
         )
+        return min((deadline for deadline in deadlines if deadline), default=0)
 
     def packet_limits(self) -> PacketLimits:
         """Publish packet limits without exposing the negotiation machinery."""
@@ -270,41 +282,36 @@ class LlcpCoordinator:
     def response_received(self, spacing_us: int) -> None:
         self.controls.frame_space.received_after_us(spacing_us)
 
-    def _control_sent(self, payload: bytes, *, first: bool) -> None:
-        if first:
-            if payload[0] == self._local_indication == Opcode.LL_POWER_CHANGE_IND:
-                # Power Change Indication completes on first transmission (6.B.5.1.18).
-                self._local_indication = None
-            contexts = (*self.controls.local_contexts(), self.encryption.ping_context)
-            for context in contexts:
-                if (
-                    context is not None
-                    and context.active
-                    and context.origin == ProcedureOrigin.LOCAL
-                    and context.responses
-                    and context.request == payload[0]
-                ):
-                    context.transmitted = True
-                    self.local_exchanges[context.request] = context
-                    break
-            self.controls.sent(payload)
-            self.cig.sent(self.connection, payload)
-        self.encryption.sent(payload)
-
-    def sent(self, payload: bytes | None, *, length: int, first: bool) -> None:
+    def sent(
+        self,
+        payload: bytes | None,
+        *,
+        length: int,
+        first: bool,
+        procedure: ProcedureContext | None = None,
+    ) -> None:
         if payload is not None:
-            self._control_sent(payload, first=first)
-        completed_subrate = self.controls.subrating.sent_packet(length)
-        if payload is not None or completed_subrate:
-            self._prune_exchanges()
+            if first:
+                if procedure is not None and procedure.active:
+                    procedure.transmitted = True
+                    if procedure.on_sent is not None:
+                        procedure.on_sent(payload)
+                    if procedure.completion == ProcedureCompletion.SENT:
+                        procedure.finish()
+                self.controls.sent(payload)
+            self.encryption.sent(payload)
+        self.controls.subrating.sent_packet(length)
 
-    def acknowledged(self, payload: bytes) -> int | None:
-        if payload[0] == self._local_indication == Opcode.LL_MIN_USED_CHANNELS_IND:
-            # Minimum Number Of Used Channels completes on acknowledgment (6.B.5.1.11).
-            self._local_indication = None
+    def acknowledged(
+        self, payload: bytes, procedure: ProcedureContext | None = None
+    ) -> int | None:
+        if procedure is not None and procedure.active:
+            if procedure.on_acknowledged is not None:
+                procedure.on_acknowledged(payload)
+            if procedure.completion == ProcedureCompletion.ACKNOWLEDGED:
+                procedure.finish()
         self.controls.acknowledge(payload)
         self.encryption.acknowledged(payload)
-        self.cig.acknowledged(self.connection, payload)
         if payload[0] == Opcode.LL_TERMINATE_IND:
             return self.connection.termination_status
         return None
@@ -389,15 +396,31 @@ class LlcpCoordinator:
             and header & PDU_DATA_LLID_MASK == LlId.CONTROL
             and len(payload) == PDU_CONTROL_UNKNOWN_RSP_SIZE
             and payload[0] == Opcode.LL_UNKNOWN_RSP
-            and payload[1] in self.local_exchanges
+            and self._reply_procedure(payload) is not None
         )
 
-    def _prune_exchanges(self) -> None:
-        self.local_exchanges = {
-            opcode: context
-            for opcode, context in self.local_exchanges.items()
-            if context.active
-        }
+    def _reply_procedure(self, payload: bytes) -> ProcedureContext | None:
+        opcode = payload[0]
+        request = (
+            payload[1]
+            if (opcode == Opcode.LL_UNKNOWN_RSP and len(payload) == 2)
+            or (opcode == Opcode.LL_REJECT_EXT_IND and len(payload) == 3)
+            else None
+        )
+        for procedure in self._procedures:
+            if (
+                procedure.active
+                and procedure.transmitted
+                and procedure.origin == ProcedureOrigin.LOCAL
+                and procedure.receive is not None
+                and (
+                    procedure.request == request
+                    if request is not None
+                    else opcode in procedure.responses
+                )
+            ):
+                return procedure
+        return None
 
     def event_prepare(self) -> bool:
         """Apply due control changes and tell the executor whether to use the radio."""
@@ -405,21 +428,19 @@ class LlcpCoordinator:
         self.controls.apply()
         if self.connection.closed:
             return False
-        self.controls.release_transfers()
         self.start_deferred()
-        self.cig.start_pending(self.connection)
-        self.controls.subrating.start_peer_request()
         self.controls.power.update_transmitter()
-        self.controls.clock_accuracy.start_if_needed()
         self.controls.power.request_if_needed()
-        self._prune_exchanges()
+        for procedure in tuple(self._procedures):
+            if not procedure.active:
+                del self._procedures[procedure]
         index = self.connection.event_index
         return force_exchange or self.controls.subrating.next_event(index) == index
 
     def close(self, reason: int) -> None:
         self.cig.close_acl(self.connection, reason)
-        while self.deferred:
-            procedure = self.deferred.popleft()
+        while self._deferred:
+            procedure = self._deferred.popleft()
             if procedure.cancel is not None:
                 procedure.cancel(reason)
         self.controls.subrating.close(reason)
@@ -429,17 +450,22 @@ class LlcpCoordinator:
         self.controls.finish_version(None)
         self.controls.power.close(reason)
         self.controls.clock_accuracy.close(reason)
-        self.local_exchanges.clear()
-        self._local_indication = None
-        self.controls.stop_instant_timer()
+        self._procedures.clear()
+
+    def check_response_timeout(self) -> bool:
+        deadline = self.response_deadline_us
+        if not deadline or self.connection.radio.now_us < deadline:
+            return False
+        reason = ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR
+        if self.controls.version_deadline_us:
+            self.controls.finish_version(reason)
+        self.connection.complete(reason)
+        return True
 
     def check_timeout(self) -> bool:
-        if self.controls.check_timeout() or self.encryption.check_timeout():
+        if self.check_response_timeout():
             return True
-        deadline = self._indication_deadline_us
-        if deadline and self.connection.radio.now_us >= deadline:
-            self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
-            return True
+        self.encryption.check_authenticated_timeout()
         return False
 
     def control(self, payload: bytes) -> None:
@@ -451,37 +477,18 @@ class LlcpCoordinator:
             return
         opcode = payload[0]
         if LL_CONTROL_PDU_SENDER_ROLES.get(opcode) == connection.role:
-            connection.enqueue_control(
-                bytes([Opcode.LL_UNKNOWN_RSP, opcode]), priority=True
-            )
+            self.respond(bytes([Opcode.LL_UNKNOWN_RSP, opcode]), priority=True)
             return
         # Replies belong to the outstanding exchange, including one paused by
         # encryption. Do not make the encryption state machine identify PHY/DLE replies.
-        exchange = None
-        if opcode == Opcode.LL_UNKNOWN_RSP and len(payload) == 2:
-            exchange = self.local_exchanges.get(payload[1])
-        elif opcode == Opcode.LL_REJECT_EXT_IND and len(payload) == 3:
-            exchange = self.local_exchanges.get(payload[1])
-        else:
-            exchange = next(
-                (
-                    entry
-                    for entry in self.local_exchanges.values()
-                    if opcode in entry.responses
-                ),
-                None,
-            )
-        if exchange is not None and exchange.owner.control(payload):
-            # Consuming a response need not complete its exchange (for example,
-            # an extended feature response may carry the wrong page number).
-            self._prune_exchanges()
+        exchange = self._reply_procedure(payload)
+        if exchange is not None and exchange.receive(payload):
             return
         if self.encryption.control(payload):
             return
         if self.cig.control(connection, payload):
             return
         if self.controls.control(payload):
-            self._prune_exchanges()
             return
         if (
             opcode == Opcode.LL_TERMINATE_IND
@@ -492,12 +499,10 @@ class LlcpCoordinator:
             # Unsupported, reserved or wrong-length PDUs that no procedure continued
             # are answered with LL_UNKNOWN_RSP (Vol 6, Part B, 2.4.2). Never answer an
             # LL_UNKNOWN_RSP itself: two Link Layers would echo each other forever.
-            connection.enqueue_control(
-                bytes([Opcode.LL_UNKNOWN_RSP, opcode]), priority=True
-            )
+            self.respond(bytes([Opcode.LL_UNKNOWN_RSP, opcode]), priority=True)
 
     def prepare_subrate(self, request: SubrateRequest) -> PreparedProcedure:
-        if self._duplicate('connection_rate'):
+        if self.controls.rate.in_progress or self.has_pending('connection_rate'):
             return PreparedProcedure(DISALLOWED)
         if not self.connection.fits_cis_supervision_timeout(request.timeout):
             return PreparedProcedure(INVALID)
@@ -507,7 +512,8 @@ class LlcpCoordinator:
         return self._prepare(
             DeferredProcedure(
                 'subrate', lambda: subrating.request(request), subrating.report
-            )
+            ),
+            active=subrating.pending,
         )
 
     def prepare_connection_rate(
@@ -519,7 +525,8 @@ class LlcpCoordinator:
         return self._prepare(
             DeferredProcedure(
                 'connection_rate', lambda: rate.request(parameters), rate.report
-            )
+            ),
+            active=rate.in_progress,
         )
 
     def prepare_frame_space(self, request: FrameSpaceRequest) -> PreparedProcedure:
@@ -531,7 +538,8 @@ class LlcpCoordinator:
                 'frame_space',
                 lambda: frame_space.request(request),
                 frame_space.cancel,
-            )
+            ),
+            active=frame_space.pending,
         )
 
     def prepare_encryption(
@@ -547,20 +555,24 @@ class LlcpCoordinator:
         return self._prepare(
             DeferredProcedure(
                 'encryption', lambda: self.encryption.start(rand, ediv, key)
-            )
+            ),
         )
 
     def prepare_features(self, pages: int | None = None) -> PreparedProcedure:
         features = self.controls.features
         kind = 'features' if pages is None else 'all_features'
-        if self._duplicate(kind):
+        if (
+            features.pending
+            or self.has_pending('features')
+            or self.has_pending('all_features')
+        ):
             return PreparedProcedure(DISALLOWED)
 
         def start():
             if features.can_report_cached(pages):
                 features.request(pages)
             else:
-                self._schedule(
+                self.initiate(
                     DeferredProcedure(
                         kind,
                         lambda: features.request(pages),
@@ -571,24 +583,31 @@ class LlcpCoordinator:
         return PreparedProcedure(SUCCESS, start)
 
     def prepare_version(self) -> PreparedProcedure:
-        if self.controls.peer_version is None:
-            return self._prepare(
-                DeferredProcedure('version', self.controls.request_version)
-            )
-        if self._duplicate('version'):
+        if self.controls.version_request or self.has_pending('version'):
             return PreparedProcedure(DISALLOWED)
-        return PreparedProcedure(SUCCESS, self.controls.request_version)
+        if self.controls.peer_version is not None:
+            return PreparedProcedure(SUCCESS, self.controls.request_version)
+        return self._prepare(
+            DeferredProcedure('version', self.controls.request_version)
+        )
 
     def prepare_phy(self, tx: int, rx: int, coding: int) -> PreparedProcedure:
         def request():
             self.connection.tx_coding = coding
             self.controls.phy.request_phy(tx, rx)
 
-        return self._prepare(DeferredProcedure('phy', request))
+        return self._prepare(
+            DeferredProcedure('phy', request), active=self.controls.phy.phy_request
+        )
 
     @property
     def parameter_update_pending(self) -> bool:
-        return self._duplicate('parameters') or self._duplicate('connection_rate')
+        return (
+            self.controls.connection_parameters.parameter_request
+            or self.controls.rate.in_progress
+            or self.has_pending('parameters')
+            or self.has_pending('connection_rate')
+        )
 
     def prepare_parameters(
         self,
@@ -639,7 +658,10 @@ class LlcpCoordinator:
                     allowed_minimum, maximum, latency, timeout
                 )
 
-        return self._prepare(DeferredProcedure('parameters', request, complete))
+        return self._prepare(
+            DeferredProcedure('parameters', request, complete),
+            active=self.controls.connection_parameters.parameter_request,
+        )
 
     def supply_key(self, key: bytes | None) -> int:
         if (
@@ -682,7 +704,7 @@ class LlcpCoordinator:
     def set_data_length(self, octets: int, time_us: int) -> int:
         if not valid_data_length(octets, time_us):
             return INVALID
-        if self._duplicate('data_length'):
+        if self.controls.data_length.pending or self.has_pending('data_length'):
             return DISALLOWED
         if not self._peer_supports_data_length:
             return ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
@@ -691,7 +713,7 @@ class LlcpCoordinator:
             if self._peer_supports_data_length:
                 self.controls.data_length.request(octets, time_us)
 
-        self._schedule(DeferredProcedure('data_length', start))
+        self.initiate(DeferredProcedure('data_length', start))
         return SUCCESS
 
     @property

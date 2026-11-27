@@ -42,6 +42,9 @@ from bscontroller.linklayer.frame_space import REQUEST as FRAME_SPACE_REQUEST
 from bscontroller.linklayer.procedure import (
     DIFFERENT_TRANSACTION_COLLISION,
     PROCEDURE_COLLISION,
+    DeferredProcedure,
+    ProcedureContext,
+    ProcedureOrigin,
 )
 from bscontroller.linklayer.resource import PendingOperation
 from bscontroller.linklayer.scheduler import (
@@ -57,7 +60,6 @@ if TYPE_CHECKING:
     from bscontroller.linklayer.connection_event import Outbound
     from bscontroller.linklayer.iso import IsoDataPaths
     from bscontroller.linklayer.listener import ConnectedIsoListener
-    from bscontroller.linklayer.procedure import ProcedureResponseTimer
     from bscontroller.radio.base import Radio
 
 SUCCESS = ErrorCode.SUCCESS
@@ -97,7 +99,7 @@ class Cis:
     window: CisWindow | None = None
     event: CisEvent | None = None
     setup_deadline_us: int = 0
-    response_timer: ProcedureResponseTimer | None = None
+    procedure: ProcedureContext | None = None
     reported: bool = False
     cancellation: bool = False
     termination: bytes | None = None
@@ -323,6 +325,15 @@ class CigManager:
             stream.connection = connection
             stream.stage = Setup.QUEUED
             self.groups[stream.cig_id].started = True
+            procedure = ProcedureContext(
+                Opcode.LL_CIS_REQ,
+                frozenset((Opcode.LL_CIS_RSP,)),
+                partial(self._receive_setup, stream),
+                on_sent=partial(self._setup_sent, stream),
+                on_acknowledged=partial(self._setup_acknowledged, stream),
+            )
+            stream.procedure = procedure
+            self._schedule_creation(stream, procedure)
         return SUCCESS
 
     def accept_cis(self, handle: int) -> int:
@@ -361,14 +372,16 @@ class CigManager:
             stream.cancellation = True
         if stream.stage == Setup.ACTIVE or (
             stream.stage == Setup.INDICATION
-            and not connection.event.cancel_queued_control(stream.queued_setup)
+            and not connection.llcp.cancel_queued(stream.queued_setup)
         ):
             payload = bytes(
                 [Opcode.LL_CIS_TERMINATE_IND, stream.cig_id, stream.cis_id, reason]
             )
             stream.termination = payload
-            connection.llcp.schedule_cis_termination(
-                partial(self._queue_termination, stream, payload)
+            connection.llcp.initiate(
+                DeferredProcedure(
+                    'cis_termination', partial(self._queue_termination, stream, payload)
+                )
             )
         elif stream.stage == Setup.INDICATION:
             connection.controls.reject(Opcode.LL_CIS_RSP, CANCELLED)
@@ -384,10 +397,17 @@ class CigManager:
         if connection.termination_deadline_us:
             return
         # Stop CIS radio activity when the indication enters the ACL queue (6.B.5.1.16).
-        stream.queued_termination = connection.enqueue_control(payload, priority=True)
+        stream.procedure = ProcedureContext(
+            Opcode.LL_CIS_TERMINATE_IND,
+            frozenset(),
+            None,
+            on_acknowledged=lambda _: self._finish(stream, LOCAL_TERMINATED),
+        )
+        stream.queued_termination = connection.llcp.send(
+            stream.procedure, payload, priority=True
+        )
         stream.stage = Setup.TERMINATING
         stream.setup_deadline_us = 0
-        stream.response_timer = connection.llcp.response_timer
 
     def close_acl(self, connection: Connection, reason: int) -> None:
         for stream in tuple(self.streams.values()):
@@ -411,50 +431,57 @@ class CigManager:
             for stream in self.streams.values()
         )
 
-    def start_pending(self, connection: Connection) -> None:
-        if connection.llcp.local_procedure_busy or connection.llcp.deferred:
-            return
-        for stream in self.streams.values():
+    def _schedule_creation(self, stream: Cis, procedure: ProcedureContext) -> None:
+        connection = stream.connection
+
+        def ready() -> bool:
+            # Finalize the anchor before another stream negotiates a radio gap.
+            return not procedure.active or not any(
+                item.central and item.stage in (Setup.REQUEST, Setup.INDICATION)
+                for item in self.streams.values()
+            )
+
+        def start() -> None:
             if (
-                stream.connection is not connection
+                not procedure.active
                 or stream.stage != Setup.QUEUED
                 or stream.cancellation
             ):
-                continue
-            # Finalize the anchor before any other CIG negotiates a gap or
-            # another stream in this group uses the common timing.
-            if any(
-                item.central and item.stage in (Setup.REQUEST, Setup.INDICATION)
-                for item in self.streams.values()
-            ):
-                continue
+                return
             if connection.peer_features is None:
-                connection.controls.features.discover(
-                    lambda status: self._finish(stream, status) if status else None
-                )
-            elif (
+                connection.controls.features.discover(discovered)
+                return
+            if (
                 not connection.peer_features
                 & LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_PERIPHERAL
             ):
                 self._finish(stream, REMOTE_UNSUPPORTED)
-            else:
-                try:
-                    group = self.groups[stream.cig_id]
-                    plan_frame_spaces(group, stream)
-                    stream.window = new_cis_window(group, stream, self.reservations)
-                except ValueError:
-                    self._finish(
-                        stream, ErrorCode.UNACCEPTABLE_CONNECTION_PARAMETERS_ERROR
-                    )
-                    return
-                stream.stage = Setup.REQUEST
-                stream.response_timer = connection.llcp.response_timer
-                stream.queued_setup = connection.enqueue_control(
-                    CisRequest(
-                        stream.cig_id, stream.cis_id, stream.parameters, stream.window
-                    ).encode()
-                )
-            return
+                return
+            try:
+                group = self.groups[stream.cig_id]
+                plan_frame_spaces(group, stream)
+                stream.window = new_cis_window(group, stream, self.reservations)
+            except ValueError:
+                self._finish(stream, ErrorCode.UNACCEPTABLE_CONNECTION_PARAMETERS_ERROR)
+                return
+            stream.stage = Setup.REQUEST
+            stream.queued_setup = connection.llcp.send(
+                procedure,
+                CisRequest(
+                    stream.cig_id, stream.cis_id, stream.parameters, stream.window
+                ).encode(),
+            )
+
+        def discovered(status: int) -> None:
+            if procedure.active:
+                if status:
+                    self._finish(stream, status)
+                else:
+                    self._schedule_creation(stream, procedure)
+
+        connection.llcp.initiate(
+            DeferredProcedure('cis_creation', start, ready=ready), defer=True
+        )
 
     def _respond(self, stream: Cis) -> None:
         connection = stream.connection
@@ -468,7 +495,9 @@ class CigManager:
             return
         stream.stage = Setup.RESPONSE
         stream.setup_deadline_us = 0
-        connection.enqueue_control(bytes([Opcode.LL_CIS_RSP]) + stream.window.encode())
+        connection.llcp.send(
+            stream.procedure, bytes([Opcode.LL_CIS_RSP]) + stream.window.encode()
+        )
 
     def _request(self, connection: Connection, payload: bytes) -> None:
         if not self._host_supports_cis():
@@ -525,9 +554,15 @@ class CigManager:
             Setup.HOST,
             request.window,
             setup_deadline_us=self.radio.now_us + 625 * self.connection_accept_timeout,
-            response_timer=connection.llcp.response_timer,
+            procedure=ProcedureContext(
+                Opcode.LL_CIS_REQ,
+                frozenset((Opcode.LL_CIS_IND,)),
+                None,
+                origin=ProcedureOrigin.REMOTE,
+                blocks_local=True,
+            ),
         )
-        stream.response_timer.restart(self.radio.now_us)
+        connection.llcp.start_response_timer(stream.procedure)
         self.streams[handle] = stream
         frame_space = connection.controls.frame_space
         if frame_space.pending and frame_space.context.transmitted:
@@ -576,7 +611,9 @@ class CigManager:
         )
         stream.stage = Setup.INDICATION
         stream.setup_deadline_us = event_anchor(connection, window.conn_event_count)
-        stream.queued_setup = connection.enqueue_control(stream.indication.encode())
+        stream.queued_setup = connection.llcp.send(
+            stream.procedure, stream.indication.encode()
+        )
 
     def _receive_indication(self, stream: Cis, payload: bytes) -> None:
         connection = stream.connection
@@ -633,15 +670,32 @@ class CigManager:
                 # when the ACL acknowledges it (Core Vol 6, Part B, 5.1.16).
                 stream.stage = Setup.TERMINATING
                 stream.setup_deadline_us = 0
-                stream.response_timer = connection.llcp.response_timer
-                stream.response_timer.restart(self.radio.now_us)
+                if stream.procedure is not None:
+                    stream.procedure.finish()
+                stream.procedure = ProcedureContext(
+                    Opcode.LL_CIS_TERMINATE_IND,
+                    frozenset(),
+                    None,
+                    origin=ProcedureOrigin.REMOTE,
+                    blocks_local=True,
+                )
+                connection.llcp.start_response_timer(stream.procedure)
                 connection.event.after_acknowledgment(
-                    partial(self._finish, stream, payload[3])
+                    partial(
+                        self._remote_termination_acknowledged,
+                        stream,
+                        stream.procedure,
+                        payload[3],
+                    )
                 )
             return True
         stream = self._exchange(connection)
-        if stream is None:
+        if stream is None or opcode == Opcode.LL_CIS_RSP:
             return False
+        return self._receive_setup(stream, payload)
+
+    def _receive_setup(self, stream: Cis, payload: bytes) -> bool:
+        opcode = payload[0]
         if (
             opcode == Opcode.LL_CIS_RSP
             and stream.stage == Setup.REQUEST
@@ -689,33 +743,24 @@ class CigManager:
                 return True
         return False
 
-    def sent(self, connection: Connection, payload: bytes) -> None:
-        opcode = payload[0]
-        if (
-            opcode not in CIS_SETUP_OPCODES
-            or (stream := self._exchange(connection)) is None
-        ):
-            return
-        if opcode == Opcode.LL_CIS_IND:
-            if stream.stage == Setup.INDICATION:
-                # The Central creates the CIS on transmission (Core 6.B.5.1.15).
-                self._activate(stream)
-        elif opcode == Opcode.LL_CIS_REQ:
+    def _setup_sent(self, stream: Cis, payload: bytes) -> None:
+        if payload[0] == Opcode.LL_CIS_IND and stream.stage == Setup.INDICATION:
+            # The Central creates the CIS on transmission (Core 6.B.5.1.15).
+            self._activate(stream)
+        elif payload[0] == Opcode.LL_CIS_REQ:
             stream.queued_setup = None
 
-    def acknowledged(self, connection: Connection, payload: bytes) -> None:
-        if payload[0] == Opcode.LL_CIS_IND:
-            stream = self._exchange(connection)
-            if stream is not None and stream.stage == Setup.ACTIVE:
-                stream.event.start_supervision()
-        elif payload[0] == Opcode.LL_CIS_TERMINATE_IND:
-            stream = self._stream_for_ids(connection, payload[1], payload[2])
-            if (
-                stream is not None
-                and stream.stage == Setup.TERMINATING
-                and stream.termination == payload
-            ):
-                self._locally_terminated(stream)
+    def _setup_acknowledged(self, stream: Cis, payload: bytes) -> None:
+        if payload[0] == Opcode.LL_CIS_IND and stream.stage == Setup.ACTIVE:
+            stream.event.start_supervision()
+            if stream.reported:
+                stream.procedure.finish()
+
+    def _remote_termination_acknowledged(
+        self, stream: Cis, procedure: ProcedureContext, reason: int
+    ) -> None:
+        if stream.procedure is procedure:
+            self._finish(stream, reason)
 
     def _stream_for_ids(
         self, connection: Connection, cig_id: int, cis_id: int
@@ -764,7 +809,9 @@ class CigManager:
         )
         stream.stage = Setup.ACTIVE
         stream.setup_deadline_us = 0
-        stream.response_timer = None
+        stream.procedure.stop_response_timer()
+        if not stream.central:
+            stream.procedure.finish()
 
     def _snapshot(self, stream: Cis) -> CisEstablished:
         params, tx, rx = (
@@ -823,9 +870,12 @@ class CigManager:
 
     def _release(self, stream: Cis) -> None:
         if stream.queued_termination is not None:
-            stream.connection.event.cancel_queued_control(stream.queued_termination)
+            stream.connection.llcp.cancel_queued(stream.queued_termination)
             stream.queued_termination = None
         stream.termination = None
+        if stream.procedure is not None:
+            stream.procedure.finish()
+            stream.procedure = None
         if not stream.central:
             if self.iso.contains(stream.handle):
                 self.iso.release(stream.handle)
@@ -838,7 +888,6 @@ class CigManager:
         stream.reported = False
         stream.cancellation = False
         stream.setup_deadline_us = 0
-        stream.response_timer = None
         stream.failure = None
 
     def _finish(self, stream: Cis, reason: int) -> None:
@@ -859,16 +908,8 @@ class CigManager:
         self.listener.on_cis_established(CisEstablished(stream.handle), CANCELLED)
         self.listener.on_cis_disconnected(stream.handle, LOCAL_TERMINATED)
 
-    def _locally_terminated(self, stream: Cis) -> None:
-        self._finish(stream, LOCAL_TERMINATED)
-
     def _expire(self, stream: Cis, deadline: int) -> None:
-        if (
-            stream.response_timer is not None
-            and stream.response_timer.deadline_us == deadline
-        ):
-            stream.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
-        elif stream.stage == Setup.HOST:
+        if stream.stage == Setup.HOST:
             stream.connection.controls.reject(
                 Opcode.LL_CIS_REQ, ErrorCode.CONNECTION_ACCEPT_TIMEOUT_ERROR
             )
@@ -923,6 +964,8 @@ class CigManager:
             # Establishment can complete while a local termination is waiting its turn.
             stream.cancellation = False
             stream.reported = True
+            if stream.procedure is not None and not event.awaiting_indication_ack:
+                stream.procedure.finish()
             self.listener.on_cis_established(self._snapshot(stream), SUCCESS)
 
     def prepare(self) -> list[PendingOperation]:
@@ -948,9 +991,6 @@ class CigManager:
             deadline = (
                 event.deadline_us if event is not None else stream.setup_deadline_us
             )
-            if stream.response_timer is not None:
-                response_deadline = stream.response_timer.deadline_us
-                deadline = min(deadline or response_deadline, response_deadline)
             if deadline and deadline <= self.radio.now_us:
                 self._expire(stream, deadline)
                 continue
@@ -981,7 +1021,7 @@ class CigManager:
             return True
         if stream.stage != Setup.REQUEST:
             return False
-        return stream.connection.event.cancel_queued_control(stream.queued_setup)
+        return stream.connection.llcp.cancel_queued(stream.queued_setup)
 
     def reservations(self, exclude: object = None) -> list[RadioReservation]:
         return [

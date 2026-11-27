@@ -107,15 +107,14 @@ class FeatureExchangeProcedure(LocalProcedure):
         self.context = ProcedureContext(
             opcode,
             frozenset((Opcode.LL_FEATURE_RSP,)),
-            self,
+            self.control,
             host_initiated=completion is None,
         )
         if self.connection.peer_features is not None:
             self._continue()
             return
-        self.context.response_timer = self.owner.response_timer
-        self.connection.enqueue_control(
-            bytes([opcode]) + feature_page(self.local_features, 0)
+        self.connection.llcp.send(
+            self.context, bytes([opcode]) + feature_page(self.local_features, 0)
         )
 
     def _continue(self) -> None:
@@ -130,15 +129,15 @@ class FeatureExchangeProcedure(LocalProcedure):
         self.context = ProcedureContext(
             Opcode.LL_FEATURE_EXT_REQ,
             frozenset((Opcode.LL_FEATURE_EXT_RSP,)),
-            self,
+            self.control,
             host_initiated=True,
         )
-        self.context.response_timer = self.owner.response_timer
         self._page_pending = page
         local = self.local_features
-        self.connection.enqueue_control(
+        self.connection.llcp.send(
+            self.context,
             bytes([Opcode.LL_FEATURE_EXT_REQ, feature_max_page(local), page])
-            + feature_page(local, page)
+            + feature_page(local, page),
         )
 
     def _next_page(self, pages: int | None) -> int | None:
@@ -204,7 +203,7 @@ class FeatureExchangeProcedure(LocalProcedure):
             features = (local_features & ~PHY_OCTET_MASK) | (
                 local_features & payload[1]
             )
-            self.connection.enqueue_control(
+            self.connection.llcp.respond(
                 bytes([Opcode.LL_FEATURE_RSP])
                 + features.to_bytes(PDU_CONTROL_FEATURE_SET_SIZE, "little"),
                 priority=True,
@@ -229,7 +228,7 @@ class FeatureExchangeProcedure(LocalProcedure):
             self._peer_pages[page] = payload[3:]
             if opcode == Opcode.LL_FEATURE_EXT_REQ:
                 local = self.local_features
-                self.connection.enqueue_control(
+                self.connection.llcp.respond(
                     bytes([Opcode.LL_FEATURE_EXT_RSP, feature_max_page(local), page])
                     + feature_page(local, page),
                     priority=True,

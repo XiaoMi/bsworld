@@ -141,7 +141,7 @@ class ConnectionParametersProcedure:
         self.remote_context = ConnectionParameterContext(
             Opcode.LL_CONNECTION_PARAM_REQ,
             frozenset((Opcode.LL_CONNECTION_UPDATE_IND,)),
-            self,
+            self.control,
             origin=ProcedureOrigin.REMOTE,
             phase=ProcedurePhase.WAIT_HOST,
             peer_payload=payload,
@@ -150,7 +150,6 @@ class ConnectionParametersProcedure:
     def finish(self) -> None:
         for context in (self.local_context, self.remote_context):
             if context is not None:
-                self.owner.stop_instant_timer(context)
                 context.finish()
 
     @property
@@ -215,7 +214,7 @@ class ConnectionParametersProcedure:
                 context = ConnectionParameterContext(
                     Opcode.LL_CONNECTION_UPDATE_IND,
                     frozenset(),
-                    self,
+                    self.control,
                     host_initiated=notify,
                 )
                 self.local_context = context
@@ -228,7 +227,7 @@ class ConnectionParametersProcedure:
             notify=notify,
         )
         self.owner.transmitted = self.owner.acknowledged = False
-        self.connection.enqueue_control(self.owner.pending.encode())
+        self.connection.llcp.send(context, self.owner.pending.encode(), timed=False)
 
     def request_parameters(
         self, minimum: int, maximum: int, latency: int, timeout: int
@@ -239,13 +238,13 @@ class ConnectionParametersProcedure:
             frozenset(
                 (Opcode.LL_CONNECTION_PARAM_RSP, Opcode.LL_CONNECTION_UPDATE_IND)
             ),
-            self,
+            self.control,
             host_initiated=True,
             requested_parameters=(minimum, maximum, latency, timeout),
             requested_interval_min=minimum,
         )
-        self.owner.start_instant_timer(self.local_context)
-        self.connection.enqueue_control(
+        self.connection.llcp.send(
+            self.local_context,
             bytes([Opcode.LL_CONNECTION_PARAM_REQ])
             + PARAM_REQUEST.pack(
                 minimum,
@@ -258,7 +257,7 @@ class ConnectionParametersProcedure:
                     [PDU_CONTROL_CONN_PARAM_OFFSET_UNSPECIFIED]
                     * PDU_CONTROL_CONN_PARAM_OFFSET_COUNT
                 ),
-            )
+            ),
         )
 
     def reply_parameters(
@@ -292,7 +291,8 @@ class ConnectionParametersProcedure:
             )
         else:
             self.remote_context.requested_interval_min = minimum if notify else 0
-            self.connection.enqueue_control(
+            self.connection.llcp.send(
+                self.remote_context,
                 bytes([Opcode.LL_CONNECTION_PARAM_RSP])
                 + PARAM_REQUEST.pack(
                     minimum,
@@ -305,10 +305,10 @@ class ConnectionParametersProcedure:
                         [PDU_CONTROL_CONN_PARAM_OFFSET_UNSPECIFIED]
                         * PDU_CONTROL_CONN_PARAM_OFFSET_COUNT
                     ),
-                )
+                ),
             )
         assert self.remote_context is not None
-        self.owner.start_instant_timer(self.remote_context)
+        self.connection.llcp.start_response_timer(self.remote_context)
 
     def reject_parameters(self, reason: int) -> None:
         """Handle a rejected Connection Parameters Request; Unsupported Remote Feature
@@ -316,7 +316,6 @@ class ConnectionParametersProcedure:
         """
         requested = self.requested_parameters
         if self.local_context is not None:
-            self.owner.stop_instant_timer(self.local_context)
             self.local_context.finish()
         if reason == ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR:
             self.parameter_request_unsupported = True
@@ -342,7 +341,6 @@ class ConnectionParametersProcedure:
     def reject_remote_parameters(self, reason: int) -> None:
         self.owner.reject(Opcode.LL_CONNECTION_PARAM_REQ, reason)
         if self.remote_context is not None:
-            self.owner.stop_instant_timer(self.remote_context)
             self.remote_context.finish()
 
     def notify_remote_parameters(self) -> None:
@@ -351,7 +349,7 @@ class ConnectionParametersProcedure:
             self.remote_parameters
         )
         assert self.remote_context is not None
-        self.owner.start_instant_timer(self.remote_context)
+        self.connection.llcp.start_response_timer(self.remote_context)
         parameters = self.connection.parameters
         if (
             minimum == maximum

@@ -164,7 +164,7 @@ def test_phy_periph_loc_collision(peripheral):
           completing with LE PHY Update Complete (SUCCESS, Coded).
     """
     peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
-    deadline = peripheral.controls.next_deadline_us
+    deadline = peripheral.connection.llcp.response_deadline_us
     peripheral.event_prepare()
     peripheral.lt_rx(Opcode.LL_PHY_REQ)
     central_request = phy_req(PHY_CODED, PHY_CODED)
@@ -172,7 +172,7 @@ def test_phy_periph_loc_collision(peripheral):
     # Not answered yet, and the local timer still runs.
     peripheral.lt_rx_q_is_empty()
     assert peripheral.controls.phy.remote_phy_request == central_request
-    assert peripheral.controls.next_deadline_us == deadline
+    assert peripheral.connection.llcp.response_deadline_us == deadline
     # A second Central request is refused and does not replace the deferred one.
     peripheral.lt_tx(phy_req(PHY_2M, PHY_2M))
     assert peripheral.controls.phy.remote_phy_request == central_request
@@ -188,8 +188,9 @@ def test_phy_periph_loc_collision(peripheral):
     # Then the deferred Central request is served, with its own fresh timer.
     assert peripheral.controls.phy.phy_request
     assert not peripheral.controls.phy.phy_request_local
-    assert peripheral.controls.next_deadline_us == peripheral.radio.now_us + (
-        LL_RESPONSE_TIMEOUT_US
+    assert (
+        peripheral.connection.llcp.response_deadline_us
+        == peripheral.radio.now_us + (LL_RESPONSE_TIMEOUT_US)
     )
     peripheral.lt_rx(Opcode.LL_PHY_RSP)
     peripheral.tx_ack()
@@ -220,7 +221,7 @@ def test_phy_periph_loc_collision_deferred_request_times_out(peripheral):
           (LMP_OR_LL_RESPONSE_TIMEOUT).
     """
     peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
-    deadline = peripheral.controls.next_deadline_us
+    deadline = peripheral.connection.llcp.response_deadline_us
     peripheral.event_prepare()
     peripheral.lt_rx(Opcode.LL_PHY_REQ)
     peripheral.lt_tx(phy_req(PHY_2M, PHY_2M))
@@ -295,10 +296,10 @@ def test_phy_periph_loc_with_central_cpr(peripheral, host_replied):
     peripheral.elapse(1000)
     if host_replied:
         peripheral.host('reply_parameters', 30, 30, 0, 100)
-    deadline = peripheral.controls.next_deadline_us
+    deadline = peripheral.connection.llcp.response_deadline_us
     peripheral.lt_tx(reject_ext_ind(Opcode.LL_PHY_REQ, DIFFERENT))
     peripheral.ut_rx(PHY_DONE, status=DIFFERENT)
-    assert peripheral.controls.next_deadline_us == deadline
+    assert peripheral.connection.llcp.response_deadline_us == deadline
     peripheral.elapse(deadline - peripheral.radio.now_us)
     peripheral.ut_rx(DISCONNECTED, reason=ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
 
@@ -332,10 +333,10 @@ def test_phy_periph_loc_with_identical_cpr_keeps_cpr_timer(peripheral):
             parameters.interval, latency=parameters.latency, timeout=parameters.timeout
         )
     )
-    deadline = peripheral.controls.next_deadline_us
+    deadline = peripheral.connection.llcp.response_deadline_us
     peripheral.lt_tx(unknown_rsp(Opcode.LL_PHY_REQ))
     peripheral.ut_rx(PHY_DONE, status=ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
-    assert peripheral.controls.next_deadline_us == deadline
+    assert peripheral.connection.llcp.response_deadline_us == deadline
     peripheral.elapse(deadline - peripheral.radio.now_us)
     peripheral.ut_rx(DISCONNECTED, reason=ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
 
@@ -429,7 +430,7 @@ def test_cpr_periph_loc_collision(peripheral, masked):
             1 << (hci.HCI_LE_REMOTE_CONNECTION_PARAMETER_REQUEST_EVENT - 1)
         )
     request_parameters(peripheral, 24)
-    deadline = peripheral.controls.next_deadline_us
+    deadline = peripheral.connection.llcp.response_deadline_us
     peripheral.event_prepare()
     peripheral.lt_rx(Opcode.LL_CONNECTION_PARAM_REQ)
     request = connection_param_req(30)
@@ -438,7 +439,7 @@ def test_cpr_periph_loc_collision(peripheral, masked):
     assert peripheral.controls.connection_parameters.remote_parameters == request[1:]
     peripheral.ut_rx_q_is_empty()
     peripheral.lt_rx_q_is_empty()
-    assert peripheral.controls.next_deadline_us == deadline
+    assert peripheral.connection.llcp.response_deadline_us == deadline
     # A second Central request does not replace the deferred one.
     peripheral.lt_tx(connection_param_req(40))
     peripheral.lt_rx(
@@ -460,7 +461,7 @@ def test_cpr_periph_loc_collision(peripheral, masked):
                 ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR,
             ),
         )
-        assert peripheral.controls.next_deadline_us == 0
+        assert peripheral.connection.llcp.response_deadline_us == 0
     else:
         peripheral.ut_rx(
             REMOTE_REQUEST,
@@ -468,7 +469,7 @@ def test_cpr_periph_loc_collision(peripheral, masked):
             interval_min=30,
             interval_max=30,
         )
-        assert peripheral.controls.next_deadline_us == (
+        assert peripheral.connection.llcp.response_deadline_us == (
             peripheral.radio.now_us + LL_RESPONSE_TIMEOUT_US
         )
         peripheral.host('reply_parameters', 30, 30, 0, 100)
@@ -492,7 +493,7 @@ def test_cpr_periph_loc_deferred_request_keeps_local_timeout(peripheral):
           (LMP_OR_LL_RESPONSE_TIMEOUT).
     """
     request_parameters(peripheral, 24)
-    deadline = peripheral.controls.next_deadline_us
+    deadline = peripheral.connection.llcp.response_deadline_us
     peripheral.lt_tx(connection_param_req(30))
     peripheral.elapse(deadline - peripheral.radio.now_us)
     peripheral.ut_rx(DISCONNECTED, reason=ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
@@ -523,7 +524,7 @@ def test_cpr_periph_loc_central_answers_with_update(peripheral):
     peripheral.wait_instant(instant)
     peripheral.event_prepare()
     peripheral.ut_rx(UPDATE_DONE, status=0, connection_interval=30)
-    assert not peripheral.controls.busy
+    assert not peripheral.connection.llcp.local_procedure_busy
 
 
 @pytest.mark.parametrize('iut_role', ['central', 'peripheral'])
@@ -784,6 +785,6 @@ def test_queued_request_is_dropped_on_disconnect(central):
     """
     _length_request(central)
     central.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
-    assert central.connection.llcp.deferred
+    assert central.connection.llcp.has_pending('phy')
     central.connection.llcp.close(ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR)
-    assert not central.connection.llcp.deferred
+    assert not central.connection.llcp.has_pending('phy')

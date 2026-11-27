@@ -82,6 +82,17 @@ def setup_path(host, handle, direction=0):
     )
 
 
+def transmit_control(connection):
+    packet = connection.event.queue.popleft()
+    connection.llcp.sent(
+        packet.payload,
+        length=len(packet.payload),
+        first=True,
+        procedure=packet.procedure,
+    )
+    return packet
+
+
 @pytest.mark.parametrize(
     'changes,status',
     [
@@ -601,8 +612,8 @@ def test_rejected_cis_leaves_iso_buffer_available_to_other_streams(configured):
     acl.peer_features = LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_PERIPHERAL
     manager = host.link.roles.cig
     host.cmd_status(hci.HCI_LE_Create_CIS_Command([pending], [acl.handle]))
-    manager.start_pending(acl)
-    manager.sent(acl, acl.event.queue.popleft().payload)
+    acl.llcp.start_deferred()
+    transmit_control(acl)
 
     def send_sdu(handle):
         host.send(
@@ -722,9 +733,11 @@ def test_disconnected_cis_does_not_take_another_streams_credits(
         )
         host.cmd(hci.HCI_Set_Event_Mask_Command(mask.to_bytes(8, 'little')))
     host.cmd_status(hci.HCI_Disconnect_Command(retired, reason))
-    termination = acl.event.queue.popleft().payload
-    assert termination == bytes((ControlOpcode.LL_CIS_TERMINATE_IND, 1, 1, reason))
-    host.in_loop(acl.llcp.acknowledged, termination)
+    termination = transmit_control(acl)
+    assert termination.payload == bytes(
+        (ControlOpcode.LL_CIS_TERMINATE_IND, 1, 1, reason)
+    )
+    host.in_loop(acl.llcp.acknowledged, termination.payload, termination.procedure)
     if report_disconnect:
         host.ut_rx(
             hci.HCI_Disconnection_Complete_Event, connection_handle=retired, status=0
@@ -1493,15 +1506,13 @@ def test_reset_and_handle_reuse_during_cis_subevent(host, wait):
     acl.peer_features = LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_PERIPHERAL
     host.cmd_status(hci.HCI_LE_Create_CIS_Command([handle], [acl.handle]))
     manager = host.link.roles.cig
-    manager.start_pending(acl)
-    request = acl.event.queue.popleft().payload
-    manager.sent(acl, request)
+    acl.llcp.start_deferred()
+    request = transmit_control(acl).payload
     acl.control(
         bytes([ControlOpcode.LL_CIS_RSP]) + CisRequest.decode(request).window.encode()
     )
-    indication = acl.event.queue.popleft().payload
-    manager.sent(acl, indication)
-    manager.acknowledged(acl, indication)
+    indication = transmit_control(acl)
+    acl.llcp.acknowledged(indication.payload, indication.procedure)
     old_stream = manager.streams[handle]
     event = old_stream.event
     receive_calls = []

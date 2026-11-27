@@ -240,7 +240,7 @@ def test_set_info_transfer_waits_for_the_first_aux_sync_ind(iut, role, local_sca
     item = periodic_set(dut)
     dut.set_peer_features(RECIPIENT)
     assert set_info_transfer(dut) == ErrorCode.SUCCESS
-    assert dut.controls.next_deadline_us == 0
+    assert dut.connection.llcp.response_deadline_us == 0
     first_us = item.periodic_next_us
     while dut.connection.anchor_us <= first_us:
         dut.run_events(1)
@@ -260,7 +260,7 @@ def test_set_info_transfer_waits_for_the_first_aux_sync_ind(iut, role, local_sca
     assert fields['interval'] == PERIODIC_INTERVAL
     assert fields['channels'] & LL_DATA_CHANNEL_MAP_ALL == LL_DATA_CHANNEL_MAP_ALL
     dut.ut_rx_q_is_empty()
-    assert not dut.controls.busy
+    assert not dut.connection.llcp.local_procedure_busy
 
 
 @pytest.mark.parametrize('order', ['disable', 'disable-enable'])
@@ -292,7 +292,7 @@ def test_set_info_transfer_dropped_when_the_train_ends(central, order):
     if order == 'disable-enable':
         assert command_status(central, toggle(1, 0)) == ErrorCode.SUCCESS
     central.run_events(1)
-    assert not central.controls.transfers
+    assert not central.connection.llcp.has_pending('past')
     if order == 'disable':
         assert command_status(central, toggle(1, 0)) == ErrorCode.SUCCESS
     transmitted(central, item)
@@ -303,7 +303,10 @@ def test_set_info_transfer_dropped_when_the_train_ends(central, order):
     central.tx_ack()
     central.event_done()
     central.run_events(1)
-    assert not central.controls.transfers and central.controls.active_transfer is None
+    assert (
+        not central.connection.llcp.has_pending('past')
+        and central.controls.active_transfer is None
+    )
 
 
 def test_set_info_transfer_names_last_transmitted_event(central):
@@ -499,7 +502,7 @@ def test_set_info_transfer_errors(
     assert set_info_transfer(central, handle, advertising) == status
     central.event_prepare()
     central.lt_rx_q_is_empty()
-    assert not central.controls.transfers
+    assert not central.connection.llcp.has_pending('past')
 
 
 # ---------------------------------------------------------------------------

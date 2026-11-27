@@ -59,7 +59,7 @@ class PhyProcedure:
         self.context = ProcedureContext(
             Opcode.LL_PHY_REQ,
             frozenset((Opcode.LL_PHY_RSP, Opcode.LL_PHY_UPDATE_IND)),
-            self,
+            self.control,
             origin=origin,
             host_initiated=origin == ProcedureOrigin.LOCAL,
         )
@@ -68,14 +68,13 @@ class PhyProcedure:
     def finish(self, status: int, *, notify: bool = True) -> None:
         context = self.context
         if context is not None:
-            self.owner.stop_instant_timer(context)
             context.finish()
         if notify:
             self.owner.listener.on_phy_updated(self.connection, status)
 
     def indication_sent(self, payload: bytes) -> None:
         if self.context is not None:
-            self.owner.stop_instant_timer(self.context)
+            self.context.stop_response_timer()
         if not (payload[1] or payload[2]):
             self.finish(ErrorCode.SUCCESS, notify=self.phy_request_local)
 
@@ -87,8 +86,7 @@ class PhyProcedure:
         """Send LL_PHY_REQ (Core Vol 6, Part B, 5.1.10)."""
         self.tx_phys, self.rx_phys = tx_phys, rx_phys
         context = self.begin(ProcedureOrigin.LOCAL)
-        self.owner.start_instant_timer(context)
-        self.connection.enqueue_control(bytes([Opcode.LL_PHY_REQ, tx_phys, rx_phys]))
+        self.connection.llcp.send(context, bytes([Opcode.LL_PHY_REQ, tx_phys, rx_phys]))
 
     def reject_phy(self, reason: int) -> None:
         """Finish a rejected PHY request and retain any other procedure's response
@@ -145,7 +143,7 @@ class PhyProcedure:
             peripheral_tx_phy=peripheral_change,
             local=True,
         )
-        self.connection.enqueue_control(update.encode())
+        self.connection.llcp.send(self.context, update.encode())
         if central_change or peripheral_change:
             if self.context is not None:
                 self.context.phase = ProcedurePhase.WAIT_INSTANT
@@ -188,14 +186,14 @@ class PhyProcedure:
                     )
                 else:
                     context = self.begin(ProcedureOrigin.REMOTE)
-                    self.owner.start_instant_timer(context)
                     if connection.role == Role.CENTRAL:
                         # The Central chooses the resulting PHY pair and Instant;
                         # a Peripheral only returns its directional preferences.
                         self._phy_update(peer_tx, peer_rx)
                     else:
-                        self.connection.enqueue_control(
-                            bytes([Opcode.LL_PHY_RSP, self.tx_phys, self.rx_phys])
+                        self.connection.llcp.send(
+                            context,
+                            bytes([Opcode.LL_PHY_RSP, self.tx_phys, self.rx_phys]),
                         )
             elif self.phy_request and connection.role == Role.CENTRAL:
                 self._phy_update(peer_tx, peer_rx)
@@ -216,7 +214,7 @@ class PhyProcedure:
                     # Acceptance at the current event can apply synchronously and
                     # finish this context. Publish the wait phase before that call.
                     self.context.phase = ProcedurePhase.WAIT_INSTANT
-                    self.owner.stop_instant_timer(self.context)
+                    self.context.stop_response_timer()
                 self.owner.accept_instant(
                     InstantUpdate(
                         instant,
