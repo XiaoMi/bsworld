@@ -84,10 +84,10 @@ class RadioLink:
                 address, condition
             ),
         )
-        self.roles = LinkRoles(self)
         self.resource = RadioResourceManager(
-            lambda: self.now_us, self.roles.reservations
+            lambda: self.now_us, lambda exclude: self.roles.reservations(exclude)
         )
+        self.roles = LinkRoles(self)
         self.accept_list: set[Address] = set()
         self.periodic_advertiser_list: set[tuple[Address, int]] = set()
         # Host default transfer mode for subsequent connections (7.8.92).

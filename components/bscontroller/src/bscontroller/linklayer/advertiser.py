@@ -74,11 +74,14 @@ from bscontroller.radio.base import PHY_OCTET_BITS, RADIO_SWITCH_TIME_US
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from contextlib import AbstractContextManager
 
     from bscontroller.address import Address
+    from bscontroller.linklayer.connection import Connection
     from bscontroller.linklayer.discovery import Initiating
     from bscontroller.linklayer.link import RadioLink
     from bscontroller.linklayer.pawr import PawrTiming
+    from bscontroller.linklayer.results import ConnectionAccepted
 
 # A Channel Map Update Indication goes out in at least six events before its
 # Instant; one more covers a PAwR event already under way (LL.TS 4.2.3.13).
@@ -165,12 +168,20 @@ class AdvertisingManager:
         *,
         pending_initiation: Callable[[Advertising, int], Initiating | None],
         connect: Callable[[Advertising, Initiating, int, int], Awaitable[None]],
+        can_accept_connection: Callable[[Address], bool],
+        accept_connection: Callable[[ConnectionAccepted], Connection | None],
+        sending_connect_response: Callable[
+            [ConnectionAccepted], AbstractContextManager[None]
+        ],
         channel_map: Callable[[], int],
         big_info: Callable[[int, int], bytes],
     ):
         self.link = link
         self._pending_initiation = pending_initiation
         self._connect = connect
+        self.can_accept_connection = can_accept_connection
+        self.accept_connection = accept_connection
+        self.sending_connect_response = sending_connect_response
         self._channel_map = channel_map
         self._big_info = big_info
         self._contexts: dict[int, Advertising] = {}

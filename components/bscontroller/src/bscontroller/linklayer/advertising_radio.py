@@ -149,10 +149,10 @@ async def advertising_request(
         AdvertisingPduType.ADV_DIRECT_IND,
     ):
         return False
-    result = accept_advertising_connection(link, item, packet)
+    result = accept_advertising_connection(advertising, item, packet)
     if result is None:
         return False
-    link.roles.accepted(result)
+    advertising.accept_connection(result)
     return True
 
 
@@ -264,11 +264,11 @@ async def respond_to_aux_request(
         return False
     if item.mode != AdvertisingMode.CONNECTABLE:
         return False
-    result = accept_advertising_connection(link, item, packet)
+    result = accept_advertising_connection(advertising, item, packet)
     if result is None:
         return False
     # The on-air acknowledgment creates the Peripheral (Core 6.B.4.4.2.7).
-    with link.roles.sending_connect_response(result):
+    with advertising.sending_connect_response(result):
         await link.transmit(
             channel,
             connect_response(result.self_address, result.peer),

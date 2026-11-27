@@ -50,10 +50,14 @@ from bscontroller.linklayer.timing import (
 from bscontroller.radio.base import RADIO_SWITCH_TIME_US, Phy
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Awaitable, Callable, Iterator
+    from random import Random
 
+    from bscontroller.config import ControllerConfig
     from bscontroller.linklayer.discovery import Advertising, PeriodicSync
-    from bscontroller.linklayer.link import RadioLink
+    from bscontroller.linklayer.listener import BroadcastListener
+    from bscontroller.linklayer.resource import RadioResourceManager
+    from bscontroller.radio.base import Radio
 
 SUCCESS = ErrorCode.SUCCESS
 INVALID = ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
@@ -157,9 +161,16 @@ def isoal_parameters(info: BigInfo) -> IsoalParameters:
 class BroadcastManager:
     def __init__(
         self,
-        link: RadioLink,
+        radio: Radio,
+        listener: BroadcastListener,
         iso: IsoDataPaths,
         *,
+        resource: RadioResourceManager,
+        config: ControllerConfig,
+        random: Random,
+        sleep_clock_accuracy: Callable[[], int],
+        transmit: Callable[..., Awaitable[int]],
+        used_access_addresses: Callable[[], set[int]],
         available_handles: Callable[[], Iterator[int]],
         free_handle_count: Callable[[], int],
         find_advertiser: Callable[[int], Advertising | None],
@@ -167,9 +178,16 @@ class BroadcastManager:
         find_sync: Callable[[int], PeriodicSync | None],
         channel_map: Callable[[], int],
     ):
-        self.link = link
+        self.radio = radio
+        self.listener = listener
         self.groups: dict[int, Big] = {}
         self.iso = iso
+        self.resource = resource
+        self.transmit = transmit
+        self._config = config
+        self._random = random
+        self._sleep_clock_accuracy = sleep_clock_accuracy
+        self._used_access_addresses = used_access_addresses
         self._available_handles = available_handles
         self._free_handle_count = free_handle_count
         self._find_advertiser = find_advertiser
@@ -177,13 +195,17 @@ class BroadcastManager:
         self._find_sync = find_sync
         self._channel_map = channel_map
 
+    @property
+    def sleep_clock_accuracy(self) -> int:
+        return self._sleep_clock_accuracy()
+
     def reset(self) -> None:
         self.groups.clear()
 
     def _capacity(self, count: int) -> bool:
         return (
-            len(self.groups) < self.link.config.max_bigs
-            and len(self.connection_handles()) + count <= self.link.config.max_bis
+            len(self.groups) < self._config.max_bigs
+            and len(self.connection_handles()) + count <= self._config.max_bis
             and count <= self._free_handle_count()
         )
 
@@ -321,13 +343,13 @@ class BroadcastManager:
         ):
             periodic_guard = BIG_PERIODIC_GUARD_US
         start = max(
-            self.link.now_us + 2000,
+            self.radio.now_us + 2000,
             item.periodic_next_us + periodic_duration + periodic_guard
             if item.periodic_enabled
             else 0,
         )
         anchor = first_radio_gap(
-            self.link.resource.reservations(),
+            self.resource.reservations(),
             start,
             info.duration_us + LL_IFS_US + RADIO_SWITCH_TIME_US,
             start + info.interval_us,
@@ -395,9 +417,9 @@ class BroadcastManager:
         spacing = mpt + LL_IFS_US
         sub_interval = spacing * config.num_bis if config.packing else spacing
         bis_spacing = spacing if config.packing else spacing * nse
-        used = self.link.used_access_addresses()
+        used = self._used_access_addresses()
         seed = generate_big_seed(
-            self.link.random,
+            self._random,
             config.num_bis,
             used,
             (
@@ -420,12 +442,12 @@ class BroadcastManager:
             seed_access_address=seed,
             sdu_interval_us=config.sdu_interval_us,
             max_sdu=config.max_sdu,
-            base_crc_init=self.link.random.getrandbits(16),
+            base_crc_init=self._random.getrandbits(16),
             channel_map=self._channel_map(),
             phy=phy,
             framed=framed,
-            giv=self.link.random.randbytes(8) if config.encryption else b'',
-            gskd=self.link.random.randbytes(16) if config.encryption else b'',
+            giv=self._random.randbytes(8) if config.encryption else b'',
+            gskd=self._random.randbytes(16) if config.encryption else b'',
         )
         isoal_parameters(info)
         if info.framed and (
@@ -547,7 +569,7 @@ class BroadcastManager:
             except ValueError:
                 continue
             sync.big_info = info, packet_start_us
-            self.link.listener.on_big_info(sync.handle, info)
+            self.listener.on_big_info(sync.handle, info)
 
     def _acquire(self, group: Big) -> None:
         config = group.sync_config
@@ -587,7 +609,7 @@ class BroadcastManager:
         group.last_rx_us = start_us
         if sync.info is not None:
             group.sca = sync.info.sca
-        while group.next_us + info.duration_us < self.link.now_us:
+        while group.next_us + info.duration_us < self.radio.now_us:
             group.next_us += info.interval_us
             group.counter += 1
         delay = info.sync_delay_us + (
@@ -630,7 +652,7 @@ class BroadcastManager:
         snapshot = group.snapshot()
         self._release(group)
         if pending:
-            self.link.listener.on_big_synchronized(
+            self.listener.on_big_synchronized(
                 snapshot, ErrorCode.OPERATION_CANCELLED_BY_HOST_ERROR
             )
         return SUCCESS
@@ -695,7 +717,7 @@ class BroadcastManager:
         )
         if not group.reported:
             group.reported = True
-            self.link.listener.on_big_synchronized(group.snapshot(), SUCCESS)
+            self.listener.on_big_synchronized(group.snapshot(), SUCCESS)
 
     def completed(self, group: Big, received: dict[int, list[IsoPdu | None]]) -> None:
         """Advance one live BIG event, delivering each selected BIS once."""
@@ -715,7 +737,7 @@ class BroadcastManager:
                     tuple(pdus),
                     group.next_us,
                     group.counter,
-                    now_us=self.link.now_us,
+                    now_us=self.radio.now_us,
                 )
                 if not self.owns(group):
                     return
@@ -774,13 +796,13 @@ class BroadcastManager:
         snapshot = group.snapshot()
         self._release(group)
         if group.transmit:
-            self.link.listener.on_big_terminated(
+            self.listener.on_big_terminated(
                 group.handle, ErrorCode.CONNECTION_TERMINATED_BY_LOCAL_HOST_ERROR
             )
         elif group.reported:
-            self.link.listener.on_big_lost(group.handle, reason)
+            self.listener.on_big_lost(group.handle, reason)
         else:
-            self.link.listener.on_big_synchronized(snapshot, reason)
+            self.listener.on_big_synchronized(snapshot, reason)
 
     def prepare(self) -> list[PendingOperation]:
         self.expire()
@@ -796,7 +818,7 @@ class BroadcastManager:
             if group.transmit and not group.reported:
                 operations.append(
                     PendingOperation(
-                        self.link.now_us + 1,
+                        self.radio.now_us + 1,
                         RadioPriority.EXPIRY,
                         group,
                         partial(self._created, group),
@@ -834,7 +856,7 @@ class BroadcastManager:
                 continue
             operations.append(
                 PendingOperation(
-                    group.reservation(self.link.sleep_clock_accuracy).start_us,
+                    group.reservation(self.sleep_clock_accuracy).start_us,
                     RadioPriority.ISOCHRONOUS,
                     group,
                     partial(self._run, group),
@@ -844,26 +866,26 @@ class BroadcastManager:
 
     async def _expired(self, group: Big) -> None:
         assert group.deadline_us is not None
-        await self.link.radio.advance_to_us(group.deadline_us)
+        await self.radio.advance_to_us(group.deadline_us)
 
     async def _created(self, group: Big) -> None:
-        await self.link.radio.advance_to_us(self.link.now_us + 1)
+        await self.radio.advance_to_us(self.radio.now_us + 1)
         if not self.owns(group):
             return
         snapshot = group.snapshot()
         if group.cancelled:
             self._release(group)
-            self.link.listener.on_big_created(
+            self.listener.on_big_created(
                 snapshot, ErrorCode.OPERATION_CANCELLED_BY_HOST_ERROR
             )
         else:
             group.reported = True
-            self.link.listener.on_big_created(snapshot, SUCCESS)
+            self.listener.on_big_created(snapshot, SUCCESS)
 
     async def _instant(self, group: Big) -> None:
         control, info = group.control, group.info
         assert control is not None and info is not None
-        await self.link.radio.advance_to_us(
+        await self.radio.advance_to_us(
             group.next_us
             if control.reason is not None
             else group.next_us - RADIO_SWITCH_TIME_US
@@ -879,7 +901,7 @@ class BroadcastManager:
 
     def expire(self) -> None:
         for group in tuple(self.groups.values()):
-            if group.deadline_us is not None and self.link.now_us >= group.deadline_us:
+            if group.deadline_us is not None and self.radio.now_us >= group.deadline_us:
                 self._close(
                     group,
                     ErrorCode.CONNECTION_TIMEOUT_ERROR
@@ -897,13 +919,13 @@ class BroadcastManager:
             group.cssn = (group.cssn + 1) & 7
         group.running = True
         try:
-            await run_big_event(self.link, self, group)
+            await run_big_event(self, group)
         finally:
             group.running = False
 
     def reservations(self, exclude: object = None) -> list[RadioReservation]:
         return [
-            group.reservation(self.link.sleep_clock_accuracy)
+            group.reservation(self.sleep_clock_accuracy)
             for group in self.groups.values()
             if group is not exclude and group.info is not None
         ]
