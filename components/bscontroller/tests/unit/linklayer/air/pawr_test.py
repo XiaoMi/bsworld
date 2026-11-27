@@ -64,6 +64,27 @@ def indication(iut, sync, *, subevent=0, data=b'indication'):
     return at, channel
 
 
+def test_pawr_receive_window_follows_the_current_sleep_clock_accuracy(iut):
+    """Receive an early PAwR subevent after switching to 500 ppm
+    (Vol 6, Part B, 4.2.4 and 4.4.5.1.2).
+    """
+    sync = sync_setup(iut)
+    sync.next_us = 100_000
+    iut.ut(hci.HCI_LE_Modify_Sleep_Clock_Accuracy_Command(1))
+    iut.lt_tx(
+        ExtendedPdu(data=b'early'),
+        at=sync.next_us - 50,
+        channel=channel_selection_2(
+            sync.counter, INFO.access_address, INFO.channel_map
+        ),
+        access_address=INFO.access_address,
+    )
+    iut.run_until(102_000)
+
+    iut.ut_rx(REPORT, subevent=0, data=b'early')
+    assert iut.radio.listens[-1][0] == 100_000 - 71
+
+
 @pytest.mark.parametrize('skip', [0, 1, 19])
 @pytest.mark.parametrize('counter', [0, 0xFFFF])
 def test_response_remains_due_after_skip_advances_anchor(iut, skip, counter):

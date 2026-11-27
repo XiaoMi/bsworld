@@ -50,7 +50,6 @@ from bscontroller.linklayer.synchronization_radio import (
 from bscontroller.linklayer.timing import (
     counter_distance,
     signed_counter_distance,
-    window_widening,
 )
 from bscontroller.linklayer.transfer import (
     indication_valid,
@@ -69,17 +68,14 @@ if TYPE_CHECKING:
     from bscontroller.radio.base import Received
 
 
-def periodic_receive_window(sync: PeriodicSync) -> RadioReservation:
+def periodic_receive_window(sync: PeriodicSync, *, local_sca: int) -> RadioReservation:
     """Next synchronized receive window, widened on both sides (Core Vol 6, Part B,
     4.2.4).
     """
     assert sync.info is not None
     if sync.pawr is not None:
-        return subevent_receive_window(sync)
-    widening = (
-        window_widening(sync.next_us - sync.last_rx_us, sync.info.sca)
-        + sync.transfer_widening_us
-    )
+        return subevent_receive_window(sync, local_sca=local_sca)
+    widening = sync.receive_window_widening(sync.next_us, local_sca=local_sca)
     return RadioReservation(
         sync.next_us - widening - RADIO_SWITCH_TIME_US,
         2 * widening
@@ -90,7 +86,7 @@ def periodic_receive_window(sync: PeriodicSync) -> RadioReservation:
     )
 
 
-def subevent_receive_window(sync: PeriodicSync) -> RadioReservation:
+def subevent_receive_window(sync: PeriodicSync, *, local_sca: int) -> RadioReservation:
     """Next synchronized PAwR subevent, widened on both sides (Core Vol 6, Part B,
     4.2.4). An AUX_SYNC_SUBEVENT_IND ends before the first response slot.
     """
@@ -98,9 +94,7 @@ def subevent_receive_window(sync: PeriodicSync) -> RadioReservation:
     assert pawr is not None and info is not None
     timing = pawr.timing
     target = sync.next_us + timing.subevent_offset_us(pawr.next_subevent)
-    widening = (
-        window_widening(target - sync.last_rx_us, info.sca) + sync.transfer_widening_us
-    )
+    widening = sync.receive_window_widening(target, local_sca=local_sca)
     return RadioReservation(
         target - widening - RADIO_SWITCH_TIME_US,
         2 * widening
@@ -240,7 +234,9 @@ class SynchronizationManager:
             if sync.info is None:
                 continue
             if sync is not exclude:
-                yield periodic_receive_window(sync)
+                yield periodic_receive_window(
+                    sync, local_sca=self.link.sleep_clock_accuracy
+                )
             if sync.pawr is not None:
                 for response in sync.pawr.scheduled:
                     if response is not exclude:
@@ -251,24 +247,20 @@ class SynchronizationManager:
         for sync in self.contexts():
             if sync.info is None:
                 continue
-            if sync.pawr is None:
-                operations.append(
-                    PendingOperation(
-                        periodic_receive_window(sync).start_us,
-                        RadioPriority.PERIODIC_RX,
-                        sync,
-                        partial(self.run_periodic, sync),
-                    )
-                )
-                continue
+            window = periodic_receive_window(
+                sync, local_sca=self.link.sleep_clock_accuracy
+            )
+            receive = self.run_periodic if sync.pawr is None else self.run_subevent
             operations.append(
                 PendingOperation(
-                    subevent_receive_window(sync).start_us,
+                    window.start_us,
                     RadioPriority.PERIODIC_RX,
                     sync,
-                    partial(self.run_subevent, sync),
+                    partial(receive, sync),
                 )
             )
+            if sync.pawr is None:
+                continue
             operations.extend(
                 PendingOperation(
                     response.start_us - RADIO_SWITCH_TIME_US,
@@ -289,7 +281,13 @@ class SynchronizationManager:
         assert pawr is not None
         subevent = pawr.next_subevent
         link = self.link
-        received = await subevent_receive(link.radio, link.resource, sync, subevent)
+        received = await subevent_receive(
+            link.radio,
+            link.resource,
+            sync,
+            subevent,
+            local_sca=link.sleep_clock_accuracy,
+        )
         if received is None:
             self.subevent_failed(sync, subevent)
             self.subevent_completed(sync)

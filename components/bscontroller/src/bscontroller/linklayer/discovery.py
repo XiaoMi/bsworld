@@ -40,6 +40,7 @@ from bscontroller.linklayer.timing import (
     LL_DEFAULT_ADV_INTERVAL_US,
     LL_INSTANT_PAST_THRESHOLD,
     counter_distance,
+    window_widening,
 )
 from bscontroller.radio.base import Phy
 
@@ -297,6 +298,16 @@ class PeriodicSync:
     pawr: PawrSync | None = None
     # BIGInfo and the start of its AUX_SYNC_IND belong to this PA acquisition.
     big_info: tuple[BigInfo, int] | None = None
+
+    def receive_window_widening(self, target_us: int, *, local_sca: int) -> int:
+        """Include both sleep clocks and the initial transfer allowance (6.B.4.2.4)."""
+        assert self.info is not None
+        return (
+            window_widening(
+                target_us - self.last_rx_us, self.info.sca, local_sca=local_sca
+            )
+            + self.transfer_widening_us
+        )
 
     def excludes(self, cte_info: int | None) -> bool:
         """CTE_Type excludes a packet with this CTEInfo, or without one."""
