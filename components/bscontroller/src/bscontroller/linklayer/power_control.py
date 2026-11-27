@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
-    LL_EVENT_COUNTER_MASK,
     ControlOpcode,
 )
 from bscontroller.linklayer.features import LeFeatureMask
@@ -22,6 +21,7 @@ from bscontroller.linklayer.procedure import (
     LocalProcedure,
     ProcedureContext,
 )
+from bscontroller.linklayer.timing import counter_distance
 from bscontroller.radio.base import (
     PHY_CODED_S2_FACTOR,
     PHY_TIME_UNITS_PER_SECOND,
@@ -215,7 +215,7 @@ class PathLossMonitoring:
         candidate, last_counter, elapsed = self.candidate or (None, counter, 0)
         # Accumulate each interval so sparse samples can span the full counter cycle.
         elapsed = (
-            elapsed + ((counter - last_counter) & LL_EVENT_COUNTER_MASK)
+            elapsed + counter_distance(counter, last_counter)
             if candidate == zone
             else 0
         )

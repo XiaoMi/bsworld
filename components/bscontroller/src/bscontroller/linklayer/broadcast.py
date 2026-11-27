@@ -39,7 +39,11 @@ from bscontroller.linklayer.scheduler import (
     RadioReservation,
     first_radio_gap,
 )
-from bscontroller.linklayer.timing import window_widening
+from bscontroller.linklayer.timing import (
+    LL_INSTANT_PAST_THRESHOLD,
+    counter_distance,
+    window_widening,
+)
 from bscontroller.radio.base import RADIO_SWITCH_TIME_US, Phy
 
 if TYPE_CHECKING:
@@ -735,8 +739,10 @@ class BroadcastManager:
             and len(payload) == 8
             and valid_channel_map(int.from_bytes(payload[1:6], 'little'))
         ) or (opcode == 1 and len(payload) == 4):
-            distance = (int.from_bytes(payload[-2:], 'little') - group.counter) & 0xFFFF
-            if distance >= 32767:
+            distance = counter_distance(
+                int.from_bytes(payload[-2:], 'little'), group.counter
+            )
+            if distance >= LL_INSTANT_PAST_THRESHOLD:
                 return
             group.control = BigControl(
                 payload,

@@ -356,7 +356,7 @@ def test_phy_rem_while_instant_pending_is_different_collision(central):
         - The IUT answers LL_REJECT_EXT_IND (DIFFERENT) for LL_PHY_REQ.
         - The pending InstantUpdate is unchanged.
     """
-    central.controls.pending = InstantUpdate(20, channel_map=3)
+    central.controls.schedule_instant(InstantUpdate(20, channel_map=3))
     central.lt_tx(phy_req(PHY_2M, PHY_2M))
     central.lt_rx(
         Opcode.LL_REJECT_EXT_IND, reject_ext_ind(Opcode.LL_PHY_REQ, DIFFERENT)
@@ -546,7 +546,7 @@ def test_cpr_rem_while_channel_map_pending(request, iut_role):
     """
     dut = request.getfixturevalue(iut_role)
     update = InstantUpdate(20, channel_map=3)
-    dut.controls.pending = update
+    dut.controls.schedule_instant(update)
     dut.lt_tx(connection_param_req(30))
     dut.lt_rx(
         Opcode.LL_REJECT_EXT_IND,

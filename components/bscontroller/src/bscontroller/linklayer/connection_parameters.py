@@ -20,7 +20,6 @@ from bscontroller.linklayer import (
     LL_CONN_PREFERRED_PERIODICITY_MIN,
     LL_CONN_WINDOW_SIZE_MAX,
     LL_CONN_WINDOW_SIZE_MIN,
-    LL_EVENT_COUNTER_MASK,
     PDU_CONTROL_CONN_PARAM_OFFSET_COUNT,
     PDU_CONTROL_CONN_PARAM_OFFSET_UNSPECIFIED,
     PDU_CONTROL_OPCODE_SIZE,
@@ -28,7 +27,7 @@ from bscontroller.linklayer import (
 )
 from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.instant import CONNECTION_UPDATE as UPDATE
-from bscontroller.linklayer.instant import InstantUpdate
+from bscontroller.linklayer.instant import InstantUpdate, anchor_offset
 from bscontroller.linklayer.parameters import valid_timing
 from bscontroller.linklayer.procedure import (
     DIFFERENT_TRANSACTION_COLLISION,
@@ -64,15 +63,6 @@ def preferred_periodicity(minimum: int, maximum: int, preference: int = 0) -> in
     return (
         preference if 0 < preference <= maximum else LL_CONN_PREFERRED_PERIODICITY_MIN
     )
-
-
-def anchor_offset(
-    reference: tuple[int, int], instant: int, old_interval: int, interval: int
-) -> int:
-    """Express a preferred reference anchor relative to the update Instant."""
-    counter, offset = reference
-    distance = (instant - counter) & LL_EVENT_COUNTER_MASK
-    return (offset - distance * old_interval) % interval
 
 
 @dataclass(eq=False)
@@ -219,15 +209,15 @@ class ConnectionParametersProcedure:
                 )
                 self.local_context = context
         context.phase = ProcedurePhase.WAIT_INSTANT
-        self.owner.pending = InstantUpdate(
+        update = InstantUpdate(
             instant,
             parameters=parameters,
             local=True,
             anchor_reference=reference,
             notify=notify,
         )
-        self.owner.transmitted = self.owner.acknowledged = False
-        self.connection.llcp.send(context, self.owner.pending.encode(), timed=False)
+        self.owner.schedule_instant(update)
+        self.connection.llcp.send(context, update.encode(), timed=False)
 
     def request_parameters(
         self, minimum: int, maximum: int, latency: int, timeout: int

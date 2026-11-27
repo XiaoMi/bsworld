@@ -19,7 +19,6 @@ from bscontroller.linklayer import (
     LL_ADV_PRIMARY_CHANNEL_MAP_ALL,
     LL_CHANNEL_MAP_SIZE,
     LL_DATA_CHANNEL_MAP_ALL,
-    LL_EVENT_COUNTER_MASK,
     LL_SCAN_BACKOFF_COUNT_MAX,
     LL_SCAN_BACKOFF_COUNT_MIN,
     LL_SCAN_BACKOFF_OUTCOME_COUNT,
@@ -41,6 +40,7 @@ from bscontroller.linklayer.pawr import (
 from bscontroller.linklayer.timing import (
     LL_DEFAULT_ADV_INTERVAL_US,
     LL_INSTANT_PAST_THRESHOLD,
+    counter_distance,
 )
 from bscontroller.radio.base import Phy
 
@@ -325,9 +325,7 @@ class PeriodicSync:
             instant = int.from_bytes(value[LL_CHANNEL_MAP_SIZE:], 'little')
             if not valid_channel_map(channels):
                 continue
-            if (
-                instant - self.counter
-            ) & LL_EVENT_COUNTER_MASK >= LL_INSTANT_PAST_THRESHOLD:
+            if counter_distance(instant, self.counter) >= LL_INSTANT_PAST_THRESHOLD:
                 continue
             self.channel_map_update = (instant, channels)
 
@@ -338,7 +336,7 @@ class PeriodicSync:
         if self.channel_map_update is None:
             return
         instant, channels = self.channel_map_update
-        if (self.counter - instant) & LL_EVENT_COUNTER_MASK < LL_INSTANT_PAST_THRESHOLD:
+        if counter_distance(self.counter, instant) < LL_INSTANT_PAST_THRESHOLD:
             assert self.info is not None
             self.info = replace(self.info, channel_map=channels)
             self.channel_map_update = None

@@ -21,11 +21,11 @@ from bscontroller.linklayer import (
 from bscontroller.linklayer.connection_parameters import (
     PARAM_REQUEST,
     UPDATE,
-    anchor_offset,
     preferred_interval,
     preferred_periodicity,
 )
 from bscontroller.linklayer.features import LeFeatureMask
+from bscontroller.linklayer.instant import anchor_offset
 from tests.unit.linklayer.llcp.harness import (
     CENTRAL,
     PERIPHERAL,

@@ -612,12 +612,12 @@ def test_coded_limits_follow_interval_and_pending_update(central):
     assert procedure.effective().tx_time == 12660
     central.set_parameters(interval=48)
     assert procedure.effective().tx_time == MAX_TIME
-    connection.controls.pending = InstantUpdate(
-        6, parameters=replace(connection.parameters, interval=24)
+    connection.controls.schedule_instant(
+        InstantUpdate(6, parameters=replace(connection.parameters, interval=24))
     )
     assert procedure.tx_payload_limit() == 186
     # Received (remote) update: this Central will transmit on 1M from the Instant.
-    connection.controls.pending = InstantUpdate(6, central_tx_phy=Phy.LE_1M)
+    connection.controls.schedule_instant(InstantUpdate(6, central_tx_phy=Phy.LE_1M))
     connection.tx_phy = Phy.LE_2M
     procedure.remote = replace(procedure.remote, rx_time=MIN_TIME)
     assert procedure.tx_payload_limit() == 31
@@ -661,7 +661,9 @@ def test_central_prospective_phy_limit_starts_at_indication(central):
     procedure = negotiate(central, rx=32, rx_time=MIN_TIME)
     connection = central.connection
     connection.tx_phy = connection.rx_phy = Phy.LE_2M
-    connection.controls.pending = InstantUpdate(6, central_tx_phy=Phy.LE_1M, local=True)
+    connection.controls.schedule_instant(
+        InstantUpdate(6, central_tx_phy=Phy.LE_1M, local=True)
+    )
     assert procedure.tx_payload_limit() == 32
     connection.controls.prepare(phy_update_ind(PHY_1M, PHY_1M, 6))
     assert procedure.tx_payload_limit() == 31

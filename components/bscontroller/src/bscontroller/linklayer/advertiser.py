@@ -54,7 +54,11 @@ from bscontroller.linklayer.scheduler import (
     RadioReservation,
     first_radio_gap,
 )
-from bscontroller.linklayer.timing import LL_INSTANT_PAST_THRESHOLD, window_widening
+from bscontroller.linklayer.timing import (
+    LL_INSTANT_PAST_THRESHOLD,
+    counter_distance,
+    window_widening,
+)
 from bscontroller.radio.base import PHY_OCTET_BITS, RADIO_SWITCH_TIME_US, Phy
 
 if TYPE_CHECKING:
@@ -562,9 +566,7 @@ class AdvertisingManager:
         if update is None:
             return
         instant, channels = update
-        if (
-            item.periodic_counter - instant
-        ) & LL_EVENT_COUNTER_MASK < LL_INSTANT_PAST_THRESHOLD:
+        if counter_distance(item.periodic_counter, instant) < LL_INSTANT_PAST_THRESHOLD:
             item.periodic_channel_map = channels
             item.periodic_channel_update = None
 

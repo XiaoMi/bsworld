@@ -33,7 +33,11 @@ from bscontroller.linklayer import (
 )
 from bscontroller.linklayer.advertising_pdu import SyncInfo
 from bscontroller.linklayer.pawr import PawrTiming
-from bscontroller.linklayer.timing import LL_CLOCK_JITTER_US, window_widening
+from bscontroller.linklayer.timing import (
+    LL_CLOCK_JITTER_US,
+    signed_counter_distance,
+    window_widening,
+)
 from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
@@ -53,12 +57,6 @@ SYNC_TRANSFER_OFFSET_MAX_US = (
 )
 # This Link Layer's sleep clock accuracy, as for window_widening.
 LL_LOCAL_SCA = LL_SCA_50_PPM
-
-
-def signed_counter(value: int) -> int:
-    """Interpret a 16-bit event-counter difference as the nearest signed distance."""
-    value &= LL_EVENT_COUNTER_MASK
-    return value - (LL_EVENT_COUNTER_MASK + 1) if value & 0x8000 else value
 
 
 @dataclass(frozen=True)
@@ -179,7 +177,7 @@ class TrainReference:
     def anchor_of(self, counter: int) -> int:
         return (
             self.anchor_us
-            + signed_counter(counter - self.counter)
+            + signed_counter_distance(counter, self.counter)
             * self.interval
             * LL_PERIODIC_INTERVAL_UNIT_US
         )
@@ -281,14 +279,14 @@ class SynchronizationSource:
 
 def counters_related(counter: int, last: int, interval_us: int) -> bool:
     """lastPaEventCounter is equal, adjacent or within 5 s (2.4.2.27)."""
-    distance = abs(signed_counter(counter - last))
+    distance = abs(signed_counter_distance(counter, last))
     return distance <= 1 or distance * interval_us <= LL_PERIODIC_SYNC_COUNTER_SPAN_US
 
 
 def conn_event_in_span(conn_event_count: int, current: int) -> bool:
     """connEventCount within 2^14 events of the (re)transmitting event (2.4.2.27)."""
     return (
-        abs(signed_counter(conn_event_count - current))
+        abs(signed_counter_distance(conn_event_count, current))
         < LL_PERIODIC_SYNC_CONN_EVENT_SPAN
     )
 
@@ -388,7 +386,7 @@ def transfer_timing(
     current = connection.event_counter
     anchor = (
         connection.anchor_us
-        + signed_counter(indication.conn_event_count - current) * connection_us
+        + signed_counter_distance(indication.conn_event_count, current) * connection_us
         + info.offset_us
     )
     counter = info.event_counter
@@ -397,9 +395,12 @@ def transfer_timing(
         events = (now - anchor) // interval_us + 1
         anchor += events * interval_us
         counter = (counter + events) & LL_EVENT_COUNTER_MASK
-    train_span = abs(signed_counter(counter - indication.last_counter)) * interval_us
+    train_span = (
+        abs(signed_counter_distance(counter, indication.last_counter)) * interval_us
+    )
     connection_span = (
-        abs(signed_counter(current - indication.sync_conn_event_count)) * connection_us
+        abs(signed_counter_distance(current, indication.sync_conn_event_count))
+        * connection_us
     )
     return TransferTiming(
         anchor,

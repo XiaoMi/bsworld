@@ -147,8 +147,7 @@ class PhyProcedure:
         if central_change or peripheral_change:
             if self.context is not None:
                 self.context.phase = ProcedurePhase.WAIT_INSTANT
-            self.owner.pending = update
-            self.owner.transmitted = self.owner.acknowledged = False
+            self.owner.schedule_instant(update)
 
     def control(self, payload: bytes) -> bool:
         connection = self.connection

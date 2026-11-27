@@ -3,7 +3,7 @@
 
 """LE timing and receive-window widening (Core 6.3, Vol 6, Part B, 4.2/4.5)."""
 
-from bscontroller.linklayer import LL_SCA_50_PPM, LL_SCA_PPM
+from bscontroller.linklayer import LL_EVENT_COUNTER_MASK, LL_SCA_50_PPM, LL_SCA_PPM
 from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND
 
 
@@ -46,3 +46,14 @@ LL_INSTANT_PAST_THRESHOLD = 0x7FFF
 
 # Default authenticated payload supervision period, in Link Layer time units.
 LL_AUTHENTICATED_PAYLOAD_TIMEOUT_DEFAULT_US = 30_000_000
+
+
+def counter_distance(target: int, reference: int) -> int:
+    """Forward distance between 16-bit Link Layer event counters."""
+    return (target - reference) & LL_EVENT_COUNTER_MASK
+
+
+def signed_counter_distance(target: int, reference: int) -> int:
+    """Nearest signed distance, with the half-cycle interpreted as negative."""
+    distance = counter_distance(target, reference)
+    return distance - (LL_EVENT_COUNTER_MASK + 1) if distance & 0x8000 else distance

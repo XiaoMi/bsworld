@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from bscontroller.linklayer import LL_CHANNEL_MAP_SIZE, ControlOpcode
+from bscontroller.linklayer.timing import counter_distance
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.connection_rate import ConnectionRateUpdate
@@ -19,6 +20,14 @@ if TYPE_CHECKING:
 CONNECTION_UPDATE = struct.Struct('<BHHHHH')
 CHANNEL_MAP = struct.Struct(f'<{LL_CHANNEL_MAP_SIZE}sH')
 PHY_UPDATE = struct.Struct('<BBH')
+
+
+def anchor_offset(
+    reference: tuple[int, int], instant: int, old_interval: int, interval: int
+) -> int:
+    """Project a preferred anchor to the Instant, using a common time unit."""
+    counter, offset = reference
+    return (offset - counter_distance(instant, counter) * old_interval) % interval
 
 
 @dataclass(frozen=True)
