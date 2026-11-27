@@ -22,7 +22,9 @@ from bscontroller.linklayer.features import LeFeature, LeFeatureMask
 from bscontroller.linklayer.procedure import (
     PROCEDURE_COLLISION,
     LocalProcedure,
+    ProcedureCompletion,
     ProcedureContext,
+    ProcedureOrigin,
 )
 from bscontroller.linklayer.state import Role
 from bscontroller.radio.base import RADIO_SWITCH_TIME_US, Phy
@@ -360,8 +362,8 @@ class FrameSpaceProcedure(LocalProcedure):
             self._apply(change, responding=True)
         return payload
 
-    def sent(self, payload: bytes) -> None:
-        if payload[0] == Opcode.LL_FRAME_SPACE_RSP and self.response is not None:
+    def _response_sent(self, _payload: bytes) -> None:
+        if self.response is not None:
             change, self.response = self.response, None
             if change.phys and change.spacing:
                 self._report(ErrorCode.SUCCESS, REMOTE, change)
@@ -406,7 +408,16 @@ class FrameSpaceProcedure(LocalProcedure):
                 changed_phys |= phy_bit(phy)
                 changed_spacings |= direction
         self.response = FrameSpaceChange(space, changed_phys, changed_spacings)
-        self.connection.llcp.respond(
+        response = ProcedureContext(
+            Opcode.LL_FRAME_SPACE_REQ,
+            frozenset(),
+            None,
+            origin=ProcedureOrigin.REMOTE,
+            completion=ProcedureCompletion.SENT,
+            on_sent=self._response_sent,
+        )
+        self.connection.llcp.send(
+            response,
             bytes([Opcode.LL_FRAME_SPACE_RSP]) + self.response.pack(),
             priority=reply_first,
         )

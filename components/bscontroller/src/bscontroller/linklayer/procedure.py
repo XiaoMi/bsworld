@@ -58,6 +58,7 @@ class ProcedureContext:
     phase: ProcedurePhase = ProcedurePhase.WAIT_RESPONSE
     host_initiated: bool = False
     transmitted: bool = False
+    acknowledged: bool = False
     response_timer: ProcedureResponseTimer | None = None
     # Some peer exchanges also reserve this endpoint's local procedure slot.
     blocks_local: bool = False

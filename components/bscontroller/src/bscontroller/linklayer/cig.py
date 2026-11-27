@@ -732,7 +732,7 @@ class CigManager:
         for stream in self.streams.values():
             if stream.connection is not connection or stream.reported:
                 continue
-            if stream.stage == Setup.REQUEST and stream.queued_setup is None:
+            if stream.stage == Setup.REQUEST and stream.procedure.transmitted:
                 connection.controls.reject(
                     Opcode.LL_FRAME_SPACE_REQ,
                     DIFFERENT_TRANSACTION_COLLISION,
@@ -748,8 +748,6 @@ class CigManager:
         if payload[0] == Opcode.LL_CIS_IND and stream.stage == Setup.INDICATION:
             # The Central creates the CIS on transmission (Core 6.B.5.1.15).
             self._activate(stream)
-        elif payload[0] == Opcode.LL_CIS_REQ:
-            stream.queued_setup = None
 
     def _setup_acknowledged(self, stream: Cis, payload: bytes) -> None:
         if payload[0] == Opcode.LL_CIS_IND and stream.stage == Setup.ACTIVE:

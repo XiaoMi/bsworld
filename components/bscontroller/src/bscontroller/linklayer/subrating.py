@@ -227,6 +227,9 @@ class Subrating(LocalProcedure):
             frozenset(responses),
             self.control,
             host_initiated=host,
+            on_acknowledged=(
+                self._update_acknowledged if opcode == Opcode.LL_SUBRATE_IND else None
+            ),
             parameters=parameters,
         )
 
@@ -335,20 +338,7 @@ class Subrating(LocalProcedure):
         )
         return changed
 
-    def sent(self, payload: bytes) -> None:
-        if payload[0] == Opcode.LL_SUBRATE_IND and self.pending:
-            self.context.transmitted = True
-
-    def acknowledged(self, payload: bytes) -> None:
-        if (
-            not self.pending
-            or not self.context.transmitted
-            or self.context.request != payload[0]
-        ):
-            return
-        if payload[0] == Opcode.LL_SUBRATE_REQ:
-            self.context.acknowledged = True
-            return
+    def _update_acknowledged(self, _payload: bytes) -> None:
         if self.update is None:
             return
         changed = self._apply(self.update)

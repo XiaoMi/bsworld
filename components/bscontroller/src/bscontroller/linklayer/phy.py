@@ -62,6 +62,7 @@ class PhyProcedure:
             self.control,
             origin=origin,
             host_initiated=origin == ProcedureOrigin.LOCAL,
+            on_sent=self._sent,
         )
         return self.context
 
@@ -72,15 +73,12 @@ class PhyProcedure:
         if notify:
             self.owner.listener.on_phy_updated(self.connection, status)
 
-    def indication_sent(self, payload: bytes) -> None:
-        if self.context is not None:
-            self.context.stop_response_timer()
+    def _sent(self, payload: bytes) -> None:
+        if payload[0] != Opcode.LL_PHY_UPDATE_IND:
+            return
+        self.context.stop_response_timer()
         if not (payload[1] or payload[2]):
             self.finish(ErrorCode.SUCCESS, notify=self.phy_request_local)
-
-    def mark_transmitted(self) -> None:
-        if self.context is not None:
-            self.context.transmitted = True
 
     def request_phy(self, tx_phys: int, rx_phys: int) -> None:
         """Send LL_PHY_REQ (Core Vol 6, Part B, 5.1.10)."""

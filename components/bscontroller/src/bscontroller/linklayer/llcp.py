@@ -302,7 +302,6 @@ class LlcpCoordinator:
                         procedure.on_sent(payload)
                     if procedure.completion == ProcedureCompletion.SENT:
                         procedure.finish()
-                self.controls.sent(payload)
             self.encryption.sent(payload)
         self.controls.subrating.sent_packet(length)
 
@@ -310,6 +309,8 @@ class LlcpCoordinator:
         self, payload: bytes, procedure: ProcedureContext | None = None
     ) -> int | None:
         if procedure is not None and procedure.active:
+            if payload[0] == procedure.request:
+                procedure.acknowledged = True
             if procedure.on_acknowledged is not None:
                 procedure.on_acknowledged(payload)
             if procedure.completion == ProcedureCompletion.ACKNOWLEDGED:
