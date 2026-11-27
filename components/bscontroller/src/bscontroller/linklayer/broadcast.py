@@ -18,6 +18,10 @@ from typing import TYPE_CHECKING
 
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import LL_IFS_US, LL_MAFS_US
+from bscontroller.linklayer.advertising_event import (
+    periodic_time_us,
+    required_periodic_interval,
+)
 from bscontroller.linklayer.api import BigConfig, BigSnapshot, BigSyncConfig
 from bscontroller.linklayer.bis import (
     BIG_COUNTER_MASK,
@@ -27,7 +31,6 @@ from bscontroller.linklayer.bis import (
     generate_big_seed,
     group_session_key,
 )
-from bscontroller.linklayer.extended import periodic_time_us, required_periodic_interval
 from bscontroller.linklayer.iso import IsoDataPaths
 from bscontroller.linklayer.iso_radio import run_big_event
 from bscontroller.linklayer.isoal import IsoalParameters, IsoPdu

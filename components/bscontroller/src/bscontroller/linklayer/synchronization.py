@@ -34,8 +34,6 @@ from bscontroller.linklayer.pawr import (
     response_limit_us,
     response_pdu,
 )
-from bscontroller.linklayer.pawr_radio import response_transmit, subevent_receive
-from bscontroller.linklayer.periodic import periodic_receive
 from bscontroller.linklayer.resource import PendingOperation
 from bscontroller.linklayer.results import PeriodicPacketReceived
 from bscontroller.linklayer.scheduler import (
@@ -44,6 +42,11 @@ from bscontroller.linklayer.scheduler import (
     RadioReservation,
 )
 from bscontroller.linklayer.state import DataStatus
+from bscontroller.linklayer.synchronization_radio import (
+    periodic_receive,
+    response_transmit,
+    subevent_receive,
+)
 from bscontroller.linklayer.timing import (
     counter_distance,
     signed_counter_distance,

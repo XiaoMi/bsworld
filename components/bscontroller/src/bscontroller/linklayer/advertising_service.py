@@ -19,19 +19,19 @@ from bscontroller.linklayer import (
     PDU_ADV_LEGACY_DATA_SIZE_MAX,
     AdvertisingMode,
 )
-from bscontroller.linklayer.api import (
-    AdvertisingConfig,
-    AdvertisingSnapshot,
-    advertising_snapshot,
-)
-from bscontroller.linklayer.discovery import Advertising
-from bscontroller.linklayer.extended import (
+from bscontroller.linklayer.advertising_event import (
     advertising_time_us,
     auxiliary_pdu,
     periodic_time_us,
     required_periodic_interval,
     subevent_pdu,
 )
+from bscontroller.linklayer.api import (
+    AdvertisingConfig,
+    AdvertisingSnapshot,
+    advertising_snapshot,
+)
+from bscontroller.linklayer.discovery import Advertising
 from bscontroller.linklayer.pawr import (
     LL_PAWR_SUBEVENT_INTERVAL_MAX,
     PawrTiming,

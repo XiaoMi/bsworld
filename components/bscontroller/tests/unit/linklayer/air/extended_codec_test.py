@@ -22,9 +22,9 @@ import pytest
 from bscontroller import hci
 from bscontroller.hci import HCI_LE_ADV_DATA_SIZE_MAX
 from bscontroller.linklayer import LL_MAFS_US, PDU_ADV_ADDRESS_SIZE, AdvertisingMode
+from bscontroller.linklayer.advertising_event import advertising_time_us, fragments
 from bscontroller.linklayer.advertising_pdu import ExtendedPdu
 from bscontroller.linklayer.discovery import Advertising
-from bscontroller.linklayer.extended import advertising_time_us, fragments
 from bscontroller.radio.base import Phy
 
 ADDRESS = bytes(PDU_ADV_ADDRESS_SIZE)
