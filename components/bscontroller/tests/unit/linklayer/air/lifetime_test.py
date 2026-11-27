@@ -555,7 +555,6 @@ def test_advertising_event_waits_for_a_free_radio_gap(link):
     link.roles.reservations = lambda exclude=None: [
         RadioReservation(link.radio.now_us + 1, 5_000, 20_000)
     ]
-    link.resource = RadioResourceManager(lambda: link.now_us, link.roles.reservations)
     run(link, link.roles.advertising.run(item))
     assert not link.radio.sent and item.next_us > link.radio.now_us
     assert item.events == 0
@@ -585,7 +584,7 @@ def test_reservations_do_not_extend_advertising_search(link, monkeypatch, recurr
                 RadioReservation(start, 80, 41_000_000_000, RadioPriority.PERIODIC_RX),
             )
         )
-    link.resource = RadioResourceManager(lambda: link.now_us, lambda _: reservations)
+    link.roles.reservations = lambda exclude=None: reservations
 
     def bounded_gap(reserved, start_us, duration_us, latest_us):
         # Check the bound before running the search so a regression fails promptly.
@@ -1055,7 +1054,6 @@ def test_no_connection_window_when_radio_is_full(link):
         - The generator returns None.
     """
     link.roles.reservations = lambda exclude=None: [RadioReservation(0, 10**9, 10**9)]
-    link.resource = RadioResourceManager(lambda: link.now_us, link.roles.reservations)
     assert link.connection_parameters(PARAMETERS, 0, 1250) is None
 
 
@@ -1373,7 +1371,6 @@ def test_periodic_enable_without_free_phase_keeps_nominal_anchor(link):
     item = Advertising(SELF, handle=0, extended=True, periodic_interval=80)
     link.roles.advertising.publish(item)
     link.roles.reservations = lambda exclude=None: [RadioReservation(0, 10**9, 10**9)]
-    link.resource = RadioResourceManager(lambda: link.now_us, link.roles.reservations)
     link.radio.now_us = 1000
     link.roles.advertising.set_periodic_enabled(item, True)
     assert item.periodic_enabled

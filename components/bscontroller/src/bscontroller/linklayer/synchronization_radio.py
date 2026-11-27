@@ -191,7 +191,7 @@ async def pawr_accept(
         return
     if not link.roles.connections.can_accept(peer):
         return
-    parameters = connection_request_parameters(link, pdu)
+    parameters = connection_request_parameters(pdu, link.trace)
     if parameters is None:
         return
     response = connect_response(own, peer)
