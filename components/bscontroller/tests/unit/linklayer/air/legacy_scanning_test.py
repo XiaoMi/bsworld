@@ -23,7 +23,7 @@ from bscontroller.hci import HCI_LE_SCAN_INTERVAL_UNIT_US
 from bscontroller.linklayer import LL_IFS_US, PDU_ADV_CONNECT_SIZE
 from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.parameters import Parameters
-from bscontroller.linklayer.scheduler import ONE_SHOT_INTERVAL_US, RadioReservation
+from bscontroller.linklayer.scheduler import RadioReservation
 from bscontroller.linklayer.state import Role
 from bscontroller.radio.base import Phy
 from tests.unit.linklayer.air.advertising import (
@@ -944,7 +944,7 @@ def test_connect_ind_requires_room_before_acl_reservation(iut, monkeypatch, spar
         + LL_IFS_US
         + Phy.LE_1M.airtime_us(PDU_ADV_CONNECT_SIZE)
     )
-    reservation = RadioReservation(request_end + spare_us, 200, ONE_SHOT_INTERVAL_US)
+    reservation = RadioReservation(request_end + spare_us, 200)
     monkeypatch.setattr(iut.link.resource, '_reservations', lambda _: [reservation])
     iut.lt_tx(advertisement, at=start_us)
 

@@ -62,7 +62,6 @@ from bscontroller.linklayer.pawr import (
 )
 from bscontroller.linklayer.resource import PendingOperation
 from bscontroller.linklayer.scheduler import (
-    ONE_SHOT_INTERVAL_US,
     RadioPriority,
     RadioReservation,
     first_radio_gap,
@@ -165,8 +164,7 @@ def response_receive_window(
         + timing.response_slot_spacing_us
         + 2 * widening
         + RADIO_SWITCH_TIME_US,
-        ONE_SHOT_INTERVAL_US,
-        RadioPriority.PERIODIC_RX,
+        priority=RadioPriority.PERIODIC_RX,
     )
 
 
@@ -695,9 +693,9 @@ class AdvertisingManager:
                 # Derive the horizon from recurring reservations' actual periods.
                 horizon = max(
                     (
-                        entry.max_interval_us
+                        interval
                         for entry in reservations
-                        if entry.interval_us != ONE_SHOT_INTERVAL_US
+                        if (interval := entry.max_interval_us) is not None
                     ),
                     default=item.interval_us,
                 )

@@ -33,7 +33,6 @@ from bscontroller.linklayer import (
 from bscontroller.linklayer.advertising_pdu import AuxPtr, ExtendedPdu
 from bscontroller.linklayer.parameters import Parameters
 from bscontroller.linklayer.scheduler import (
-    ONE_SHOT_INTERVAL_US,
     RadioPriority,
     RadioReservation,
 )
@@ -693,7 +692,7 @@ def test_aux_scan_requires_room_for_response_before_iso(iut, monkeypatch, spare_
         + Phy.LE_1M.airtime_us(PDU_HEADER_SIZE + PDU_ADV_EXT_PAYLOAD_SIZE_MAX)
     )
     reservation = RadioReservation(
-        response_end + spare_us, 200, ONE_SHOT_INTERVAL_US, RadioPriority.ISOCHRONOUS
+        response_end + spare_us, 200, priority=RadioPriority.ISOCHRONOUS
     )
     monkeypatch.setattr(iut.link.resource, '_reservations', lambda _: [reservation])
     iut.lt_tx(primary_pdu, at=start_us)
@@ -730,8 +729,7 @@ def test_aux_scan_response_chain_stops_at_iso_reservation(iut, monkeypatch):
     reservation = RadioReservation(
         response_start + AUX_OFFSET + 150,
         200,
-        ONE_SHOT_INTERVAL_US,
-        RadioPriority.ISOCHRONOUS,
+        priority=RadioPriority.ISOCHRONOUS,
     )
     monkeypatch.setattr(iut.link.resource, '_reservations', lambda _: [reservation])
     iut.lt_tx(primary(AdvertisingMode.SCANNABLE), at=start_us)

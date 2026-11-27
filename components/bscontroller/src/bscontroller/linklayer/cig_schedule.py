@@ -121,9 +121,11 @@ def available_cig_offsets(
     minimum: int,
     maximum: int,
 ) -> tuple[int, int] | None:
-    # A gap must recur for every pair of CIG events. Project the windows
-    # onto their shared period and offer the largest clear window within
-    # one ISO interval, so the peer can choose a phase on its radio too.
+    """Offer the largest permanently clear phase to the peer.
+
+    Only recurring reservations have a phase. One-shot windows still constrain
+    actual radio work through the resource manager.
+    """
     duration = params.cig_sync_delay_us
     recurring = []
     # Relative starts can round one PHY tick either way when the new CIG
@@ -131,6 +133,8 @@ def available_cig_offsets(
     _, interval_fraction = split_fixed_time(interval_fixed)
     rounding_us = int(interval_fraction != 0)
     for reservation in reservations:
+        if reservation.interval_us is None:
+            continue
         period = gcd(
             interval_fixed,
             fixed_time(reservation.interval_us, reservation.interval_fraction),
@@ -151,10 +155,16 @@ def available_cig_offsets(
                 interval_fraction=fraction,
             )
         )
+    if not recurring:
+        return (minimum, maximum) if minimum <= maximum else None
     maximum = min(maximum, minimum + params.interval_us - 1)
     best = None
     while (start := first_radio_gap(recurring, minimum, duration, maximum)) is not None:
-        next_start = min(item.window_after(start)[0] for item in recurring)
+        next_start = min(
+            window[0]
+            for item in recurring
+            if (window := item.window_after(start)) is not None
+        )
         end = min(maximum, next_start - duration)
         if best is None or end - start > best[1] - best[0]:
             best = (start, end)
