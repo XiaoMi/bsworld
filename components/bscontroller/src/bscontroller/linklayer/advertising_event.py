@@ -291,9 +291,36 @@ def advertising_time_us(item: Advertising, *, check_capacity: bool = False) -> i
 def advertising_event_time_us(item: Advertising) -> int:
     """Reserve a complete primary event, including possible request exchanges."""
     if item.extended:
-        return advertising_time_us(item) + (
+        # Airtime depends on field presence and lengths. Addresses, ADIs and
+        # train counters can change without changing the packet layout.
+        geometry = (
+            item.channel_map,
+            item.mode,
+            item.primary_phy,
+            item.primary_coding,
+            item.secondary_phy,
+            item.secondary_coding,
+            item.anonymous,
+            item.target is not None,
+            item.include_tx_power,
+            item.periodic_enabled,
+            item.pawr is not None,
+            item.decision,
+            item.decision_address,
+            item.decision_adi,
+            item.decision_flags,
+            len(item.decision_data),
+            len(item.data),
+            len(item.scan_response),
+        )
+        cached = item._event_airtime
+        if cached is not None and cached[0] == geometry:
+            return cached[1]
+        duration = advertising_time_us(item) + (
             LL_RESPONSE_START_TOLERANCE_US if item.mode else 0
         )
+        item._event_airtime = geometry, duration
+        return duration
     payload_size = (
         PDU_HEADER_SIZE
         + PDU_ADV_ADDRESS_SIZE
@@ -318,19 +345,51 @@ def advertising_event_time_us(item: Advertising) -> int:
     )
 
 
+def _periodic_geometry(item: Advertising, coding: int) -> tuple:
+    return (
+        item.secondary_phy,
+        coding,
+        item.periodic_adi,
+        item.periodic_channel_update is not None,
+        len(item.big_info),
+        len(item.periodic_data),
+    )
+
+
+def subevent_time_us(
+    item: Advertising, data: bytes = b'', *, check_capacity: bool = False
+) -> int:
+    """AUX_SYNC_SUBEVENT_IND airtime for the selected PAwR payload length."""
+    phy = item.secondary_phy
+    coding = item.secondary_coding.factor(check_capacity=check_capacity)
+    geometry = (*_periodic_geometry(item, coding), len(data))
+    cached = item._periodic_airtime
+    if cached is not None and cached[0] == geometry:
+        return cached[1]
+    duration = phy.airtime_us(len(subevent_pdu(item, data).encode()), coding)
+    item._periodic_airtime = geometry, duration
+    return duration
+
+
 def periodic_time_us(item: Advertising, *, check_capacity: bool = False) -> int:
     """One periodic event's AUX_SYNC_IND chain, or an empty AUX_SYNC_SUBEVENT_IND:
     a PAwR train ignores periodic advertising data.
     """
+    if item.pawr is not None:
+        return subevent_time_us(item, check_capacity=check_capacity)
     phy = item.secondary_phy
     coding = item.secondary_coding.factor(check_capacity=check_capacity)
-    if item.pawr is not None:
-        return phy.airtime_us(len(subevent_pdu(item).encode()), coding)
-    return chain_time_us(
+    geometry = (*_periodic_geometry(item, coding), None)
+    cached = item._periodic_airtime
+    if cached is not None and cached[0] == geometry:
+        return cached[1]
+    duration = chain_time_us(
         fragments(periodic_pdu(item), item.periodic_data, 0, phy, coding=coding),
         phy,
         coding,
     )
+    item._periodic_airtime = geometry, duration
+    return duration
 
 
 def required_periodic_interval(item: Advertising) -> int:

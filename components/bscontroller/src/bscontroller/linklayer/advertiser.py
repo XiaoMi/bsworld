@@ -32,6 +32,7 @@ from bscontroller.linklayer.advertising_event import (
     advertising_time_us,
     periodic_time_us,
     subevent_pdu,
+    subevent_time_us,
 )
 from bscontroller.linklayer.advertising_pdu import ExtendedPdu
 from bscontroller.linklayer.advertising_radio import (
@@ -95,7 +96,7 @@ def periodic_transmit_start_us(item: Advertising) -> int:
 def periodic_transmit_window(item: Advertising) -> RadioReservation:
     """Next AUX_SYNC_IND train, including AUX_CHAIN_IND fragments and T_MAFS.
 
-    The duration re-encodes the train; dispatch uses periodic_transmit_start_us.
+    Reuse the train duration while its packet layout is unchanged.
     """
     return RadioReservation(
         periodic_transmit_start_us(item),
@@ -121,14 +122,12 @@ def subevent_transmit_window(item: Advertising, connecting: bool) -> RadioReserv
     timing, state = item.pawr, item.pawr_state
     assert timing is not None and state is not None
     entry = state.data.get(state.instance(timing.num_subevents))
-    phy = item.secondary_phy
-    coding = item.secondary_coding.factor()
     duration = (
-        connect_exchange_us(phy, request_coding=coding)
-        if connecting
-        else phy.airtime_us(
-            len(subevent_pdu(item, entry.data if entry else b'').encode()), coding
+        connect_exchange_us(
+            item.secondary_phy, request_coding=item.secondary_coding.factor()
         )
+        if connecting
+        else subevent_time_us(item, entry.data if entry else b'')
     )
     return RadioReservation(
         subevent_start_us(item) - RADIO_SWITCH_TIME_US,
