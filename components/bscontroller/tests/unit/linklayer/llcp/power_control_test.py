@@ -98,7 +98,7 @@ def test_queued_power_indication_and_retry_use_their_reported_power(central):
 
 
 def test_power_change_waits_for_local_procedure_and_completes_on_send(central):
-    """Serialize a local power indication while still answering a peer request."""
+    """Keep the latest power change while another local procedure owns the slot."""
     central.lt_tx(pdu(Opcode.LL_POWER_CONTROL_REQ, 1, 0, 0))
     central.lt_rx(Opcode.LL_POWER_CONTROL_RSP)
     central.tx_ack()
@@ -113,6 +113,11 @@ def test_power_change_waits_for_local_procedure_and_completes_on_send(central):
     central.lt_rx(Opcode.LL_POWER_CONTROL_RSP)
     central.tx_ack()
 
+    central.hci(hci.HCI_LE_Write_RF_Path_Compensation_Command(-20, 0))
+    central.event_done()
+    central.event_prepare()
+    central.lt_rx_empty()
+
     central.lt_tx(
         reject_ext_ind(Opcode.LL_PHY_REQ, ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
     )
@@ -121,7 +126,7 @@ def test_power_change_waits_for_local_procedure_and_completes_on_send(central):
     llcp = central.connection.llcp
     assert llcp.local_procedure_busy and llcp.next_deadline_us
     central.lt_rx(
-        Opcode.LL_POWER_CHANGE_IND, pdu(Opcode.LL_POWER_CHANGE_IND, 1, 0, 5, 5)
+        Opcode.LL_POWER_CHANGE_IND, pdu(Opcode.LL_POWER_CHANGE_IND, 1, 0, 0xFE, 0xFE)
     )
     assert not llcp.local_procedure_busy and llcp.next_deadline_us is None
 

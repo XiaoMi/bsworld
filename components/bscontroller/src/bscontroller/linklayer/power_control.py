@@ -19,6 +19,7 @@ from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.procedure import (
     DeferredProcedure,
     LocalProcedure,
+    ProcedureCompletion,
     ProcedureContext,
 )
 from bscontroller.linklayer.timing import counter_distance
@@ -247,6 +248,7 @@ class PowerControl(LocalProcedure):
         self.report_remote = False
         self.tx_compensation = self.connection.link.rf_tx_path_compensation
         self.peer_requested = False
+        self._indications: dict[PowerPhy, tuple[int, int | None]] = {}
         self.requested = False
         self.next_request_us = 0
         self.context: ProcedureContext | None = None
@@ -337,16 +339,32 @@ class PowerControl(LocalProcedure):
             )
 
     def _indicate(self, phy: PowerPhy, level: int, delta: int) -> None:
-        if self.peer_requested:
-            self.connection.llcp.schedule_indication(
-                CHANGE.pack(
-                    Opcode.LL_POWER_CHANGE_IND,
-                    phy.mask,
-                    self._flags(level),
-                    delta,
-                    level,
-                )
+        if not self.peer_requested:
+            return
+        previous = self._indications.get(phy)
+        baseline = level - delta if delta != DELTA_UNAVAILABLE else None
+        if previous is not None and previous[0] < NOT_MANAGED and level < NOT_MANAGED:
+            baseline = previous[1]
+        self._indications[phy] = level, baseline
+        if previous is None:
+            self.connection.llcp.initiate(
+                DeferredProcedure('power_change', lambda: self._send_indication(phy))
             )
+
+    def _send_indication(self, phy: PowerPhy) -> None:
+        level, baseline = self._indications.pop(phy)
+        if self.connection.termination_deadline_us is not None:
+            return
+        delta = level - baseline if baseline is not None else DELTA_UNAVAILABLE
+        if not -128 <= delta < DELTA_UNAVAILABLE:
+            delta = DELTA_UNAVAILABLE
+        opcode = Opcode.LL_POWER_CHANGE_IND
+        self.connection.llcp.send(
+            ProcedureContext(
+                opcode, frozenset(), None, completion=ProcedureCompletion.SENT
+            ),
+            CHANGE.pack(opcode, phy.mask, self._flags(level), delta, level),
+        )
 
     def update_transmitter(self) -> None:
         """Apply the committed PHY and pending RF compensation at the next event."""
@@ -543,6 +561,7 @@ class PowerControl(LocalProcedure):
             )
 
     def close(self, reason: int) -> None:
+        self._indications.clear()
         self.finish(reason)
 
     def _receive_request(self, payload: bytes) -> None:
