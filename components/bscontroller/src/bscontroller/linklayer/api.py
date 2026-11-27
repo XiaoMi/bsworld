@@ -85,7 +85,6 @@ class AdvertisingConfig:
     decision: bool = False
     decision_address: bool = False
     decision_adi: bool = False
-    use_public_address: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, 'address', AddressSnapshot(self.address))

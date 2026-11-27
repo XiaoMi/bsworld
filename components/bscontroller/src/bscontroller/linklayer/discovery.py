@@ -121,7 +121,6 @@ class Advertising:
     decision_adi: bool = False
     decision_flags: int = 0
     decision_data: bytes = b''
-    use_public_address: bool = False
 
     def __post_init__(self) -> None:
         # Live advertising payloads use mutable buffers.
