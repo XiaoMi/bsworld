@@ -14,10 +14,16 @@ import pytest
 from bscontroller import hci
 from bscontroller.linklayer.advertising_pdu import ExtendedPdu, SyncInfo
 from bscontroller.linklayer.channel_selection import channel_selection_2
-from bscontroller.linklayer.discovery import PeriodicSync
+from bscontroller.linklayer.discovery import Initiating, PeriodicSync
 from bscontroller.linklayer.pawr import PawrSync, PawrTiming
+from bscontroller.linklayer.pawr_connection import pawr_connect
 from tests.unit.linklayer.air.advertising import configure_extended, enable_extended
-from tests.unit.linklayer.air.harness import PEER
+from tests.unit.linklayer.air.harness import (
+    CONNECT_PARAMETERS,
+    IUT_ADDRESS,
+    PEER,
+    PduType,
+)
 
 TIMING = PawrTiming(3, 16, 8, 10)
 INFO = SyncInfo(0, 80, (1 << 37) - 1, 0x12345678, 0x123456, 0)
@@ -547,6 +553,52 @@ def test_radio_conflict_reports_failed_subevent(iut, monkeypatch):
     iut.ut_rx(REPORT, periodic_event_counter=0, subevent=0, data_status=255)
     assert sync.counter == 1
     iut.lt_rx_q_is_empty()
+
+
+@pytest.mark.parametrize('wrong_target_type', [False, True])
+def test_pawr_aux_connect_response_checks_target_address_type(iut, wrong_target_type):
+    """Require the InitA address and type when the synchronized device answers."""
+    configure_extended(iut)
+    iut.ut(
+        hci.HCI_LE_Set_Periodic_Advertising_Parameters_V2_Command(
+            0, 80, 80, 0, 3, 16, 8, 10, 2
+        )
+    )
+    iut.ut(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 0))
+    item = iut.link.advertisers[0]
+    initiating = Initiating(
+        IUT_ADDRESS,
+        PEER,
+        30_000,
+        30_000,
+        CONNECT_PARAMETERS,
+        iut.now_us,
+        pawr_advertising=item,
+    )
+    iut.link.roles.scanning.start_initiating(initiating)
+    channel = 12
+    iut.lt_tx(
+        ExtendedPdu(
+            kind=PduType.AUX_CONNECT_RSP,
+            address=bytes(PEER),
+            random_address=PEER.is_random,
+            target=bytes(IUT_ADDRESS),
+            random_target=wrong_target_type,
+        ),
+        channel=channel,
+        access_address=item.periodic_aa,
+    )
+    iut.call(pawr_connect(iut.link, item, initiating, channel, item.periodic_next_us))
+
+    request = iut.lt_rx(PduType.AUX_CONNECT_REQ)
+    assert request.access_address == item.periodic_aa
+    assert iut.link.initiating is None and item.periodic_enabled
+    status = hci.HCI_ErrorCode.CONNECTION_FAILED_TO_BE_ESTABLISHED_ERROR
+    iut.ut_rx(
+        hci.HCI_LE_Enhanced_Connection_Complete_Event,
+        status=status if wrong_target_type else 0,
+    )
+    assert len(iut.link.connections) == int(not wrong_target_type)
 
 
 @pytest.mark.parametrize('source', ['sync', 'advertiser'])

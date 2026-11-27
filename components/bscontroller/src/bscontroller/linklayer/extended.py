@@ -9,15 +9,12 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from bscontroller.address import Address
 from bscontroller.capabilities import (
     CONTROLLER_ADV_DATA_SIZE_MAX,
 )
 from bscontroller.linklayer import (
     LL_ADV_PRIMARY_CHANNELS,
     LL_CHANNEL_MAP_SIZE,
-    LL_CONN_AUX_WINDOW_DELAY_CODED_US,
-    LL_CONN_AUX_WINDOW_DELAY_UNCODED_US,
     LL_DATA_CHANNEL_COUNT,
     LL_DATA_CHANNEL_MAP_ALL,
     LL_EVENT_COUNTER_MASK,
@@ -25,21 +22,16 @@ from bscontroller.linklayer import (
     LL_MAFS_US,
     LL_PERIODIC_INTERVAL_MIN,
     LL_PERIODIC_INTERVAL_UNIT_US,
-    PDU_ADV_ADDRESSES_END,
     PDU_ADV_ADI_DID_BITS,
     PDU_ADV_ADI_SIZE,
     PDU_ADV_AUX_CONNECT_RSP_SIZE,
     PDU_ADV_AUX_PTR_SIZE,
-    PDU_ADV_CONNECT_PAYLOAD_SIZE,
     PDU_ADV_CONNECT_SIZE,
     PDU_ADV_EXT_HEADER_SIZE_MAX,
     PDU_ADV_OFFSET_UNIT_30_US,
     PDU_ADV_OFFSET_UNIT_300_US,
     PDU_ADV_OFFSET_VALUE_MASK,
-    PDU_ADV_RXADD_MASK,
     PDU_ADV_SCAN_REQ_SIZE,
-    PDU_ADV_TXADD_MASK,
-    PDU_ADV_TYPE_MASK,
     PDU_CONTROL_INSTANT_SIZE,
     AdvertisingMode,
     AdvertisingPduType,
@@ -48,18 +40,15 @@ from bscontroller.linklayer.advertising_pdu import (
     AuxPtr,
     ExtendedPdu,
     SyncInfo,
-    advertising_request_peer,
     align_offset_us,
+    connect_response,
+)
+from bscontroller.linklayer.advertising_requests import (
+    accept_advertising_connection,
+    accept_scan_request,
 )
 from bscontroller.linklayer.bis import BIG_INFO_AD_TYPE
 from bscontroller.linklayer.discovery import AD_TYPE_CHANNEL_MAP_UPDATE_INDICATION
-from bscontroller.linklayer.parameters import Parameters
-from bscontroller.linklayer.results import ConnectionAccepted
-from bscontroller.linklayer.state import (
-    LL_ADV_FILTER_CONNECT_MASK,
-    LL_ADV_FILTER_SCAN_MASK,
-    Role,
-)
 from bscontroller.radio.base import PHY_CODED_S8_FACTOR, RADIO_SWITCH_TIME_US, Phy
 
 if TYPE_CHECKING:
@@ -170,37 +159,6 @@ def channel_map_acad(item: Advertising) -> bytes:
 def chain_time_us(packets, phy: Phy, coding: int) -> int:
     return sum(packet.aux_ptr.offset_us for packet in packets[:-1]) + phy.airtime_us(
         len(packets[-1].encode()), coding
-    )
-
-
-def connect_request(initiator: Address, advertiser: Address, parameters) -> bytes:
-    """AUX_CONNECT_REQ: InitA, AdvA and LLData (Core Vol 6, Part B, 2.3.3.2)."""
-    return (
-        bytes(
-            [
-                AdvertisingPduType.AUX_CONNECT_REQ
-                | (PDU_ADV_TXADD_MASK if initiator.is_random else 0)
-                | (PDU_ADV_RXADD_MASK if advertiser.is_random else 0),
-                PDU_ADV_CONNECT_PAYLOAD_SIZE,
-            ]
-        )
-        + bytes(initiator)
-        + bytes(advertiser)
-        + parameters.encode()
-    )
-
-
-def connect_response_matches(
-    pdu: ExtendedPdu, advertiser: Address, initiator: Address
-) -> bool:
-    """AUX_CONNECT_RSP from ``advertiser``, targeting ``initiator`` (2.3.2.2)."""
-    return (
-        pdu.kind == AdvertisingPduType.AUX_CONNECT_RSP
-        and not pdu.mode
-        and pdu.address == bytes(advertiser)
-        and pdu.random_address == advertiser.is_random
-        and pdu.target == bytes(initiator)
-        and pdu.random_target == initiator.is_random
     )
 
 
@@ -480,27 +438,9 @@ async def respond_to_aux_request(
     Part B, 4.4.2.5.2, 4.4.2.7, 4.4.4.2).
     """
     link = advertising.link
-    pdu = packet.pdu
-    peer = advertising_request_peer(pdu, item.address, None)
-    if peer is None:
-        return False
-    identity = link.privacy.identity(peer)
-    if identity is None or (
-        item.target is not None and identity != link.privacy.identity(item.target)
+    if item.mode == AdvertisingMode.SCANNABLE and accept_scan_request(
+        advertising, item, packet
     ):
-        return False
-    if (
-        item.mode == AdvertisingMode.SCANNABLE
-        and pdu[0] & PDU_ADV_TYPE_MASK == AdvertisingPduType.SCAN_REQ
-        and len(pdu) == PDU_ADV_SCAN_REQ_SIZE
-    ):
-        if (
-            item.filter_policy & LL_ADV_FILTER_SCAN_MASK
-            and identity not in link.accept_list
-        ):
-            return False
-        if item.notify_scan_request:
-            advertising.report_scan_request(item, identity)
         await transmit_chain(
             advertising,
             channel,
@@ -515,56 +455,20 @@ async def respond_to_aux_request(
             advertising_event=item,
             power_dbm=item.tx_power_dbm,
         )
-    elif (
-        item.mode == AdvertisingMode.CONNECTABLE
-        and pdu[0] & PDU_ADV_TYPE_MASK == AdvertisingPduType.CONNECT_IND
-        and len(pdu) == PDU_ADV_CONNECT_SIZE
-    ):
-        if not link.roles.connections.can_accept(peer):
-            return False
-        if (
-            item.target is None
-            and item.filter_policy & LL_ADV_FILTER_CONNECT_MASK
-            and identity not in link.accept_list
-        ):
-            return False
-        try:
-            parameters = Parameters.decode(pdu[PDU_ADV_ADDRESSES_END:])
-        except ValueError:
-            return False
-        response = ExtendedPdu(
-            kind=AdvertisingPduType.AUX_CONNECT_RSP,
-            address=bytes(item.address),
-            random_address=item.address.is_random,
-            target=bytes(peer),
-            random_target=peer.is_random,
+        return False
+    if item.mode != AdvertisingMode.CONNECTABLE:
+        return False
+    result = accept_advertising_connection(link, item, packet)
+    if result is None:
+        return False
+    # The on-air acknowledgment creates the Peripheral (Core 6.B.4.4.2.7).
+    with link.roles.sending_connect_response(result):
+        await link.transmit(
+            channel,
+            connect_response(result.self_address, result.peer),
+            start_us=packet.end_us + LL_IFS_US,
+            phy=item.secondary_phy,
+            coding=item.secondary_coding.factor(),
+            power_dbm=item.tx_power_dbm,
         )
-        result = ConnectionAccepted(
-            parameters,
-            peer,
-            Role.PERIPHERAL,
-            packet.end_us,
-            csa2=True,
-            self_address=item.address,
-            local_rpa=item.local_rpa,
-            advertiser=item,
-            window_delay_us=(
-                LL_CONN_AUX_WINDOW_DELAY_CODED_US
-                if packet.phy == Phy.LE_CODED
-                else LL_CONN_AUX_WINDOW_DELAY_UNCODED_US
-            ),
-            phy=packet.phy,
-        )
-        # Unlike a legacy CONNECT_IND, an auxiliary request needs an explicit
-        # AUX_CONNECT_RSP before this advertiser can become a Peripheral.
-        with link.roles.sending_connect_response(result):
-            await link.transmit(
-                channel,
-                response.encode(),
-                start_us=packet.end_us + LL_IFS_US,
-                phy=item.secondary_phy,
-                coding=item.secondary_coding.factor(),
-                power_dbm=item.tx_power_dbm,
-            )
-        return True
-    return False
+    return True

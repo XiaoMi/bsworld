@@ -34,9 +34,10 @@ from bscontroller.linklayer import (
     PDU_HEADER_SIZE,
     AdvertisingPduType,
 )
-from bscontroller.linklayer.advertising_pdu import (
-    advertising_request_peer,
-    scan_request,
+from bscontroller.linklayer.advertising_pdu import scan_request
+from bscontroller.linklayer.advertising_requests import (
+    accept_advertising_connection,
+    accept_scan_request,
 )
 from bscontroller.linklayer.discovery import Advertising
 from bscontroller.linklayer.extended import advertising_time_us
@@ -47,11 +48,8 @@ from bscontroller.linklayer.filtering import (
     ScanningFilterPolicy,
     scanning_decision_mode,
 )
-from bscontroller.linklayer.parameters import Parameters
 from bscontroller.linklayer.results import ConnectionAccepted
 from bscontroller.linklayer.state import (
-    LL_ADV_FILTER_CONNECT_MASK,
-    LL_ADV_FILTER_SCAN_MASK,
     AdvertisingProperties,
     AdvertisingReport,
     Role,
@@ -157,31 +155,10 @@ async def advertising_request(
     B, 4.4.2.3-4.4.2.5, 4.3.2).
     """
     link = advertising.link
-    pdu = packet.pdu
-    peer = advertising_request_peer(pdu, item.address, None)
-    if peer is None:
-        return False
-    identity = link.privacy.identity(peer)
-    if identity is None or (
-        item.target is not None and identity != link.privacy.identity(item.target)
-    ):
-        return False
-    if (
-        item.pdu_type in (AdvertisingPduType.ADV_IND, AdvertisingPduType.ADV_SCAN_IND)
-        and pdu[0] & PDU_ADV_TYPE_MASK == AdvertisingPduType.SCAN_REQ
-        and len(pdu) == PDU_ADV_SCAN_REQ_SIZE
-    ):
-        if (
-            item.filter_policy & LL_ADV_FILTER_SCAN_MASK
-            and identity not in link.accept_list
-        ):
-            return False
-        # Vol 4, Part E, 7.7.65.19 covers SCAN_REQ as well as AUX_SCAN_REQ, so a
-        # legacy-PDU set configured with notifications reports it here too.
-        if item.notify_scan_request:
-            advertising.report_scan_request(item, identity)
-            if not advertising.event_is_current(item):
-                return False
+    if item.pdu_type in (
+        AdvertisingPduType.ADV_IND,
+        AdvertisingPduType.ADV_SCAN_IND,
+    ) and accept_scan_request(advertising, item, packet):
         payload = bytes(item.address) + item.scan_response
         await link.transmit(
             channel,
@@ -196,40 +173,17 @@ async def advertising_request(
             start_us=packet.end_us + LL_IFS_US,
             power_dbm=item.tx_power_dbm,
         )
-    elif (
-        item.pdu_type in (AdvertisingPduType.ADV_IND, AdvertisingPduType.ADV_DIRECT_IND)
-        and pdu[0] & PDU_ADV_TYPE_MASK == AdvertisingPduType.CONNECT_IND
-        and len(pdu) == PDU_ADV_CONNECT_SIZE
+        return False
+    if item.pdu_type not in (
+        AdvertisingPduType.ADV_IND,
+        AdvertisingPduType.ADV_DIRECT_IND,
     ):
-        if not link.roles.connections.can_accept(peer):
-            return False
-        if (
-            item.target is None
-            and item.filter_policy & LL_ADV_FILTER_CONNECT_MASK
-            and identity not in link.accept_list
-        ):
-            return False
-        try:
-            parameters = Parameters.decode(pdu[PDU_ADV_ADDRESSES_END:])
-        except ValueError as error:
-            link.trace(f'LL CONNECT REJECTED {error}')
-            return False
-        # The role owner disables this advertiser only after a fully validated
-        # CONNECT_IND transfers the radio activity to the new connection.
-        link.roles.accepted(
-            ConnectionAccepted(
-                parameters,
-                peer,
-                Role.PERIPHERAL,
-                packet.end_us,
-                self_address=item.address,
-                local_rpa=item.local_rpa,
-                csa2=bool(pdu[0] & PDU_ADV_CHSEL_MASK),
-                advertiser=item,
-            )
-        )
-        return True
-    return False
+        return False
+    result = accept_advertising_connection(link, item, packet)
+    if result is None:
+        return False
+    link.roles.accepted(result)
+    return True
 
 
 async def initiate(
