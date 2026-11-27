@@ -100,9 +100,11 @@ class Cis:
     response_timer: ProcedureResponseTimer | None = None
     reported: bool = False
     cancellation: bool = False
+    termination: bytes | None = None
     failure: int | None = None
     indication: CisIndication | None = None
     queued_setup: Outbound | None = None
+    queued_termination: Outbound | None = None
 
     @property
     def setup_pending(self) -> bool:
@@ -351,6 +353,7 @@ class CigManager:
             stream.stage in (Setup.CONFIGURED, Setup.TERMINATING)
             or (not stream.central and not stream.reported)
             or stream.cancellation
+            or stream.termination is not None
         ):
             return DISALLOWED
         connection = stream.connection
@@ -360,19 +363,31 @@ class CigManager:
             stream.stage == Setup.INDICATION
             and not connection.event.cancel_queued_control(stream.queued_setup)
         ):
-            connection.enqueue_control(
-                bytes(
-                    [Opcode.LL_CIS_TERMINATE_IND, stream.cig_id, stream.cis_id, reason]
-                ),
-                priority=True,
+            payload = bytes(
+                [Opcode.LL_CIS_TERMINATE_IND, stream.cig_id, stream.cis_id, reason]
             )
-            stream.stage = Setup.TERMINATING
-            stream.setup_deadline_us = 0
-            stream.response_timer = connection.llcp.response_timer
+            stream.termination = payload
+            connection.llcp.schedule_cis_termination(
+                partial(self._queue_termination, stream, payload)
+            )
         elif stream.stage == Setup.INDICATION:
             connection.controls.reject(Opcode.LL_CIS_RSP, CANCELLED)
             stream.stage = Setup.QUEUED
         return SUCCESS
+
+    def _queue_termination(self, stream: Cis, payload: bytes) -> None:
+        # A deferred request must still own this incarnation of the CIS.
+        if stream.termination is not payload or stream.stage != Setup.ACTIVE:
+            return
+        connection = stream.connection
+        assert connection is not None
+        if connection.termination_deadline_us:
+            return
+        # Stop CIS radio activity when the indication enters the ACL queue (6.B.5.1.16).
+        stream.queued_termination = connection.enqueue_control(payload, priority=True)
+        stream.stage = Setup.TERMINATING
+        stream.setup_deadline_us = 0
+        stream.response_timer = connection.llcp.response_timer
 
     def close_acl(self, connection: Connection, reason: int) -> None:
         for stream in tuple(self.streams.values()):
@@ -695,7 +710,11 @@ class CigManager:
                 stream.event.start_supervision()
         elif payload[0] == Opcode.LL_CIS_TERMINATE_IND:
             stream = self._stream_for_ids(connection, payload[1], payload[2])
-            if stream is not None:
+            if (
+                stream is not None
+                and stream.stage == Setup.TERMINATING
+                and stream.termination == payload
+            ):
                 self._locally_terminated(stream)
 
     def _stream_for_ids(
@@ -803,6 +822,10 @@ class CigManager:
             )
 
     def _release(self, stream: Cis) -> None:
+        if stream.queued_termination is not None:
+            stream.connection.event.cancel_queued_control(stream.queued_termination)
+            stream.queued_termination = None
+        stream.termination = None
         if not stream.central:
             if self.iso.contains(stream.handle):
                 self.iso.release(stream.handle)
@@ -897,6 +920,8 @@ class CigManager:
 
     def _report_established(self, event: CisEvent) -> None:
         if (stream := self._active_stream(event)) is not None:
+            # Establishment can complete while a local termination is waiting its turn.
+            stream.cancellation = False
             stream.reported = True
             self.listener.on_cis_established(self._snapshot(stream), SUCCESS)
 

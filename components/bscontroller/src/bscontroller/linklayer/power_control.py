@@ -325,7 +325,7 @@ class PowerControl(LocalProcedure):
 
     def _indicate(self, phy: PowerPhy, level: int, delta: int) -> None:
         if self.peer_requested:
-            self.connection.enqueue_control(
+            self.connection.llcp.schedule_indication(
                 CHANGE.pack(
                     Opcode.LL_POWER_CHANGE_IND,
                     phy.mask,

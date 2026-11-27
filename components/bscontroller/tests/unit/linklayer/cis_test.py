@@ -445,6 +445,83 @@ def test_cancel_pending_cis(connection, controller, pending_cis, request_sent):
     assert manager.create_cis(((handle, connection.handle),)) == ErrorCode.SUCCESS
 
 
+@pytest.mark.parametrize(
+    'established', [True, False], ids=['phy-update', 'cis-creation']
+)
+def test_cis_termination_waits_for_local_procedure(
+    connection, controller, pending_cis, established
+):
+    """Queue CIS Termination after the current local procedure (Core 6.B.5, 5.1.16).
+
+    Steps:
+        1. Create the CIS and acknowledge LL_CIS_IND. Leave CIS Creation pending,
+           or complete it and start a PHY Update that waits for a response.
+        2. Request termination. Complete the outstanding procedure.
+        3. Observe LL_CIS_TERMINATE_IND. Request the peer's version before ACK.
+
+    Expected:
+        CIS radio activity stops when the termination PDU is queued. Version
+        Exchange and Disconnection Complete wait for the Link Layer ACK.
+    """
+    manager, handle = pending_cis
+    llcp = connection.llcp
+    queue = connection.event.queue
+    request = queue.popleft().payload
+    manager.sent(connection, request)
+    connection.control(
+        bytes([ControlOpcode.LL_CIS_RSP]) + CisRequest.decode(request).window.encode()
+    )
+    indication = queue.popleft().payload
+    manager.sent(connection, indication)
+    llcp.acknowledged(indication)
+    event = manager.event_for_handle(handle)
+    if established:
+        event.established = True
+        manager._report_established(event)
+        llcp.prepare_phy(hci.PhyBit.LE_2M, hci.PhyBit.LE_2M, 0).start()
+        request = queue.popleft().payload
+        assert request[0] == ControlOpcode.LL_PHY_REQ
+        llcp.sent(request, length=len(request), first=True)
+
+    reason = ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR
+    assert manager.disconnect(handle, reason) == ErrorCode.SUCCESS
+    assert manager.disconnect(handle, reason) == ErrorCode.COMMAND_DISALLOWED_ERROR
+    llcp.start_deferred()
+    assert not queue and tuple(manager.events()) == (event,)
+    if established:
+        connection.control(
+            bytes(
+                [
+                    ControlOpcode.LL_REJECT_EXT_IND,
+                    ControlOpcode.LL_PHY_REQ,
+                    ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR,
+                ]
+            )
+        )
+    else:
+        event.established = True
+        manager._report_established(event)
+        (created,) = controller.events
+        assert created.status == ErrorCode.SUCCESS
+    controller.events.clear()
+
+    llcp.start_deferred()
+    assert tuple(manager.events()) == ()
+    (termination,) = queue
+    assert termination.payload == bytes(
+        (ControlOpcode.LL_CIS_TERMINATE_IND, 1, 1, reason)
+    )
+    llcp.prepare_version().start()
+    llcp.start_deferred()
+    assert list(queue) == [termination] and not controller.events
+    llcp.acknowledged(queue.popleft().payload)
+    (disconnected,) = controller.events
+    assert isinstance(disconnected, hci.HCI_Disconnection_Complete_Event)
+    assert disconnected.connection_handle == handle
+    llcp.start_deferred()
+    assert queue[0].opcode == ControlOpcode.LL_VERSION_IND
+
+
 @pytest.mark.parametrize('peer_responded', [False, True])
 def test_cis_creation_collides_with_frame_space(
     connection, pending_cis, peer_responded
