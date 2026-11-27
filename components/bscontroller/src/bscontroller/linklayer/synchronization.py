@@ -175,7 +175,7 @@ class SynchronizationManager:
         if self.pending is not None:
             # A returning primary, auxiliary or first train RX still owns the old
             # object. Established and transferred syncs have separate lifetimes.
-            self.pending = replace(self.pending, info=None, pawr=None, deadline_us=0)
+            self.pending = replace(self.pending, info=None, pawr=None, deadline_us=None)
 
     def terminate(self, handle: int) -> None:
         del self.active[handle]
@@ -212,10 +212,10 @@ class SynchronizationManager:
         """Six events without an AUX_SYNC_IND end establishment (4.4.5.1)."""
         assert sync.info is not None
         return (
-            link.now_us >= sync.deadline_us
-            or counter_distance(sync.counter, sync.info.event_counter)
-            >= LL_PERIODIC_SYNC_ESTABLISHMENT_EVENTS
-        )
+            sync.deadline_us is not None and link.now_us >= sync.deadline_us
+        ) or counter_distance(
+            sync.counter, sync.info.event_counter
+        ) >= LL_PERIODIC_SYNC_ESTABLISHMENT_EVENTS
 
     def expire(self) -> None:
         link, sync = self.link, self.pending
@@ -231,7 +231,7 @@ class SynchronizationManager:
                     transfer, ErrorCode.CONNECTION_FAILED_TO_BE_ESTABLISHED_ERROR
                 )
         for handle, active in list(self.active.items()):
-            if link.now_us >= active.deadline_us:
+            if active.deadline_us is not None and link.now_us >= active.deadline_us:
                 del self.active[handle]
                 link.listener.on_sync_lost(active)
 
@@ -428,9 +428,8 @@ class SynchronizationManager:
             address,
             indication.sid,
             config.timeout_us,
-            0,
-            config.skip,
-            config.reports_enabled,
+            skip=config.skip,
+            reports_enabled=config.reports_enabled,
             phy=phy,
             filter_duplicates=config.filter_duplicates,
             advertiser_address=advertiser,

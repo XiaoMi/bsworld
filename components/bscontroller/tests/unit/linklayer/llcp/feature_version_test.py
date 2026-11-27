@@ -132,7 +132,7 @@ def test_feature_loc(iut, role):
     dut.ut_rx_q_is_empty()
     assert (
         not dut.controls.feature_request
-        and dut.connection.llcp.response_deadline_us == 0
+        and dut.connection.llcp.response_deadline_us is None
     )
     # The second request is served from the cache, without air traffic.
     dut.host_start('prepare_features')
@@ -641,7 +641,7 @@ def test_version_timer_starts_after_feature_exchange(central):
     first = central.controls.features.deadline_us
     central.elapse(1000)
     central.host_start('prepare_version')
-    assert central.controls.version_deadline_us == 0
+    assert central.controls.version_deadline_us is None
     assert central.connection.llcp.response_deadline_us == first
     central.controls.features.finish(ErrorCode.SUCCESS)
     central.elapse(1000)

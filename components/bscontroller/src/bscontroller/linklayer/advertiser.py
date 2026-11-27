@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from bscontroller.address import OwnAddressType
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
+    LEGACY_ADVERTISING_HANDLE,
     LL_ADV_DELAY_MAX_US,
     LL_ADV_PRIMARY_CHANNELS,
     LL_EVENT_COUNTER_MASK,
@@ -194,7 +195,9 @@ class AdvertisingManager:
 
     def configure(self, candidate: Advertising) -> None:
         current = self._contexts.get(candidate.handle)
-        if current is not None and (current.periodic_enabled or candidate.handle == -1):
+        if current is not None and (
+            current.periodic_enabled or candidate.handle == LEGACY_ADVERTISING_HANDLE
+        ):
             # A periodic exchange may still hold this context while the Host
             # configures the primary advertising set.
             for field in fields(AdvertisingConfig):
@@ -202,7 +205,7 @@ class AdvertisingManager:
             current.identity_address = candidate.identity_address
             current.identity_target = candidate.identity_target
         else:
-            if current is None and candidate.handle != -1:
+            if current is None and candidate.handle != LEGACY_ADVERTISING_HANDLE:
                 candidate.did = self.link.random.randrange(PDU_ADV_ADI_DID_MASK + 1)
             self.publish(candidate)
 
@@ -324,7 +327,7 @@ class AdvertisingManager:
         item.next_us = self.link.now_us + 1
         item.events = 0
         item.max_events = max_events
-        item.deadline_us = self.link.now_us + duration_us if duration_us else 0
+        item.deadline_us = self.link.now_us + duration_us if duration_us else None
 
     def event_is_current(self, item: Advertising) -> bool:
         return self._current_event is item and self.owns(item)
@@ -363,14 +366,14 @@ class AdvertisingManager:
         for item in tuple(self._contexts.values()):
             if not self.owns(item):
                 continue
+            expired = item.deadline_us is not None and link.now_us >= item.deadline_us
             if item.enabled and (
-                (item.deadline_us and link.now_us >= item.deadline_us)
-                or (item.max_events and item.events >= item.max_events)
+                expired or (item.max_events and item.events >= item.max_events)
             ):
                 self.expire(
                     item,
                     ErrorCode.ADVERTISING_TIMEOUT_ERROR
-                    if item.deadline_us and link.now_us >= item.deadline_us
+                    if expired
                     else ErrorCode.LIMIT_REACHED_ERROR,
                 )
             # A completion callback may reset or replace any advertising set.
@@ -386,7 +389,7 @@ class AdvertisingManager:
                         partial(self.run, item),
                     )
                 )
-                if item.deadline_us:
+                if item.deadline_us is not None:
                     operations.append(
                         PendingOperation(
                             item.deadline_us,
@@ -686,7 +689,7 @@ class AdvertisingManager:
         reservations = link.resource.reservations()
         if reservations:
             duration = advertising_event_time_us(item)
-            if item.deadline_us:
+            if item.deadline_us is not None:
                 latest = item.deadline_us - duration
             else:
                 # Derive the horizon from recurring reservations' actual periods.
@@ -701,11 +704,12 @@ class AdvertisingManager:
                 latest = start + horizon
             gap = first_radio_gap(reservations, start, duration, latest)
             if gap != start:
-                item.next_us = (
-                    gap
-                    if gap is not None
-                    else (item.deadline_us or start + item.interval_us)
-                )
+                if gap is not None:
+                    item.next_us = gap
+                elif item.deadline_us is not None:
+                    item.next_us = item.deadline_us
+                else:
+                    item.next_us = start + item.interval_us
                 return
         enable_count = item.enable_count
         item.events += 1

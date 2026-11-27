@@ -32,6 +32,8 @@ from bscontroller.linklayer.timing import (
     LL_CONN_EVENT_GUARD_US,
     LL_CONN_RX_WINDOW_CODED_US,
     LL_CONN_RX_WINDOW_UNCODED_US,
+    fixed_time,
+    project_anchor,
     window_widening,
 )
 from bscontroller.radio.base import (
@@ -96,7 +98,7 @@ class Connection:
         self.supervision_restart_us: int = connect_end_us
         self.last_event_us: int = connect_end_us
         self.remote_termination: int | None = None
-        self.termination_deadline_us = 0
+        self.termination_deadline_us: int | None = None
         # Disconnection Complete reason once the local ACL Termination procedure ends.
         self.termination_status = ErrorCode.CONNECTION_TERMINATED_BY_LOCAL_HOST_ERROR
         self.closed: bool = False
@@ -154,7 +156,7 @@ class Connection:
         Vol 6, Part B, 5.1.6).
         """
         self.termination_status = status
-        if not self.termination_deadline_us:
+        if self.termination_deadline_us is None:
             self.termination_deadline_us = (
                 self.radio.now_us
                 + self.parameters.timeout * LL_SUPERVISION_TIMEOUT_UNIT_US
@@ -280,11 +282,11 @@ class Connection:
 
     def project_anchor(self, events: int) -> tuple[int, int]:
         """Project the anchor and its fractional phase by a signed event count."""
-        elapsed, phase = divmod(
-            self.event_interval_fixed_us * events + self.clock_remainder,
-            PHY_TIME_UNITS_PER_SECOND,
+        return project_anchor(
+            fixed_time(self.anchor_us, self.clock_remainder),
+            self.event_interval_fixed_us,
+            events,
         )
-        return self.anchor_us + elapsed, phase
 
     @property
     def next_anchor_us(self) -> int:
@@ -396,18 +398,17 @@ class Connection:
     @property
     def next_deadline_us(self) -> int:
         deadline = self.supervision_deadline_us
-        return min(
-            deadline,
-            self.termination_deadline_us or deadline,
-            self.llcp.next_deadline_us or deadline,
-        )
+        if self.termination_deadline_us is not None:
+            deadline = min(deadline, self.termination_deadline_us)
+        llcp_deadline = self.llcp.next_deadline_us
+        return min(deadline, llcp_deadline) if llcp_deadline is not None else deadline
 
     def check_timeout(self) -> bool:
         if self.closed or self.llcp.check_timeout():
             return True
         self.expire_acl()
         if (
-            self.termination_deadline_us
+            self.termination_deadline_us is not None
             and self.radio.now_us >= self.termination_deadline_us
         ):
             self.complete(self.termination_status)

@@ -21,7 +21,7 @@ from bscontroller.linklayer.advertising_pdu import (
 )
 from bscontroller.linklayer.advertising_requests import connection_request_parameters
 from bscontroller.linklayer.channel_selection import channel_selection_2
-from bscontroller.linklayer.extended_receive import collect_chain
+from bscontroller.linklayer.extended_receive import receive_chain
 from bscontroller.linklayer.pawr import RESPONSE_TX_POWER_DBM
 from bscontroller.linklayer.results import ConnectionAccepted, PeriodicPacketReceived
 from bscontroller.linklayer.scheduler import RadioPriority
@@ -92,28 +92,20 @@ async def periodic_receive(
                 synchronization.completed(sync)
                 return
 
-            def report_fragment(data, status, received):
-                synchronization.report(
-                    sync,
-                    data,
-                    received.rssi,
-                    ext.tx_power if ext.tx_power is not None else None,
-                    status,
-                )
-
-            data, status, _ = await collect_chain(
+            async for fragment in receive_chain(
                 link.radio,
                 link.resource,
                 packet,
                 ext,
                 is_current=lambda: synchronization.active.get(sync.handle) is sync,
-                on_fragment=report_fragment,
                 access_address=info.access_address,
                 crc_init=info.crc_init,
-            )
-            report_fragment(data, status, packet)
+            ):
+                synchronization.report(
+                    sync, fragment.data, fragment.rssi, ext.tx_power, fragment.status
+                )
             observe_big_info(sync, ext.acad, packet.start_us)
-            synchronization.reported(sync, ext.adi, status)
+            synchronization.reported(sync, ext.adi, fragment.status)
     synchronization.completed(sync)
 
 

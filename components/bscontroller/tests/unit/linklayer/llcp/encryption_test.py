@@ -122,7 +122,7 @@ def test_central_loc_start(central):
     )
     central.ut_rx_q_is_empty()
     assert not central.data_paused() and central.encryption.enabled
-    assert central.encryption.deadline_us == 0
+    assert central.encryption.deadline_us is None
     # Data now flows, encrypted, and the peer can read it.
     assert central.lt_rx_data().payload == b'before'
     central.tx_ack()
@@ -516,7 +516,7 @@ def test_periph_rem_start(peripheral):
     peripheral.lt_tx(pdu(Opcode.LL_START_ENC_RSP))
     assert encrypted(peripheral) == (True, True)
     peripheral.ut_rx(CHANGED, status=0, encryption_enabled=ON)
-    assert not peripheral.data_paused() and peripheral.encryption.deadline_us == 0
+    assert not peripheral.data_paused() and peripheral.encryption.deadline_us is None
     peripheral.lt_rx(Opcode.LL_START_ENC_RSP)
     first_wire = peripheral.radio.sent[-1][2]
     peripheral.lt_rx(Opcode.LL_START_ENC_RSP)
@@ -561,7 +561,7 @@ def test_periph_rem_start_key_missing(peripheral, extended):
     peripheral.tx_ack()
     peripheral.event_done()
     assert not peripheral.data_paused() and not peripheral.connection.closed
-    assert peripheral.encryption.deadline_us == 0
+    assert peripheral.encryption.deadline_us is None
     assert peripheral.lt_rx_data().payload == b'queued'
     peripheral.ut_rx_q_is_empty()
 
@@ -881,7 +881,7 @@ def test_periph_rem_refresh_key_missing_terminates(peripheral, acknowledged):
     # After a pause, a missing key ends the link via ACL Termination.
     termination = pdu(Opcode.LL_TERMINATE_IND, KEY_MISSING)
     peripheral.lt_rx(Opcode.LL_TERMINATE_IND, termination)
-    assert peripheral.encryption.deadline_us == 0
+    assert peripheral.encryption.deadline_us is None
     # The aborted encryption timer cannot win against T_terminate.
     peripheral.elapse(procedure_deadline - peripheral.radio.now_us)
     assert not peripheral.connection.closed
@@ -1232,7 +1232,7 @@ def test_ping_loc_before_authenticated_payload_timeout(central):
     central.lt_rx(Opcode.LL_PING_REQ)
     central.lt_tx(pdu(Opcode.LL_PING_RSP))
     central.event_done()
-    assert central.connection.llcp.response_deadline_us == 0
+    assert central.connection.llcp.response_deadline_us is None
     assert not central.encryption.ping_pending
     assert central.encryption.next_deadline_us == (
         central.radio.now_us + timeout - ping_reserve(central)
@@ -1314,7 +1314,7 @@ def test_unencrypted_link_has_no_ping(central):
     Expected:
         - The next deadline is 0 and no timer fires.
     """
-    assert central.encryption.next_deadline_us == 0
+    assert central.encryption.next_deadline_us is None
     assert not central.elapse(10 * central.encryption.auth_timeout_us)
 
 

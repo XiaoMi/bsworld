@@ -28,6 +28,7 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING
 
 from bscontroller import hci
+from bscontroller.linklayer import LEGACY_ADVERTISING_HANDLE
 from bscontroller.linklayer.api import AdvertisingSnapshot, ConnectionSnapshot
 from bscontroller.linklayer.state import (
     AdvertisingProperties,
@@ -71,7 +72,11 @@ class LegacyAdvertiser:
     @property
     def _snapshot(self) -> AdvertisingSnapshot | None:
         procedures = self.controller.le_procedures
-        return procedures.ll.advertising.snapshot(-1) if procedures else None
+        return (
+            procedures.ll.advertising.snapshot(LEGACY_ADVERTISING_HANDLE)
+            if procedures
+            else None
+        )
 
     @property
     def advertising_data(self) -> bytes:

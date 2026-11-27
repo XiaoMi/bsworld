@@ -65,13 +65,14 @@ class Train:
         self.anchor_us = aux.start_us + self._offset_us
         return self.anchor_us
 
-    def send(self, data=b'', *, skip=False, **fields):
+    def send(self, data=b'', *, skip=False, rssi=-40, **fields):
         """Schedule this train event (or let it pass silently) and step the anchor."""
         if not skip:
             self.iut.lt_tx(
                 ExtendedPdu(data=data, **fields),
                 phy=self.phy,
                 at=self.anchor_us,
+                rssi=rssi,
                 access_address=SYNC_AA,
                 channel=channel_selection_2(self.counter, SYNC_AA, self.channel_map),
             )

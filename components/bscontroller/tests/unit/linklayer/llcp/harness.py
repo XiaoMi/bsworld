@@ -327,7 +327,7 @@ class LlcpHarness:
     def expire_response_timer(self, *, early_us: int = 0) -> bool:
         """Advance to the earliest procedure deadline (minus ``early_us``)."""
         deadline = self.connection.llcp.next_deadline_us
-        assert deadline, 'no procedure timer is running'
+        assert deadline is not None, 'no procedure timer is running'
         return self.elapse(deadline - early_us - self.radio.now_us)
 
     # -- Lower Tester ------------------------------------------------------

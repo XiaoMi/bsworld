@@ -20,6 +20,7 @@ from bscontroller.capabilities import (
 )
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
+    LEGACY_ADVERTISING_HANDLE,
     LL_SCA_500_PPM,
     LL_SCA_MAX,
 )
@@ -226,7 +227,7 @@ class LinkLayerService:
         Refresh configured scanning too: address assignment may follow the scan
         parameter command and must take effect on its next enable.
         """
-        legacy = self.link.advertisers.get(-1)
+        legacy = self.link.advertisers.get(LEGACY_ADVERTISING_HANDLE)
         if (
             legacy is not None
             and legacy.enabled
@@ -362,9 +363,8 @@ class LinkLayerService:
             config.address,
             config.sid,
             config.timeout_us,
-            0,
-            config.skip,
-            config.reports_enabled,
+            skip=config.skip,
+            reports_enabled=config.reports_enabled,
             use_list=config.use_list,
             filter_duplicates=config.filter_duplicates,
         )

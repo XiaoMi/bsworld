@@ -121,8 +121,8 @@ class ControlProcedures:
         return self.version_context is not None and self.version_context.active
 
     @property
-    def version_deadline_us(self) -> int:
-        return self.version_context.deadline_us if self.version_request else 0
+    def version_deadline_us(self) -> int | None:
+        return self.version_context.deadline_us if self.version_request else None
 
     @property
     def listener(self) -> ControlListener:

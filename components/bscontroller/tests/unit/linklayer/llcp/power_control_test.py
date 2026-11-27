@@ -123,7 +123,7 @@ def test_power_change_waits_for_local_procedure_and_completes_on_send(central):
     central.lt_rx(
         Opcode.LL_POWER_CHANGE_IND, pdu(Opcode.LL_POWER_CHANGE_IND, 1, 0, 5, 5)
     )
-    assert not llcp.local_procedure_busy and llcp.next_deadline_us == 0
+    assert not llcp.local_procedure_busy and llcp.next_deadline_us is None
 
     central.host_start('prepare_version')
     central.lt_rx(Opcode.LL_POWER_CHANGE_IND)

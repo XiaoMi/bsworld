@@ -110,8 +110,8 @@ class Encryption:
         return self.state != State.IDLE
 
     @property
-    def deadline_us(self) -> int:
-        return self.procedure.deadline_us if self.procedure is not None else 0
+    def deadline_us(self) -> int | None:
+        return self.procedure.deadline_us if self.procedure is not None else None
 
     def _stop_procedure(self) -> None:
         if self.procedure is not None:
@@ -429,12 +429,12 @@ class Encryption:
         return payload
 
     @property
-    def next_deadline_us(self) -> int:
+    def next_deadline_us(self) -> int | None:
         """Send LL_PING_REQ early enough for a reply within authenticatedPayloadTO (Core
         Vol 6, Part B, 5.1.8, 5.4).
         """
         if self.busy or not self.enabled:
-            return 0
+            return None
         timeout_us = self.auth_timeout_us
         llcp = self.connection.llcp
         if llcp.local_procedure_busy or llcp.has_pending('ping'):
@@ -450,7 +450,8 @@ class Encryption:
     def check_authenticated_timeout(self) -> None:
         """Notify the Host at authenticatedPayloadTO (Core Vol 6, Part B, 5.4)."""
         now = self.connection.radio.now_us
-        if self.busy or not self.enabled or now < self.next_deadline_us:
+        deadline = self.next_deadline_us
+        if deadline is None or now < deadline:
             return
         if now >= self.last_authenticated_us + self.auth_timeout_us:
             self.listener.on_authenticated_payload_timeout(self.connection)
@@ -459,7 +460,8 @@ class Encryption:
             self.connection.llcp.initiate(DeferredProcedure('ping', self._start_ping))
 
     def _start_ping(self) -> None:
-        if not self.enabled or self.connection.radio.now_us < self.next_deadline_us:
+        deadline = self.next_deadline_us
+        if deadline is None or self.connection.radio.now_us < deadline:
             return
         self.ping_context = ProcedureContext(
             Opcode.LL_PING_REQ, frozenset((Opcode.LL_PING_RSP,)), self.control

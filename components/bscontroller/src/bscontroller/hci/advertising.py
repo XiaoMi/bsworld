@@ -29,6 +29,7 @@ from bscontroller.hci.context import (
 )
 from bscontroller.hci.records import AdvertisingSet
 from bscontroller.linklayer import (
+    LEGACY_ADVERTISING_HANDLE,
     LL_ADV_PRIMARY_CHANNEL_MAP_ALL,
     LL_PERIODIC_INTERVAL_MAX,
     LL_PERIODIC_INTERVAL_MIN,
@@ -138,7 +139,7 @@ class LeAdvertisingCommands(LeControllerContext):
         See Bluetooth spec Vol 4, Part E - 7.8.6 LE Read Advertising Physical Channel Tx
         Power Command
         '''
-        state = self.ll.advertising.snapshot(-1)
+        state = self.ll.advertising.snapshot(LEGACY_ADVERTISING_HANDLE)
         return hci.HCI_LE_Read_Advertising_Physical_Channel_Tx_Power_ReturnParameters(
             status=SUCCESS,
             tx_power_level=self.ll.radiative_transmit_power(
@@ -225,7 +226,9 @@ class LeAdvertisingCommands(LeControllerContext):
         if len(command.advertising_data) > PDU_ADV_LEGACY_DATA_SIZE_MAX:
             return hci.HCI_StatusReturnParameters(INVALID)
         self.ll.advertising.configure_legacy(self._legacy_configuration())
-        self.ll.advertising.store_data(-1, 'data', command.advertising_data)
+        self.ll.advertising.store_data(
+            LEGACY_ADVERTISING_HANDLE, 'data', command.advertising_data
+        )
         return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
 
     def on_hci_le_set_scan_response_data_command(self, command):
@@ -235,7 +238,9 @@ class LeAdvertisingCommands(LeControllerContext):
         if len(command.scan_response_data) > PDU_ADV_LEGACY_DATA_SIZE_MAX:
             return hci.HCI_StatusReturnParameters(INVALID)
         self.ll.advertising.configure_legacy(self._legacy_configuration())
-        self.ll.advertising.store_data(-1, 'scan_response', command.scan_response_data)
+        self.ll.advertising.store_data(
+            LEGACY_ADVERTISING_HANDLE, 'scan_response', command.scan_response_data
+        )
         return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
 
     def on_hci_le_set_advertising_enable_command(self, command):

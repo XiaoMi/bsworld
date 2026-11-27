@@ -245,7 +245,7 @@ class ScanningSnapshot:
     windows: tuple[ScanWindowConfig, ...]
     duration_us: int
     period_us: int
-    deadline_us: int
+    deadline_us: int | None
     filter_policy: int
     backoff: ScanBackoffSnapshot
     own_address_type: int = OwnAddressType.PUBLIC

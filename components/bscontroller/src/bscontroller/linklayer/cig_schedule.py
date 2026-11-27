@@ -19,7 +19,7 @@ from bscontroller.linklayer.cis_parameters import (
     valid_cis_supervision_timeout,
 )
 from bscontroller.linklayer.scheduler import RadioReservation, first_radio_gap
-from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND
+from bscontroller.linklayer.timing import fixed_time, split_fixed_time
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.cig import Cig, Cis
@@ -126,21 +126,21 @@ def available_cig_offsets(
     # one ISO interval, so the peer can choose a phase on its radio too.
     duration = params.cig_sync_delay_us
     recurring = []
-    scale = PHY_TIME_UNITS_PER_SECOND
     # Relative starts can round one PHY tick either way when the new CIG
     # accumulates a fractional microsecond each interval.
-    rounding_us = int(interval_fixed % scale != 0)
+    _, interval_fraction = split_fixed_time(interval_fixed)
+    rounding_us = int(interval_fraction != 0)
     for reservation in reservations:
         period = gcd(
             interval_fixed,
-            reservation.interval_us * scale + reservation.interval_fraction,
+            fixed_time(reservation.interval_us, reservation.interval_fraction),
         )
         occupied = reservation.duration_us + 2 * rounding_us
-        if (duration + occupied) * scale > period:
+        if fixed_time(duration + occupied) > period:
             return None
-        start = (reservation.start_us - anchor_us) * scale + reservation.start_fraction
-        start_us, phase = divmod(start % period - period, scale)
-        interval_us, fraction = divmod(period, scale)
+        start = fixed_time(reservation.start_us - anchor_us, reservation.start_fraction)
+        start_us, phase = split_fixed_time(start % period - period)
+        interval_us, fraction = split_fixed_time(period)
         recurring.append(
             replace(
                 reservation,

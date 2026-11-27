@@ -80,7 +80,7 @@ def unpack_param(payload):
 def assert_idle(iut):
     assert (
         not iut.connection.llcp.local_procedure_busy
-        and iut.connection.llcp.response_deadline_us == 0
+        and iut.connection.llcp.response_deadline_us is None
     )
     iut.lt_rx_q_is_empty()
 
@@ -286,7 +286,7 @@ def test_central_loc_known_unsupported_peer_uses_update_directly(central):
     central.event_prepare()
     update = central.lt_rx(Opcode.LL_CONNECTION_UPDATE_IND)
     assert unpack_update(update)[2] == 50
-    assert central.connection.llcp.response_deadline_us == 0
+    assert central.connection.llcp.response_deadline_us is None
     central.tx_ack()
     central.event_done()
     complete_update_at_instant(central, update)
@@ -419,7 +419,7 @@ def test_central_loc_update_has_no_response_timer(central):
     central.set_peer_features(0)
     request(central, 40)
     central.controller.le_procedures.ll.classify_channels(0x0F)
-    assert central.connection.llcp.next_deadline_us == 0
+    assert central.connection.llcp.next_deadline_us is None
 
 
 @pytest.mark.parametrize(

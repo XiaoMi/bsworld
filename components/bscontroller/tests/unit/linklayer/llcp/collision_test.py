@@ -461,7 +461,7 @@ def test_cpr_periph_loc_collision(peripheral, masked):
                 ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR,
             ),
         )
-        assert peripheral.connection.llcp.response_deadline_us == 0
+        assert peripheral.connection.llcp.response_deadline_us is None
     else:
         peripheral.ut_rx(
             REMOTE_REQUEST,

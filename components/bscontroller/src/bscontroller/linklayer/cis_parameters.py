@@ -15,7 +15,6 @@ from bscontroller.linklayer import (
     ControlOpcode,
 )
 from bscontroller.linklayer.cis import CisDirection, CisEventParameters
-from bscontroller.linklayer.isoal import IsoalParameters
 from bscontroller.linklayer.timing import signed_counter_distance
 from bscontroller.radio.base import Phy
 
@@ -81,19 +80,6 @@ def _direction(
     if bn > MAX_CIS_BURST_NUMBER or ft > MAX_CIS_FLUSH_TIMEOUT:
         raise UnsupportedCisBurstOrFlush('CIS burst number or flush timeout')
     return CisDirection(PHY_BY_MASK[phy_mask], pdu, bn, ft, interval, sdu)
-
-
-def isoal_parameters(
-    direction: CisDirection, interval_us: int, framed: bool
-) -> IsoalParameters:
-    return IsoalParameters(
-        framed,
-        direction.bn,
-        direction.max_pdu,
-        direction.max_sdu,
-        interval_us,
-        direction.sdu_interval_us,
-    )
 
 
 def subevent_duration(
@@ -250,7 +236,7 @@ class CisRequest:
             raise ValueError('invalid CIS event parameters')
         for direction in (central, peripheral):
             if direction.bn:
-                isoal_parameters(direction, interval_us, framed)
+                direction.isoal(framed=framed, interval_us=interval_us)
         parameters = CisEventParameters(
             central,
             peripheral,
@@ -352,7 +338,7 @@ def _configured_direction(
                 sdu_interval = min(interval_us, 0x0FFFFF)
     direction = _direction(phy, pdu, bn, ft, sdu_interval, sdu)
     if bn:
-        isoal_parameters(direction, interval_us, bool(config.framing))
+        direction.isoal(framed=bool(config.framing), interval_us=interval_us)
     return direction
 
 

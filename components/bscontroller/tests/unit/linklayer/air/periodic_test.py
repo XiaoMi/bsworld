@@ -757,20 +757,22 @@ def test_sync_reports_chain_in_fragments(iut):
         - A Periodic Advertising Report carries "head" with data status 1
           (incomplete, more to come).
         - A following report carries "tail" with data status 0 (complete).
+        - Each report carries the RSSI of the PDU containing its data.
     """
     train = Train(iut)
     establish(iut, train, data=b'')
     iut.events.clear()
-    train.send(b'head', aux_ptr=AuxPtr(AUX_CHANNEL, 3000))
+    train.send(b'head', aux_ptr=AuxPtr(AUX_CHANNEL, 3000), rssi=-45)
     iut.lt_tx(
         ExtendedPdu(data=b'tail'),
         channel=AUX_CHANNEL,
         after=3000,
+        rssi=-69,
         access_address=SYNC_AA,
     )
     train.run_through()
-    iut.ut_rx(PERIODIC_REPORT, data=b'head', data_status=1)
-    iut.ut_rx(PERIODIC_REPORT, data=b'tail', data_status=0)
+    iut.ut_rx(PERIODIC_REPORT, data=b'head', data_status=1, rssi=-45)
+    iut.ut_rx(PERIODIC_REPORT, data=b'tail', data_status=0, rssi=-69)
 
 
 @pytest.mark.parametrize('skip', [0, 2])
@@ -1510,7 +1512,7 @@ def test_malformed_acad_stops_parsing(iut):
     """
     from bscontroller.linklayer.discovery import PeriodicSync
 
-    sync = PeriodicSync(PEER, 3, 100_000, 0, counter=10)
+    sync = PeriodicSync(PEER, 3, 100_000, counter=10)
     good = channel_map_acad(3, 20)
     sync.receive_channel_map(bytes([0]) + good)
     assert sync.channel_map_update is None
@@ -1546,7 +1548,7 @@ def test_acad_instant_applies_across_skipped_events(counter, skip):
     from bscontroller.linklayer.discovery import PeriodicSync
 
     info = SyncInfo(9000, 80, LL_DATA_CHANNEL_MAP_ALL, SYNC_AA, SYNC_CRC, counter)
-    sync = PeriodicSync(PEER, 3, 100_000, 0, info=info, counter=counter)
+    sync = PeriodicSync(PEER, 3, 100_000, info=info, counter=counter)
     instant = (counter + 3) & LL_EVENT_COUNTER_MASK
     sync.receive_channel_map(channel_map_acad(0b10101, instant))
     sync.counter = (counter + 2) & LL_EVENT_COUNTER_MASK

@@ -76,7 +76,7 @@ def test_chmu_central_loc(central):
     service = central.controller.le_procedures.ll
     assert service.classify_channels(0x1F) == ErrorCode.SUCCESS
     # No response timer for Channel Map Update (5.2).
-    assert central.connection.llcp.next_deadline_us == 0
+    assert central.connection.llcp.next_deadline_us is None
     central.event_prepare()
     indication = central.lt_rx(Opcode.LL_CHANNEL_MAP_IND)
     assert int.from_bytes(indication[1:6], 'little') == 0x1F
@@ -425,7 +425,7 @@ def test_min_used_central_rem(narrow, rx_phy, phys):
         narrow.lt_rx_q_is_empty()
     assert connection.parameters.channel_map == 0x03
     # Indication only; no response timer and no Host event.
-    assert narrow.connection.llcp.response_deadline_us == 0
+    assert narrow.connection.llcp.response_deadline_us is None
     narrow.ut_rx_q_is_empty()
 
 
@@ -703,7 +703,7 @@ def test_min_used_periph_loc(peripheral, acknowledged):
         )
         return
     peripheral.tx_ack()
-    assert llcp.next_deadline_us == 0
+    assert llcp.next_deadline_us is None
     peripheral.event_done()
     peripheral.event_prepare()
     peripheral.lt_rx(Opcode.LL_VERSION_IND)

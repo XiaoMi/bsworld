@@ -26,11 +26,13 @@ from bscontroller.linklayer.scheduler import RadioPriority, RadioReservation
 from bscontroller.linklayer.state import Role
 from bscontroller.linklayer.timing import (
     LL_RESPONSE_START_TOLERANCE_US,
+    fixed_time,
+    project_anchor,
+    split_fixed_time,
     window_widening,
 )
 from bscontroller.radio.base import (
     PHY_CODED_S8_FACTOR,
-    PHY_TIME_UNITS_PER_SECOND,
     RADIO_SWITCH_TIME_US,
     Phy,
 )
@@ -189,7 +191,7 @@ class CisEvent:
 
     @property
     def _anchor_fixed(self) -> int:
-        return self.anchor_us * PHY_TIME_UNITS_PER_SECOND + self._clock_remainder
+        return fixed_time(self.anchor_us, self._clock_remainder)
 
     @property
     def interval_fixed_us(self) -> int:
@@ -198,10 +200,9 @@ class CisEvent:
     def anchor_at_or_after(self, time_us: int) -> tuple[int, int]:
         """Project the recurring CIS phase onto an integer PHY deadline."""
         interval = self.interval_fixed_us
-        events = -(
-            (self._anchor_fixed - time_us * PHY_TIME_UNITS_PER_SECOND) // interval
-        )
-        return divmod(self._anchor_fixed + events * interval, PHY_TIME_UNITS_PER_SECOND)
+        anchor = self._anchor_fixed
+        events = -((anchor - fixed_time(time_us)) // interval)
+        return project_anchor(anchor, interval, events)
 
     @property
     def awaiting_indication_ack(self) -> bool:
@@ -212,22 +213,24 @@ class CisEvent:
         start, phase = self.anchor_at_or_after(
             max(self.anchor_us, self.connection.radio.now_us + 1)
         )
-        self._supervision_start = start * PHY_TIME_UNITS_PER_SECOND + phase
+        self._supervision_start = fixed_time(start, phase)
 
     @property
     def deadline_us(self) -> int | None:
         if not self.established:
             if self._supervision_start is None:
                 return None
-            return (
-                self._supervision_start
-                + CIS_ESTABLISHMENT_EVENTS * self.interval_fixed_us
-            ) // PHY_TIME_UNITS_PER_SECOND
+            deadline, _ = project_anchor(
+                self._supervision_start,
+                self.interval_fixed_us,
+                CIS_ESTABLISHMENT_EVENTS,
+            )
+            return deadline
         last_rx = self.last_valid_rx_us
         if last_rx is None:
             if self._supervision_start is None:
                 return None
-            last_rx = self._supervision_start // PHY_TIME_UNITS_PER_SECOND
+            last_rx, _ = split_fixed_time(self._supervision_start)
         return (
             last_rx
             + self.connection.parameters.timeout * LL_SUPERVISION_TIMEOUT_UNIT_US
@@ -280,7 +283,7 @@ class CisEvent:
         return self.reservation().start_us
 
     def _reservation(self, subevent: int, anchor_fixed: int) -> RadioReservation:
-        anchor_us, phase = divmod(anchor_fixed, PHY_TIME_UNITS_PER_SECOND)
+        anchor_us, phase = split_fixed_time(anchor_fixed)
         nominal = anchor_us + subevent * self.parameters.subinterval_us
         widening = self._widening_us(nominal)
         preparation = widening + RADIO_SWITCH_TIME_US
@@ -292,7 +295,7 @@ class CisEvent:
             + widening
             + LL_RESPONSE_START_TOLERANCE_US
         )
-        interval, fraction = divmod(self.interval_fixed_us, PHY_TIME_UNITS_PER_SECOND)
+        interval, fraction = split_fixed_time(self.interval_fixed_us)
         return RadioReservation(
             nominal - preparation,
             duration,
@@ -377,10 +380,11 @@ class CisEvent:
             return
         stream = self.iso.get_stream(self.handle, False)
         while (self._delivered + 1) * self.rx.bn <= self._rx_next:
-            anchor = (
-                self._anchor_fixed
-                - (self.counter - self._delivered) * self.interval_fixed_us
-            ) // PHY_TIME_UNITS_PER_SECOND
+            anchor, _ = project_anchor(
+                self._anchor_fixed,
+                self.interval_fixed_us,
+                self._delivered - self.counter,
+            )
             start = self._delivered * self.rx.bn
             pdus = tuple(
                 self._inbound.pop(index, None)
@@ -398,8 +402,8 @@ class CisEvent:
         if self.subevent == self.parameters.nse:
             self.subevent = 0
             self.counter += 1
-            self.anchor_us, self._clock_remainder = divmod(
-                self._anchor_fixed + self.interval_fixed_us, PHY_TIME_UNITS_PER_SECOND
+            self.anchor_us, self._clock_remainder = project_anchor(
+                self._anchor_fixed, self.interval_fixed_us, 1
             )
             self._event_closed = self._active_clock = False
 
