@@ -316,7 +316,15 @@ class ControlProcedures:
             return
         update = InstantUpdate(self.instant(), channel_map=channel_map, local=True)
         self.schedule_instant(update)
-        connection.llcp.respond(update.encode())
+        # The Instant keeps the slot until the new map applies (6.B.5.1.2).
+        # The indication itself has no procedure response timeout (6.B.5.2).
+        indication = ProcedureContext(
+            update.opcode,
+            frozenset(),
+            None,
+            completion=ProcedureCompletion.ACKNOWLEDGED,
+        )
+        connection.llcp.send(indication, update.encode(), timed=False)
 
     def request_minimum_channels(self, phys: int, minimum: int) -> None:
         """Queue a Peripheral indication after Feature Exchange, on its radio thread."""

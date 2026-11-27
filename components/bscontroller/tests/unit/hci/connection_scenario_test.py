@@ -709,7 +709,11 @@ def test_channel_classification_updates_each_central_when_ready(host):
     second = host.connection(hci.Role.CENTRAL)
     peripheral = host.connection(hci.Role.PERIPHERAL)
     second.controls.request_channel_map(0x07)
-    previous = second.controls.prepare(second.event.queue.popleft().payload)
+    packet = second.event.queue.popleft()
+    previous = second.llcp.prepare(packet.payload)
+    second.llcp.sent(
+        previous, length=len(previous), first=True, procedure=packet.procedure
+    )
     channel_map = (1 << 2) | (1 << 8)
     host.cmd(
         hci.HCI_LE_Set_Host_Channel_Classification_Command(
@@ -720,7 +724,7 @@ def test_channel_classification_updates_each_central_when_ready(host):
     assert second.controls.pending.channel_map == 0x07
     assert peripheral.controls.pending is None
 
-    second.controls.acknowledge(previous)
+    second.llcp.acknowledged(previous, packet.procedure)
     second.event_counter = second.controls.pending.instant
     second.llcp.event_prepare()
     assert second.parameters.channel_map == 0x07
