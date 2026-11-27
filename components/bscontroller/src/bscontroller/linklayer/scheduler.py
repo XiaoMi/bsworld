@@ -9,9 +9,6 @@ from enum import IntEnum
 
 from bscontroller.linklayer.timing import fixed_time, project_anchor
 
-# A one-shot reservation's next occurrence lies beyond any simulated horizon.
-ONE_SHOT_INTERVAL_US = 1 << 48
-
 
 class RadioPriority(IntEnum):
     """Fixed arbitration order for equal starts and overlapping radio windows."""
@@ -26,20 +23,27 @@ class RadioPriority(IntEnum):
 
 @dataclass(frozen=True)
 class RadioReservation:
+    """A half-open radio window that recurs only when an interval is set."""
+
     start_us: int
     duration_us: int
-    interval_us: int
+    interval_us: int | None = None
     priority: RadioPriority = RadioPriority.CONNECTION
     # Fractional parts in millionths of a microsecond.
     interval_fraction: int = 0
     start_fraction: int = 0
 
     @property
-    def max_interval_us(self) -> int:
+    def max_interval_us(self) -> int | None:
+        if self.interval_us is None:
+            return None
         return self.interval_us + bool(self.interval_fraction)
 
-    def window_after(self, time_us: int) -> tuple[int, int]:
-        """Include a window already in progress, or the next periodic occurrence."""
+    def window_after(self, time_us: int) -> tuple[int, int] | None:
+        """Return the active or next window, or None after a one-shot window ends."""
+        if self.interval_us is None:
+            end = self.start_us + self.duration_us
+            return (self.start_us, end) if time_us < end else None
         if self.interval_fraction:
             anchor = fixed_time(self.start_us, self.start_fraction)
             interval = fixed_time(self.interval_us, self.interval_fraction)
@@ -64,9 +68,11 @@ def higher_priority_overlap(
 ) -> bool:
     """Check half-open windows before admitting a nonpreemptive operation."""
     return start_us < end_us and any(
-        reservation.priority < priority and start < end_us and end > start_us
+        reservation.priority < priority
+        and (window := reservation.window_after(start_us)) is not None
+        and window[0] < end_us
+        and window[1] > start_us
         for reservation in reservations
-        for start, end in [reservation.window_after(start_us)]
     )
 
 
@@ -82,10 +88,11 @@ def first_radio_gap(
     candidate = start_us
     while candidate <= latest_us:
         conflicts = [
-            end
+            window[1]
             for reservation in reservations
-            for start, end in [reservation.window_after(candidate)]
-            if start < candidate + duration_us and end > candidate
+            if (window := reservation.window_after(candidate)) is not None
+            and window[0] < candidate + duration_us
+            and window[1] > candidate
         ]
         if not conflicts:
             return candidate

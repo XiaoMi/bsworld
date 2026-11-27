@@ -32,7 +32,7 @@ from bscontroller.linklayer.iso import IsoDataPaths
 from bscontroller.linklayer.isoal import IsoSdu, IsoStatus
 from bscontroller.linklayer.packet_security import PacketSecurity
 from bscontroller.linklayer.resource import RadioResourceManager
-from bscontroller.linklayer.scheduler import RadioReservation
+from bscontroller.linklayer.scheduler import RadioPriority, RadioReservation
 from bscontroller.linklayer.state import Role
 from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND, Phy, Received
 
@@ -217,6 +217,27 @@ def test_cig_offset_window_stays_clear_through_fractional_clock_cycle():
             start = offset + event * period // PHY_TIME_UNITS_PER_SECOND
             busy, free = reserved.window_after(start)
             assert free <= start or start + parameters.cig_sync_delay_us <= busy
+
+
+@pytest.mark.parametrize(
+    'recurring,expected',
+    [(None, (2000, 9000)), (RadioReservation(65_000, 1000, 10_000), (6000, 9000))],
+    ids=['one-shot-only', 'mixed-reservations'],
+)
+def test_cig_offsets_project_only_recurring_windows(recurring, expected):
+    """A PAwR response cannot reduce the period used to find a CIG phase."""
+    direction = CisDirection(Phy.LE_1M, 20, 1, 1, INTERVAL_US, 20)
+    parameters = CisEventParameters(
+        direction, direction, INTERVAL_US, 0, 1, False, 1000, 1000
+    )
+    response = RadioReservation(66_500, 80, priority=RadioPriority.PERIODIC_RX)
+    reservations = [response] if recurring is None else [response, recurring]
+    period = INTERVAL_US * PHY_TIME_UNITS_PER_SECOND
+
+    assert (
+        available_cig_offsets(parameters, period, reservations, 60_000, 2000, 9000)
+        == expected
+    )
 
 
 def test_framed_cig_checks_actual_transport_latency():

@@ -37,7 +37,6 @@ from bscontroller.linklayer.pawr import (
 from bscontroller.linklayer.resource import PendingOperation
 from bscontroller.linklayer.results import PeriodicPacketReceived
 from bscontroller.linklayer.scheduler import (
-    ONE_SHOT_INTERVAL_US,
     RadioPriority,
     RadioReservation,
 )
@@ -114,8 +113,7 @@ def response_transmit_window(response: ScheduledResponse) -> RadioReservation:
     return RadioReservation(
         response.start_us - RADIO_SWITCH_TIME_US,
         response.airtime_us + RADIO_SWITCH_TIME_US,
-        ONE_SHOT_INTERVAL_US,
-        RadioPriority.PERIODIC_RX,
+        priority=RadioPriority.PERIODIC_RX,
     )
 
 

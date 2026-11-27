@@ -95,24 +95,29 @@ class RadioResourceManager:
         self, owner: object = None, *, protected: RadioReservation | None = None
     ) -> int | None:
         now = self._now_us() + 1
-        if protected is not None:
-            first, last = protected.window_after(now)
+        protected_window = (
+            protected.window_after(now) if protected is not None else None
+        )
         starts = []
         for reservation in self.reservations(exclude=owner):
-            start, end = reservation.window_after(now)
+            window = reservation.window_after(now)
+            if window is None:
+                continue
             if (
                 protected is not None
+                and protected_window is not None
                 and reservation.priority > protected.priority
-                and first < end
-                and start < last
+                and protected_window[0] < window[1]
+                and window[0] < protected_window[1]
             ):
                 # A lower-priority exchange cannot run in the reserved first
                 # exchange; only its later appearances bound work.
-                start, end = reservation.window_after(max(end, last))
-                if start < last:
-                    start, _ = reservation.window_after(end)
-            if start > now:
-                starts.append(start)
+                last = protected_window[1]
+                window = reservation.window_after(max(window[1], last))
+                if window is not None and window[0] < last:
+                    window = reservation.window_after(window[1])
+            if window is not None and window[0] > now:
+                starts.append(window[0])
         return min(starts) if starts else None
 
     def fits_radio(self, end_us: int) -> bool:

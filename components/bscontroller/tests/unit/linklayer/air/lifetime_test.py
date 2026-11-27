@@ -78,7 +78,6 @@ from bscontroller.linklayer.results import (
 )
 from bscontroller.linklayer.scanning_radio import receive_scan_event
 from bscontroller.linklayer.scheduler import (
-    ONE_SHOT_INTERVAL_US,
     RadioPriority,
     RadioReservation,
     first_radio_gap,
@@ -580,9 +579,7 @@ def test_one_shot_reservation_does_not_extend_advertising_search(
     manager = link.roles.advertising
     manager.publish(item)
     start = link.radio.earliest_start_us(37, item.primary_phy, transmit=True)
-    one_shot = RadioReservation(
-        start, 80, ONE_SHOT_INTERVAL_US, RadioPriority.PERIODIC_RX
-    )
+    one_shot = RadioReservation(start, 80, priority=RadioPriority.PERIODIC_RX)
     reservations = [one_shot]
     period = 7_500
     if recurring:
@@ -1179,6 +1176,20 @@ def test_radio_admission_needs_only_clock_and_windows():
         assert resource.deadline_us == 30
         raise RuntimeError('event aborted')
     assert resource.deadline_us is None
+
+
+def test_one_shot_inside_protected_exchange_has_no_following_deadline():
+    """A low-priority one-shot yields to the protected exchange once."""
+    response = RadioReservation(10, 5, priority=RadioPriority.PERIODIC_RX)
+    reservations = [response]
+    resource = RadioResourceManager(lambda: 0, lambda _: reservations)
+    protected = RadioReservation(8, 15, 40, RadioPriority.CONNECTION)
+
+    assert resource.radio_limit() == 10
+    assert resource.radio_limit(protected=protected) is None
+
+    reservations.append(RadioReservation(28, 5, 40, RadioPriority.PERIODIC_RX))
+    assert resource.radio_limit(protected=protected) == 28
 
 
 def test_acl_reservation_detects_overlap_at_a_drifted_anchor(link):
