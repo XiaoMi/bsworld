@@ -111,7 +111,7 @@ class Encryption:
 
     @property
     def deadline_us(self) -> int | None:
-        return self.procedure.deadline_us if self.procedure is not None else None
+        return self.connection.llcp.deadline_for(self.procedure)
 
     def _stop_procedure(self) -> None:
         if self.procedure is not None:

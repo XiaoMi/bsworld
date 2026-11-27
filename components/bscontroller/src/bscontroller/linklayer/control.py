@@ -121,7 +121,7 @@ class ControlProcedures:
 
     @property
     def version_deadline_us(self) -> int | None:
-        return self.version_context.deadline_us if self.version_request else None
+        return self.connection.llcp.deadline_for(self.version_context)
 
     @property
     def listener(self) -> ControlListener:

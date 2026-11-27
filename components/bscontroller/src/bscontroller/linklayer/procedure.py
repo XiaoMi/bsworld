@@ -13,9 +13,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
+from typing import TYPE_CHECKING
 
 from bscontroller.errors import ErrorCode
-from bscontroller.linklayer import LL_RESPONSE_TIMEOUT_US
+
+if TYPE_CHECKING:
+    from bscontroller.linklayer.connection import Connection
 
 PROCEDURE_COLLISION = (
     ErrorCode.LMP_ERROR_TRANSACTION_COLLISION_OR_LL_PROCEDURE_COLLISION_ERROR
@@ -59,7 +62,7 @@ class ProcedureContext:
     host_initiated: bool = False
     transmitted: bool = False
     acknowledged: bool = False
-    response_timer: ProcedureResponseTimer | None = None
+    timed: bool = False
     # Some peer exchanges also reserve this endpoint's local procedure slot.
     blocks_local: bool = False
     completion: ProcedureCompletion = ProcedureCompletion.EXPLICIT
@@ -70,16 +73,8 @@ class ProcedureContext:
     def active(self) -> bool:
         return self.phase != ProcedurePhase.COMPLETE
 
-    @property
-    def deadline_us(self) -> int | None:
-        return (
-            self.response_timer.deadline_us
-            if self.response_timer and self.active
-            else None
-        )
-
     def stop_response_timer(self) -> None:
-        self.response_timer = None
+        self.timed = False
 
     def finish(self) -> None:
         self.phase = ProcedurePhase.COMPLETE
@@ -89,6 +84,7 @@ class LocalProcedure:
     """A local control exchange and its response deadline while active."""
 
     context: ProcedureContext | None
+    connection: Connection
 
     @property
     def pending(self) -> bool:
@@ -96,14 +92,4 @@ class LocalProcedure:
 
     @property
     def deadline_us(self) -> int | None:
-        return self.context.deadline_us if self.context is not None else None
-
-
-@dataclass
-class ProcedureResponseTimer:
-    """Shared ACL deadline, observed by procedures while T_PRT applies (6.B.5.2)."""
-
-    deadline_us: int | None = None
-
-    def restart(self, now_us: int) -> None:
-        self.deadline_us = now_us + LL_RESPONSE_TIMEOUT_US
+        return self.connection.llcp.deadline_for(self.context)
