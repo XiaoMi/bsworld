@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
     from bscontroller.hci.controller import Controller
     from bscontroller.hci.iso import IsoAssembly
+    from bscontroller.linklayer.api import AdvertisingPayload
 
 
 SUCCESS = hci.HCI_ErrorCode.SUCCESS
@@ -41,7 +42,7 @@ class LeControllerContext(LeControllerEvents):
         self.cis_established: dict[int, bool] = {}
         self.deferred_cis_credits: dict[int, int] = {}
         self.duplicate_filter = None
-        self.fragments: dict[tuple[int, str], bytes] = {}
+        self.fragments: dict[tuple[int, AdvertisingPayload], bytes] = {}
         self.extended_commands: bool | None = None
         self._p256_private_key: EllipticCurvePrivateKey | None = None
 

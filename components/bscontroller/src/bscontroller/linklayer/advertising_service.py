@@ -29,6 +29,7 @@ from bscontroller.linklayer.advertising_event import (
 )
 from bscontroller.linklayer.api import (
     AdvertisingConfig,
+    AdvertisingPayload,
     AdvertisingSnapshot,
     advertising_snapshot,
 )
@@ -215,28 +216,37 @@ class AdvertisingService:
         return SUCCESS
 
     def store_data(
-        self, handle: int, field: str, data: bytes, *, renew: bool = False
+        self,
+        handle: int,
+        payload: AdvertisingPayload,
+        data: bytes,
+        *,
+        renew: bool = False,
     ) -> None:
         """Commit the selected payload and optionally renew its data identity."""
         self._advertising.store_data(
-            self._advertising.contexts[handle], field, data, renew=renew
+            self._advertising.contexts[handle], payload, data, renew=renew
         )
 
-    def renew_data_identity(self, handle: int, field: str) -> None:
-        self._advertising.renew_data_identity(self._advertising.contexts[handle], field)
+    def renew_data_identity(self, handle: int, payload: AdvertisingPayload) -> None:
+        self._advertising.renew_data_identity(
+            self._advertising.contexts[handle], payload
+        )
 
-    def validate_data(self, handle: int, field: str, value: bytes) -> int:
+    def validate_data(
+        self, handle: int, payload: AdvertisingPayload, value: bytes
+    ) -> int:
         item = self._advertising.contexts[handle]
-        updated = replace(item, **{field: value})
+        updated = replace(item, **{payload.value: value})
         if (
             (
                 item.extended
                 and item.mode == AdvertisingMode.CONNECTABLE
-                and field == 'data'
+                and payload is AdvertisingPayload.ADVERTISING
                 and len(value) > auxiliary_pdu(item).data_capacity()
             )
             or (
-                field == 'periodic_data'
+                payload is AdvertisingPayload.PERIODIC
                 and item.periodic_interval
                 and required_periodic_interval(updated) > item.periodic_interval_limit
             )
@@ -246,9 +256,11 @@ class AdvertisingService:
             return TOO_LONG
         return SUCCESS
 
-    def publication_status(self, handle: int, field: str, value: bytes) -> int:
+    def publication_status(
+        self, handle: int, payload: AdvertisingPayload, value: bytes
+    ) -> int:
         item = self._advertising.contexts[handle]
-        candidate = replace(item, **{field: value})
+        candidate = replace(item, **{payload.value: value})
         if (
             item.periodic_enabled
             and advertising_time_us(candidate)

@@ -24,6 +24,7 @@ from bscontroller.hci.events import LeControllerEvents
 from bscontroller.linklayer import roles
 from bscontroller.linklayer.api import (
     AdvertisingConfig,
+    AdvertisingPayload,
     ConnectionSnapshot,
     PeriodicSyncConfig,
     advertising_snapshot,
@@ -355,7 +356,7 @@ def test_advertising_configuration_cannot_replace_runtime_state(controller):
     live.periodic_aa = 0x12345678
     live.events = 9
     live.next_us = 5000
-    service.store_data(0, 'data', b'payload')
+    service.store_data(0, AdvertisingPayload.ADVERTISING, b'payload')
     assert (
         service.configure(0, replace(config, tx_power_dbm=-8))
         == hci.HCI_ErrorCode.SUCCESS
