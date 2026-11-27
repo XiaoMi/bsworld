@@ -24,9 +24,10 @@ import pytest
 
 from bscontroller.hci import HCI_LE_SCAN_INTERVAL_UNIT_US
 from bscontroller.linklayer import LL_IFS_US, AdvertisingMode
-from bscontroller.linklayer.advertising import AuxPtr, ExtendedPdu
+from bscontroller.linklayer.advertising_pdu import AuxPtr, ExtendedPdu
 from bscontroller.linklayer.parameters import Parameters
 from bscontroller.radio.base import Phy
+from tests.unit.linklayer.air.advertising import create_extended_connection
 from tests.unit.linklayer.air.harness import (
     IUT_ADDRESS,
     OTHER,
@@ -1131,30 +1132,6 @@ def test_extended_scan_bad_second_entry_commits_nothing(iut):
 # ---------------------------------------------------------------------------
 # Extended initiating: AUX_CONNECT_REQ / AUX_CONNECT_RSP (4.4.4.2)
 # ---------------------------------------------------------------------------
-def create_connection(
-    iut, peer=PEER, *, phys=hci.PhyBit.LE_1M, policy=0, status=ErrorCode.SUCCESS
-):
-    count = bin(phys).count('1')
-    iut.ut(
-        hci.HCI_LE_Extended_Create_Connection_Command(
-            initiator_filter_policy=policy,
-            own_address_type=hci.OwnAddressType.PUBLIC,
-            peer_address_type=peer.address_type,
-            peer_address=peer,
-            initiating_phys=phys,
-            scan_intervals=[WINDOW] * count,
-            scan_windows=[WINDOW] * count,
-            connection_interval_mins=[24 + index * 8 for index in range(count)],
-            connection_interval_maxs=[40 + index * 8 for index in range(count)],
-            max_latencies=[0] * count,
-            supervision_timeouts=[100] * count,
-            min_ce_lengths=[0] * count,
-            max_ce_lengths=[0] * count,
-        ),
-        status,
-    )
-
-
 def connect_response(advertiser=PEER, target=IUT_ADDRESS, **changes):
     values = dict(
         kind=PduType.AUX_CONNECT_RSP,
@@ -1177,13 +1154,13 @@ def test_cancel_during_aux_follow_cannot_initiate_for_a_new_request(iut):
     Expected:
         - Only the fresh advertisement elicits AUX_CONNECT_REQ and creates an ACL.
     """
-    create_connection(iut)
+    create_extended_connection(iut)
     mode = AdvertisingMode.CONNECTABLE
     send_event(iut, primary(mode), auxiliary(mode=mode))
     window = iut.link.roles.scanning.run(iut.link.initiating, iut.now_us + WINDOW_US)
     with iut.pause_radio(window, 'receive', occurrence=2):
         iut.ut(hci.HCI_LE_Create_Connection_Cancel_Command())
-        create_connection(iut)
+        create_extended_connection(iut)
     iut.ut_rx(CONNECTED, status=ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
     iut.ut_rx_q_is_empty()
     iut.lt_rx_q_is_empty()
@@ -1222,7 +1199,7 @@ def test_aux_connect_creates_central_connection(iut, phy):
     Parameters range over every PHY, with the Coded case using a Coded primary.
     """
     phys = hci.PhyBit.LE_1M | hci.PhyBit.LE_2M | hci.PhyBit.LE_CODED
-    create_connection(iut, phys=phys)
+    create_extended_connection(iut, phys=phys)
     primary_phy = Phy.LE_CODED if phy == Phy.LE_CODED else Phy.LE_1M
     send_event(
         iut,
@@ -1283,7 +1260,7 @@ def test_aux_connect_without_valid_response_keeps_initiating(iut, response):
     Parameters range over no response, wrong advertiser, wrong target, wrong
     mode, and wrong target address type.
     """
-    create_connection(iut)
+    create_extended_connection(iut)
     send_event(
         iut,
         primary(AdvertisingMode.CONNECTABLE),
@@ -1320,7 +1297,7 @@ def test_initiating_ignores_ineligible_extended_events(iut, event):
     Parameters range over non-connectable, other-advertiser, and directed-to-other
     events.
     """
-    create_connection(iut)
+    create_extended_connection(iut)
     if event == 'nonconnectable':
         send_event(iut, primary(), auxiliary(b'x'))
     elif event == 'other-advertiser':
@@ -1360,7 +1337,7 @@ def test_extended_initiating_with_filter_list(iut):
     iut.ut(
         hci.HCI_LE_Add_Device_To_Filter_Accept_List_Command(OTHER.address_type, OTHER)
     )
-    create_connection(iut, policy=1)
+    create_extended_connection(iut, policy=1)
     send_event(
         iut,
         primary(AdvertisingMode.CONNECTABLE),
@@ -1389,7 +1366,7 @@ def test_legacy_advertiser_via_extended_create_connection(iut):
     """
     from tests.unit.linklayer.air.harness import adv_ind
 
-    create_connection(iut)
+    create_extended_connection(iut)
     iut.lt_tx(adv_ind())
     iut.run(WINDOW_US)
     iut.lt_rx(PduType.CONNECT_IND)
@@ -1420,7 +1397,7 @@ def test_extended_create_connection_phy_validation(iut, phys, status):
     Parameters range over LE 2M alone (invalid for initiating) and an unsupported
     PHY bit.
     """
-    create_connection(iut, phys=phys, status=status)
+    create_extended_connection(iut, phys=phys, status=status)
 
 
 def test_extended_create_connection_parameter_validation(iut):

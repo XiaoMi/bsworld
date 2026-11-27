@@ -26,7 +26,7 @@ from bscontroller.linklayer import (
     LL_MAFS_US,
     AdvertisingMode,
 )
-from bscontroller.linklayer.advertising import ExtendedPdu
+from bscontroller.linklayer.advertising_pdu import ExtendedPdu
 from bscontroller.radio.base import RADIO_SWITCH_TIME_US, Phy
 from tests.unit.linklayer.air.advertising import (
     EXTENDED_INTERVAL,

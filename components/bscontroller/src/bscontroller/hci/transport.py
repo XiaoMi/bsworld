@@ -15,11 +15,13 @@ class TransportSink(Protocol):
 
 
 class H4Parser:
-    def __init__(self, sink):
+    """Deliver complete H4 packets to the sink as byte chunks arrive."""
+
+    def __init__(self, sink: TransportSink):
         self.sink = sink
         self.buffer = bytearray()
 
-    def feed_data(self, data: bytes):
+    def feed_data(self, data: bytes) -> None:
         self.buffer.extend(data)
         while self.buffer:
             packet_type = self.buffer[0]

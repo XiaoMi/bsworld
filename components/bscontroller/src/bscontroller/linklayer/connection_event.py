@@ -33,11 +33,8 @@ from bscontroller.linklayer.channel_selection import (
     channel_selection_1,
     channel_selection_2,
 )
-from bscontroller.linklayer.data_path import (
-    PacketControl,
-    PacketSecurity,
-    ReceiveContext,
-)
+from bscontroller.linklayer.packet_control import PacketControl, ReceiveContext
+from bscontroller.linklayer.packet_security import PacketSecurity
 from bscontroller.linklayer.state import Role
 from bscontroller.linklayer.timing import LL_RESPONSE_START_TOLERANCE_US
 from bscontroller.radio.base import Phy, Received
@@ -56,7 +53,7 @@ class AclFlush:
     discarded: bool = False
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Outbound:
     llid: int
     payload: bytes
@@ -150,22 +147,24 @@ class ConnectionEvent:
             else:
                 retained.append(item)
         self.queue = retained
-        for _ in range(completed):
-            self.connection.listener.on_acl_completed(self.connection)
+        if completed:
+            self.connection.listener.on_acl_completed(self.connection, completed)
 
-    def enqueue_control(self, payload: bytes, *, priority: bool = False) -> None:
+    def enqueue_control(self, payload: bytes, *, priority: bool = False) -> Outbound:
         item = Outbound(LlId.CONTROL, payload)
         if priority:
             self.queue.appendleft(item)
         else:
             self.queue.append(item)
 
-    def cancel_queued_control(self, payload: bytes) -> bool:
-        """Withdraw a control PDU before it becomes the outstanding ARQ packet."""
-        item = Outbound(LlId.CONTROL, payload)
-        if item not in self.queue:
+        return item
+
+    def cancel_queued_control(self, item: Outbound | None) -> bool:
+        """Withdraw an entry until ARQ selects it for transmission."""
+        try:
+            self.queue.remove(item)
+        except ValueError:
             return False
-        self.queue.remove(item)
         return True
 
     def after_acknowledgment(self, callback: Callable[[], None]) -> None:
@@ -345,7 +344,10 @@ class ConnectionEvent:
             self.pending_wire = self.security.encrypt(header, self.pending_wire)
         pdu = bytes([header, len(self.pending_wire)]) + self.pending_wire
         self.connection.link.trace(
-            f"LL TX event={self.connection.event_counter} ch={channel} pdu={pdu.hex()}"
+            lambda: (
+                f"LL TX event={self.connection.event_counter} "
+                f"ch={channel} pdu={pdu.hex()}"
+            )
         )
         end_us = await self.connection.radio.transmit(
             channel,
@@ -374,7 +376,12 @@ class ConnectionEvent:
         return bool(header & PDU_DATA_MD_MASK), end_us
 
     async def receive(
-        self, channel: int, until_us: int, *, start_us: int | None = None
+        self,
+        channel: int,
+        until_us: int,
+        *,
+        start_us: int | None = None,
+        anchor: bool = False,
     ) -> Received | None:
         """Receive within the connection event; Coded PHY never rejects below 2704 us
         (Core Vol 6, Part B, 4.5.10).
@@ -393,10 +400,21 @@ class ConnectionEvent:
             return None
         if packet is not None:
             self.connection.link.trace(
-                f"LL RX event={self.connection.event_counter} "
+                lambda: f"LL RX event={self.connection.event_counter} "
                 f"ch={channel} crc={int(packet.valid_crc)} "
                 f"pdu={packet.pdu.hex()}"
             )
+            if anchor:
+                connection = self.connection
+                if connection.update_window or not connection.established:
+                    # A transmit window deliberately permits a new ACL anchor.
+                    # Its offset does not move an existing CIS.
+                    connection.last_anchor_rx_us = connection.anchor_us = (
+                        packet.start_us
+                    )
+                    connection.update_window = False
+                else:
+                    connection.synchronize_clock(packet.start_us, connection.anchor_us)
             # Connection establishment is a physical reception, independent of CRC.
             self.connection.establish()
             self.connection.received_in_event()
@@ -560,10 +578,8 @@ class ConnectionEvent:
                 - 1,
             ),
             start_us=start_us,
+            anchor=True,
         )
-        if packet is not None:
-            connection.update_window = False
-            connection.anchor_us = packet.start_us
         crc_errors = 0
         while packet is not None and not connection.closed:
             crc_errors = 0 if packet.valid_crc else crc_errors + 1
@@ -607,8 +623,10 @@ class ConnectionEvent:
         """Run one connection event: channel selection, exchanges until close (Core Vol
         6, Part B, 4.5.1, 4.5.6, 4.5.8).
         """
-        self.connection.skip_missed_events()
         if self.connection.check_timeout():
+            return self.connection.radio.now_us
+        self.connection.skip_missed_events()
+        if self.connection.closed:
             return self.connection.radio.now_us
         deadline = self.connection.next_deadline_us
         if (

@@ -22,6 +22,7 @@ import pytest
 from bscontroller.linklayer import LL_CONN_INTERVAL_UNIT_US
 from bscontroller.linklayer.encryption import State
 from bscontroller.linklayer.features import LeFeatureMask
+from bscontroller.linklayer.packet_control import ReceiveContext
 from tests.unit.linklayer.llcp.harness import (
     LTK,
     PHY_1M,
@@ -164,6 +165,20 @@ def test_central_loc_start_refused(central, response, status):
     central.ut_rx_q_is_empty()
     assert not central.data_paused() and not central.connection.closed
     assert encrypted(central) == (False, False)
+
+
+def test_host_channel_map_waits_for_encryption(central):
+    """Hold the Host classification until Encryption Start releases this ACL (6.B.5)."""
+    central.host_start('prepare_encryption', RAND, EDIV, LTK)
+    central.lt_rx(Opcode.LL_ENC_REQ)
+    central.hci(
+        hci.HCI_LE_Set_Host_Channel_Classification_Command((0x1F).to_bytes(5, 'little'))
+    )
+    assert central.controls.pending is None
+    central.lt_tx(reject_ext_ind(Opcode.LL_ENC_REQ, KEY_MISSING))
+    central.event_prepare()
+    update = central.lt_rx(Opcode.LL_CHANNEL_MAP_IND)
+    assert int.from_bytes(update[1:6], 'little') == 0x1F
 
 
 def test_central_loc_start_refused_after_enc_rsp(central):
@@ -354,11 +369,11 @@ def test_encryption_state_is_per_connection(central):
     from tests.unit.helpers import add_connection
 
     second = add_connection(central.connection, 1)
-    sink = central.link.listener.sink
     for value, key in ((central.connection, b'1' * 16), (second, b'2' * 16)):
-        sink.on_hci_le_enable_encryption_command(
+        (status,) = central.hci(
             hci.HCI_LE_Enable_Encryption_Command(value.handle, bytes(8), 0, key)
         )
+        assert status.status == ErrorCode.SUCCESS
         assert value.encryption.ltk == key
     assert central.encryption is not second.encryption
     assert len(central.connection.event.queue) == len(second.event.queue) == 1
@@ -481,7 +496,7 @@ def test_periph_rem_start(peripheral):
         1. The peer sends ENC_REQ via peripheral_key_request(); the Host is asked
            for the key and data is confirmed paused.
         2. Host supplies the LTK; the IUT sends LL_START_ENC_REQ.
-        3. Lower Tester sends START_ENC_RSP; the IUT sends its START_ENC_RSP.
+        3. Lower Tester sends START_ENC_RSP and withholds the ACK for the first reply.
 
     Expected:
         - From START_ENC_REQ the Peripheral receives encrypted; after
@@ -500,11 +515,14 @@ def test_periph_rem_start(peripheral):
     assert encrypted(peripheral) == (False, True)
     peripheral.lt_tx(pdu(Opcode.LL_START_ENC_RSP))
     assert encrypted(peripheral) == (True, True)
+    peripheral.ut_rx(CHANGED, status=0, encryption_enabled=ON)
+    assert not peripheral.data_paused() and peripheral.encryption.deadline_us == 0
     peripheral.lt_rx(Opcode.LL_START_ENC_RSP)
-    peripheral.ut_rx_q_is_empty()
+    first_wire = peripheral.radio.sent[-1][2]
+    peripheral.lt_rx(Opcode.LL_START_ENC_RSP)
+    assert peripheral.radio.sent[-1][2] == first_wire
     peripheral.tx_ack()
     peripheral.event_done()
-    peripheral.ut_rx(CHANGED, status=0, encryption_enabled=ON)
     peripheral.ut_rx_q_is_empty()
     assert peripheral.lt_rx_data().payload == b'before'
 
@@ -883,7 +901,7 @@ def phy_then_enc_req(dut, *, extended=False):
     dut.set_peer_features(
         int(LeFeatureMask.EXTENDED_REJECT_INDICATION) if extended else 0
     )
-    dut.host_start('prepare_phy', PHY_1M, PHY_1M, 0, 0)
+    dut.host_start('prepare_phy', PHY_1M, PHY_1M, 0)
     dut.event_prepare()
     dut.lt_rx(Opcode.LL_PHY_REQ)
     dut.lt_tx(enc_req())
@@ -1123,7 +1141,7 @@ def test_phy_update_completes_before_encryption(central):
         - Host gets LE PHY Update Complete (SUCCESS).
         - No local exchange remains recorded.
     """
-    central.host_start('prepare_phy', PHY_1M, PHY_1M, 0, 0)
+    central.host_start('prepare_phy', PHY_1M, PHY_1M, 0)
     central.event_prepare()
     central.lt_rx(Opcode.LL_PHY_REQ)
     central.lt_tx(phy_rsp(PHY_1M, PHY_1M))
@@ -1434,7 +1452,10 @@ def test_duplicate_pause_req_survives_rx_mode_switch(peripheral):
     counter = peripheral.connection.packet_security.cipher.rx_counter
     # Same bytes retried: recognised from the cached snapshot, no new counter.
     header, wire, plaintext, _ = peripheral.connection.packet_security.last_received
-    assert peripheral.encryption.receive(header, wire, duplicate=True) == plaintext
+    assert (
+        peripheral.connection.llcp.receive(ReceiveContext(header, wire, duplicate=True))
+        == plaintext
+    )
     assert not peripheral.connection.closed
     assert peripheral.connection.packet_security.cipher.rx_counter == counter
     assert plaintext == pdu(Opcode.LL_PAUSE_ENC_REQ)

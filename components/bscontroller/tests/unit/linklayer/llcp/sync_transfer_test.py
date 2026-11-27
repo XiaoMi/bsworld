@@ -23,8 +23,9 @@ from bscontroller.linklayer import (
     LL_DATA_CHANNEL_MAP_ALL,
     LL_EVENT_COUNTER_MASK,
     LL_PERIODIC_INTERVAL_UNIT_US,
+    LL_RESPONSE_TIMEOUT_US,
 )
-from bscontroller.linklayer.advertising import SyncInfo
+from bscontroller.linklayer.advertising_pdu import SyncInfo
 from bscontroller.linklayer.discovery import PeriodicSync
 from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.privacy import address_hash
@@ -302,7 +303,7 @@ def test_set_info_transfer_dropped_when_the_train_ends(central, order):
     central.tx_ack()
     central.event_done()
     central.run_events(1)
-    assert not central.controls.transfers and not central.controls.released
+    assert not central.controls.transfers and central.controls.active_transfer is None
 
 
 def test_set_info_transfer_names_last_transmitted_event(central):
@@ -326,6 +327,25 @@ def test_set_info_transfer_names_last_transmitted_event(central):
     central.event_prepare()
     fields = decode(central.lt_rx(Opcode.LL_PERIODIC_SYNC_IND))
     assert (fields['last'], fields['counter']) == (4, 5)
+
+
+def test_transfer_owns_the_acl_until_first_transmission(central):
+    """Run T_PRT only while the sync indication is queued (Core 6.B.5.1.13, 5.2)."""
+    item = periodic_set(central)
+    central.set_peer_features(RECIPIENT)
+    assert set_info_transfer(central) == ErrorCode.SUCCESS
+    assert central.connection.llcp.next_deadline_us == 0
+    transmitted(central, item)
+    central.event_prepare()
+    deadline = central.radio.now_us + LL_RESPONSE_TIMEOUT_US
+    assert central.connection.llcp.next_deadline_us == deadline
+    central.host_start('prepare_version')
+    packet = central.lt_rx(Opcode.LL_PERIODIC_SYNC_IND)
+    assert central.connection.llcp.next_deadline_us == 0
+    central.lt_rx(Opcode.LL_PERIODIC_SYNC_IND, packet)
+    central.tx_ack()
+    central.event_prepare()
+    central.lt_rx(Opcode.LL_VERSION_IND)
 
 
 def test_long_offset_moves_conn_event_count(central):

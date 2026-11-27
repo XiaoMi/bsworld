@@ -66,7 +66,6 @@ def request(iut, minimum, maximum=None, latency=0, timeout=100, *, status=0):
         latency,
         timeout,
         status=status,
-        valid_ce_lengths=True,
     )
 
 
@@ -417,7 +416,7 @@ def test_central_loc_update_has_no_response_timer(central):
     central.set_peer_features(0)
     request(central, 40)
     central.controller.le_procedures.ll.classify_channels(0x0F)
-    assert central.controls.deadline_us == 0
+    assert central.connection.llcp.next_deadline_us == 0
 
 
 @pytest.mark.parametrize(
@@ -454,13 +453,13 @@ def test_host_admission_rejects_invalid_ce_lengths(central):
     Invalid Command Parameters.
 
     Steps:
-        1. Call prepare_parameters with valid_ce_lengths=False.
+        1. Call prepare_parameters with min_ce_length=1, max_ce_length=0.
 
     Expected:
         - The prepared status is Invalid Command Parameters.
     """
     prepared = central.host(
-        'prepare_parameters', 24, 24, 0, 100, valid_ce_lengths=False
+        'prepare_parameters', 24, 24, 0, 100, min_ce_length=1, max_ce_length=0
     )
     assert prepared.status == ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
 
@@ -497,7 +496,7 @@ def test_host_admission_unknown_handle(central):
         - The prepared status is Unknown Connection Identifier.
     """
     prepared = central.controller.le_procedures.ll.prepare_parameters(
-        0x0EFF, 24, 24, 0, 100, valid_ce_lengths=True
+        0x0EFF, 24, 24, 0, 100
     )
     assert prepared.status == ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
 

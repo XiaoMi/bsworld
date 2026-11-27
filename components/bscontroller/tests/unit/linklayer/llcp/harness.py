@@ -40,8 +40,8 @@ from bscontroller.linklayer import (
 )
 from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.connection_parameters import PARAM_REQUEST, UPDATE
-from bscontroller.linklayer.data_path import PacketCipher
 from bscontroller.linklayer.encryption import ENC_REQUEST, ENC_RESPONSE
+from bscontroller.linklayer.packet_security import PacketCipher
 from tests.unit.helpers import PARAMETERS, host_notifications, take_host_notification
 
 Opcode = ControlOpcode

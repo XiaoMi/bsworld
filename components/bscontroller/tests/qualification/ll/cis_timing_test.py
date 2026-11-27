@@ -485,6 +485,9 @@ async def cis_window_widening(tester):
         elapsed = peer.anchor_us - last_start
         shift = direction * (elapsed * 500 // 1_000_000 + 16)
         await check_sdu(10, shift)
+        # Both streams use the Lower Tester's Central clock (Core 4.2.4,
+        # Table 4.1). Resume ACL and CIS at the same observed clock offset.
+        link.anchor += shift
         peer.anchor_us += shift
         peer.skip_elapsed()
 

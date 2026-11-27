@@ -141,18 +141,27 @@ class CisWindow:
     def anchor_us(self, connection: Connection) -> int:
         return event_anchor(connection, self.conn_event_count) + self.offset_min_us
 
+    def offset_at(
+        self, connection: Connection, counter: int, iso_interval_us: int
+    ) -> int:
+        """Equivalent window phase in the negotiated ACL and ISO units (6.B.5.1.15)."""
+        events = event_distance(connection, counter) - event_distance(
+            connection, self.conn_event_count
+        )
+        elapsed = events * connection.parameters.interval_us
+        return (self.offset_min_us - elapsed) % iso_interval_us
 
-def event_anchor(connection: Connection, counter: int) -> int:
+
+def event_distance(connection: Connection, counter: int) -> int:
     difference = (counter - connection.event_counter + 0x8000) & LL_EVENT_COUNTER_MASK
     difference -= 0x8000
     if not -0x4000 < difference < 0x4000:
         raise ValueError('invalid CIS connection event count')
-    # Roll the ACL's fractional drift forward or backward from its current anchor.
-    return (
-        connection.anchor_us
-        + (connection.event_interval_fixed_us * difference + connection.clock_remainder)
-        // 1_000_000
-    )
+    return difference
+
+
+def event_anchor(connection: Connection, counter: int) -> int:
+    return connection.project_anchor(event_distance(connection, counter))[0]
 
 
 @dataclass(frozen=True)

@@ -11,17 +11,24 @@ from bscontroller import hci
 from bscontroller.config import ControllerConfig
 from bscontroller.hci.transport import H4Parser, H4Server
 from bscontroller.linklayer import LL_SCA_50_PPM, ControlOpcode
-from bscontroller.linklayer.advertising import ExtendedPdu, SyncInfo
+from bscontroller.linklayer.advertising_pdu import ExtendedPdu, SyncInfo
 from bscontroller.linklayer.api import CisEstablished
 from bscontroller.linklayer.bis import BisCipher, group_session_key
 from bscontroller.linklayer.channel_selection import isochronous_channels
 from bscontroller.linklayer.cig import Setup
-from bscontroller.linklayer.cis import CisDirection, CisEvent, CisEventParameters
+from bscontroller.linklayer.cis import (
+    CIS_NPI,
+    CisDirection,
+    CisEvent,
+    CisEventParameters,
+)
 from bscontroller.linklayer.cis_parameters import CisRequest, CisWindow
 from bscontroller.linklayer.discovery import PeriodicSync
+from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.isoal import IsoalParameters, IsoSdu, IsoStatus
 from bscontroller.linklayer.pawr import acad_structures
-from bscontroller.radio.base import Phy
+from bscontroller.radio.base import Phy, Received
+from tests.support import LE_EVENT_MASK_V1
 from tests.unit.hci.harness import PEERS, ErrorCode, HostSink
 from tests.unit.helpers import bis_info, extended_parameters
 from tests.unit.linklayer.air.harness import Air
@@ -534,7 +541,7 @@ def test_early_iso_fragments_are_credited_after_cis_established(
     host.send(hci.HCI_IsoDataPacket(handle, 1, b'b', 3))
     host.ut_rx_q_is_empty()
     path = host.link.roles.iso.get_stream(handle, True)
-    assert not path.queue and path.assembly is None
+    assert not path.queue and handle not in host.controller.le_procedures.iso_assemblies
     host.notify('on_cis_established', CisEstablished(handle), ErrorCode.SUCCESS)
     if established:
         host.ut_rx(established, connection_handle=handle, status=0)
@@ -544,6 +551,99 @@ def test_early_iso_fragments_are_credited_after_cis_established(
             num_completed_packets=[2],
         )
     host.ut_rx_q_is_empty()
+
+
+def test_iso_path_removal_discards_partial_sdu(configured):
+    """A reinstalled HCI data path cannot complete an SDU from the old path."""
+    host = configured(ControllerConfig(iso_packet_count=1))
+    handle = establish(host)
+    setup_path(host, handle)
+    host.send(
+        hci.HCI_IsoDataPacket(
+            handle,
+            5,
+            b'a',
+            0,
+            packet_sequence_number=7,
+            iso_sdu_length=2,
+            packet_status_flag=0,
+        )
+    )
+    host.ut_rx(
+        hci.HCI_Number_Of_Completed_Packets_Event,
+        connection_handles=[handle],
+        num_completed_packets=[1],
+    )
+
+    host.cmd(hci.HCI_LE_Remove_ISO_Data_Path_Command(handle, 1))
+    setup_path(host, handle)
+    host.send(hci.HCI_IsoDataPacket(handle, 1, b'b', 3))
+    host.ut_rx(
+        hci.HCI_Number_Of_Completed_Packets_Event,
+        connection_handles=[handle],
+        num_completed_packets=[1],
+    )
+    assert not host.link.roles.iso.get_stream(handle, True).queue
+
+
+def test_rejected_cis_leaves_iso_buffer_available_to_other_streams(configured):
+    """Flushing a packet during CIS creation releases the shared ISO buffer."""
+    host = configured(ControllerConfig(iso_packet_count=1))
+    host.cmd(
+        hci.HCI_LE_Set_Host_Feature_Command(
+            hci.LeFeature.CONNECTED_ISOCHRONOUS_STREAM, 1
+        )
+    )
+    pending, live = configure_cig(host, (32, 32), (32, 32))
+    for handle in (pending, live):
+        setup_path(host, handle)
+    acl = host.connection()
+    acl.peer_features = LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_PERIPHERAL
+    manager = host.link.roles.cig
+    host.cmd_status(hci.HCI_LE_Create_CIS_Command([pending], [acl.handle]))
+    manager.start_pending(acl)
+    manager.sent(acl, acl.event.queue.popleft().payload)
+
+    def send_sdu(handle):
+        host.send(
+            hci.HCI_IsoDataPacket(
+                handle,
+                5,
+                b'x',
+                2,
+                packet_sequence_number=1,
+                iso_sdu_length=1,
+                packet_status_flag=0,
+            )
+        )
+
+    send_sdu(pending)
+    host.ut_rx_q_is_empty()
+    reason = ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
+    host.in_loop(
+        acl.control,
+        bytes([ControlOpcode.LL_REJECT_EXT_IND, ControlOpcode.LL_CIS_REQ, reason]),
+    )
+    host.ut_rx(
+        hci.HCI_LE_CIS_Established_Event, connection_handle=pending, status=reason
+    )
+    host.ut_rx_q_is_empty()
+
+    stream = manager.streams[live]
+    stream.connection, stream.stage = acl, Setup.ACTIVE
+    stream.event = CisEvent(
+        acl,
+        live,
+        host.link.new_access_address(),
+        acl.parameters.crc_init,
+        10_000,
+        stream.parameters,
+        iso=manager.iso,
+    )
+    host.in_loop(manager._report_established, stream.event)
+    host.ut_rx(hci.HCI_LE_CIS_Established_Event, connection_handle=live, status=0)
+    send_sdu(live)
+    assert len(manager.iso.get_stream(live, True).queue) == 1
 
 
 def test_removed_cig_does_not_charge_its_credits_to_a_reused_handle(configured):
@@ -610,7 +710,7 @@ def test_disconnected_cis_does_not_take_another_streams_credits(
             iso=manager.iso,
         )
         stream.event.established = True
-        host.in_loop(manager._report_established, stream)
+        host.in_loop(manager._report_established, stream.event)
         host.ut_rx(hci.HCI_LE_CIS_Established_Event, connection_handle=handle, status=0)
         setup_path(host, handle)
 
@@ -818,6 +918,20 @@ def receiver(host, info, code=bytes(16), *, timeout=10):
             0, 3, int(info.encrypted), code, 0, timeout, [1]
         )
     )
+
+
+def test_pending_big_sync_cancel_replies_before_notification(host):
+    """A synchronous cancellation follows the same HCI response ordering as ACL."""
+    receiver(host, bis_info(offset_us=9990))
+    command = hci.HCI_LE_BIG_Terminate_Sync_Command(0)
+    host.send(command)
+    host.ut_rx(hci.HCI_Command_Complete_Event, command_opcode=command.op_code)
+    host.ut_rx(
+        hci.HCI_LE_BIG_Sync_Established_Event,
+        status=ErrorCode.OPERATION_CANCELLED_BY_HOST_ERROR,
+        big_handle=0,
+    )
+    host.ut_rx_q_is_empty()
 
 
 def receive_packet(
@@ -1364,6 +1478,73 @@ def test_disabled_periodic_train_can_grow_within_host_interval_range(
     assert host.link.advertisers[0].periodic_interval == without_adi
     host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(3, 0))
     assert host.link.advertisers[0].periodic_interval == with_adi
+
+
+@pytest.mark.parametrize('wait', ['tx', 'rx'])
+def test_reset_and_handle_reuse_during_cis_subevent(host, wait):
+    """An in-flight PHY operation belongs to its CIS, even after handle reuse."""
+    feature = hci.HCI_LE_Set_Host_Feature_Command(
+        hci.LeFeature.CONNECTED_ISOCHRONOUS_STREAM, 1
+    )
+    host.cmd(feature)
+    (handle,) = configure_cig(host, (32, 32))
+    acl = host.connection()
+    acl.peer_features = LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_PERIPHERAL
+    host.cmd_status(hci.HCI_LE_Create_CIS_Command([handle], [acl.handle]))
+    manager = host.link.roles.cig
+    manager.start_pending(acl)
+    request = acl.event.queue.popleft().payload
+    manager.sent(acl, request)
+    acl.control(
+        bytes([ControlOpcode.LL_CIS_RSP]) + CisRequest.decode(request).window.encode()
+    )
+    indication = acl.event.queue.popleft().payload
+    manager.sent(acl, indication)
+    manager.acknowledged(acl, indication)
+    old_stream = manager.streams[handle]
+    event = old_stream.event
+    receive_calls = []
+
+    def reset_and_configure():
+        for command in (
+            hci.HCI_Reset_Command(),
+            hci.HCI_Set_Event_Mask_Command(bytes([0xFF]) * 8),
+            hci.HCI_LE_Set_Event_Mask_Command(LE_EVENT_MASK_V1.to_bytes(8, 'little')),
+            feature,
+            hci.HCI_LE_Set_CIG_Parameters_Command(
+                1, 10000, 10000, 0, 0, 0, 40, 40, [1], [32], [32], [1], [1], [0], [0]
+            ),
+        ):
+            host.controller.on_packet(bytes(command))
+
+    transmit = host.radio.transmit
+
+    async def return_tx(*args, **kwargs):
+        end = await transmit(*args, **kwargs)
+        if wait == 'tx':
+            reset_and_configure()
+        return end
+
+    async def return_rx(channel, until_us, *, start_us, **kwargs):
+        receive_calls.append(channel)
+        reset_and_configure()
+        end_us = start_us + Phy.LE_1M.airtime_us(2)
+        host.radio.now_us = end_us - 1
+        return Received(bytes([CIS_NPI, 0]), -40, start_us, end_us, True)
+
+    host.radio.transmit = return_tx
+    host.radio.receive = return_rx
+    host.loop.run_until_complete(manager.run(event))
+    host._drain()
+
+    assert len(receive_calls) == int(wait == 'rx')
+    assert manager.streams[handle] is not old_stream
+    assert manager.streams[handle].stage == Setup.CONFIGURED
+    assert host.controller.le_procedures.cis_established[handle] is False
+    assert not any(
+        isinstance(packet, hci.HCI_LE_CIS_Established_Event) for packet in host.events
+    )
+    assert event.counter == 0
 
 
 def test_reset_and_handle_reuse_during_control_subevent(host):

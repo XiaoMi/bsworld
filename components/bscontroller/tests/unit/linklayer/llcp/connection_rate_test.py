@@ -286,14 +286,14 @@ def test_rate_hci_command_is_disallowed_while_peer_connection_update_is_pending(
     )
 
 
-def test_rate_request_response_timer_starts_on_first_transmission(peripheral):
+def test_rate_request_response_timer_starts_at_enqueue(peripheral):
     enable_rate(peripheral)
     request_rate(peripheral, 10)
     rate = peripheral.controls.rate
-    assert rate.deadline_us == 0
-
-    request = peripheral.lt_rx(Opcode.LL_CONNECTION_RATE_REQ)
     deadline = peripheral.radio.now_us + LL_RESPONSE_TIMEOUT_US
+    assert rate.deadline_us == deadline
+    peripheral.elapse(2000)
+    request = peripheral.lt_rx(Opcode.LL_CONNECTION_RATE_REQ)
     assert rate.deadline_us == deadline
     peripheral.lt_rx(Opcode.LL_CONNECTION_RATE_REQ, request)
     assert rate.deadline_us == deadline

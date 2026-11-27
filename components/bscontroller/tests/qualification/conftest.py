@@ -14,7 +14,7 @@ import pytest_asyncio
 from bscontroller import hci
 from bscontroller.hci.backend import RadioBackend
 from bscontroller.hci.controller import Controller
-from bscontroller.radio.babblesim import BabbleSimRadio
+from bscontroller.radio.babblesim import BSIM_IO_TIMEOUT_SECONDS, BabbleSimRadio
 from bscontroller.runtime.phy import find_phy
 from bscontroller.runtime.worker import RadioControllerWorker
 from tests.qualification.cases import protocol_labels
@@ -145,7 +145,7 @@ async def air_dut(tmp_path, request, controller_log):
                 peer = peer_config.kwargs['factory'](peer_radio, dev_id - 1, trace)
                 tester.peers.append(peer)
                 peer_tasks.append(asyncio.create_task(peer.run()))
-            await asyncio.wait_for(radio.connection.wait(0), 5)
+            await asyncio.wait_for(radio.connection.wait(0), BSIM_IO_TIMEOUT_SECONDS)
             await tester.command(hci.HCI_Reset_Command())
             await tester.masks()
             yield tester

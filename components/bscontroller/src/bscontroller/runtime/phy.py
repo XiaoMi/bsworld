@@ -25,6 +25,33 @@ def find_phy(directory: Path | str | None = None) -> Path:
     return binary
 
 
+def phy_command(
+    binary: Path,
+    sim_id: str,
+    device_count: int,
+    *,
+    attenuation_db: float | None = None,
+    extra_attenuation_db: float = 0,
+    matrix_file: Path | None = None,
+    dump: bool = False,
+) -> list[str | Path]:
+    """Build the shared BLE PHY command for an independently owned process."""
+    if device_count < 1:
+        raise ValueError('device_count must be positive')
+    args = [binary, f'-s={sim_id}', f'-D={device_count}', '-defmodem=BLE_simple']
+    if attenuation_db is not None or extra_attenuation_db or matrix_file is not None:
+        args.extend(('-channel=multiatt', '-argschannel'))
+        if attenuation_db is not None:
+            args.append(f'-at={attenuation_db}')
+        if extra_attenuation_db:
+            args.append(f'-atextra={extra_attenuation_db}')
+        if matrix_file is not None:
+            args.append(f'-file={matrix_file.resolve()}')
+        args.append('-argsmain')
+    args.extend(('-dump', '-dump_imm') if dump else ('-nodump',))
+    return args
+
+
 class PhyProcess:
     """Own one fresh simulation and its process; existing simulations are never
     removed.
@@ -57,17 +84,13 @@ class PhyProcess:
         try:
             self._output = (self.log_dir / 'phy.log').open('wb')
             self.process = subprocess.Popen(
-                [
+                phy_command(
                     self.binary,
-                    f'-s={self.sim_id}',
-                    f'-D={self.device_count}',
-                    '-defmodem=BLE_simple',
-                    '-channel=multiatt',
-                    '-argschannel',
-                    '-at=45',
-                    '-argsmain',
-                    *(['-dump', '-dump_imm'] if self.dump else ['-nodump']),
-                ],
+                    self.sim_id,
+                    self.device_count,
+                    attenuation_db=45,
+                    dump=self.dump,
+                ),
                 cwd=self.binary.parent,
                 stdout=self._output,
                 stderr=subprocess.STDOUT,

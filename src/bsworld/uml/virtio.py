@@ -12,7 +12,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from bscontroller.hci.transport import H4Parser
+from bscontroller.hci import H4Parser
 
 from .vhost import VhostUserBackend
 

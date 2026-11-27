@@ -8,12 +8,12 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND
+from bscontroller.radio import PHY_TIME_UNITS_PER_SECOND
 
 if TYPE_CHECKING:
     import asyncio
 
-    from bscontroller.runtime.event_loop import RadioClock
+    from bscontroller.runtime import RadioClock
 
     from .timetravel import TimeTravelCalendar
 

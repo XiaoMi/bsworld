@@ -398,17 +398,17 @@ def test_connection_queries_are_frozen_detached_values(connection):
     assert service.connection_snapshot(connection.handle).rssi == -42
 
 
-@pytest.mark.parametrize('operation', ['scan', 'scan_reset', 'advertising_address'])
+@pytest.mark.parametrize('operation', ['scan', 'public_address', 'advertising_address'])
 def test_ll_configuration_copies_mutable_input_addresses(controller, operation):
     """LL configuration copies caller addresses so later mutation is isolated.
 
-    Purpose: Verify scan, scan-reset and advertising-address configuration each
+    Purpose: Verify scan, public address and advertising-address configuration each
     copy the supplied mutable ``Address`` into LL state, so mutating the
     caller's object afterwards does not change the configured value.
 
     Steps:
         1. Supply an address to the parametrized operation (scan,
-           scan_reset, or advertising address).
+           public address, or advertising address).
         2. Mutate the supplied address's bytes and type.
         3. Read back the configured address (enabling scanning to publish the
            scan one) and compare.
@@ -422,14 +422,15 @@ def test_ll_configuration_copies_mutable_input_addresses(controller, operation):
     expected = bytes(supplied), supplied.address_type
     if operation == 'scan':
         service.configure_scanning(supplied, 30_000, 20_000, False, 0)
-    elif operation == 'scan_reset':
-        service.reset_configuration(supplied)
+    elif operation == 'public_address':
+        service.set_public_address(supplied)
+        service.reset()
     else:
         service.advertising.configure(0, AdvertisingConfig(supplied))
         assert service.advertising.set_random_address(0, supplied) == 0
     supplied.address_bytes = bytes(6)
     supplied.address_type = hci.AddressType.PUBLIC_DEVICE
-    if operation.startswith('scan'):
+    if operation in ('scan', 'public_address'):
         actual = service.scan_parameters.address
         service.enable_scanning(True)
         assert controller.backend.link.scan.address == actual
@@ -508,6 +509,28 @@ def test_ll_callback_passes_a_snapshot_without_sharing_connection_state(
     assert observed[0].peer_features is None
 
 
+def test_released_advertiser_cannot_notify_the_host_after_handle_reuse(connection):
+    """Delayed scan, PAwR and termination notifications belong to their original set."""
+    sink = create_autospec(NotificationSink, instance=True, spec_set=True)
+    manager = connection.link.roles.advertising
+    adapter = NotificationAdapter(sink)
+    adapter.bind_advertising(manager.handle_of)
+    old, current = Advertising(connection.peer), Advertising(connection.peer)
+    manager.publish(7, old)
+    manager.remove(7)
+    manager.publish(7, current)
+
+    for item in (old, current):
+        adapter.on_scan_request(item, connection.peer)
+        adapter.on_subevent_data_request(item, 0, 1)
+        adapter.on_response_report(item, 0, 0, [])
+        adapter.on_advertising_ended(item, 0)
+        if item is old:
+            assert not sink.mock_calls
+
+    assert [call.args[0].handle for call in sink.mock_calls] == [7, 7, 7, 7]
+
+
 def test_notification_contract_reaches_the_hci_receiver(connection):
     """Every LL callback reaches the corresponding HCI receiver through the adapter.
 
@@ -522,7 +545,7 @@ def test_notification_contract_reaches_the_hci_receiver(connection):
     """
     sink = create_autospec(NotificationSink, instance=True, spec_set=True)
     adapter = NotificationAdapter(sink)
-    adapter.bind(connection.link)
+    adapter.bind_advertising(connection.link.roles.advertising.handle_of)
     address = connection.peer
     item = Advertising(address)
     connection.link.advertisers[0] = item
@@ -607,10 +630,12 @@ def test_acl_notifications_publish_only_the_handle(connection, monkeypatch):
     monkeypatch.setattr(
         adapter.sink, 'on_acl_received', lambda *args: received.append(args)
     )
-    monkeypatch.setattr(adapter.sink, 'on_acl_completed', completed.append)
+    monkeypatch.setattr(
+        adapter.sink, 'on_acl_completed', lambda *args: completed.append(args)
+    )
 
     adapter.on_acl_received(connection, True, b'payload')
     adapter.on_acl_completed(connection)
 
     assert received == [(connection.handle, True, b'payload')]
-    assert completed == [connection.handle]
+    assert completed == [(connection.handle, 1)]

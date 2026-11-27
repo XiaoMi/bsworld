@@ -16,6 +16,7 @@ connection event loop and radio directly rather than the step vocabulary.
 
 from dataclasses import replace
 from struct import pack
+from types import SimpleNamespace
 
 import pytest
 
@@ -499,6 +500,32 @@ def test_peripheral_listens_from_widening_and_adopts_anchor(peripheral):
     assert peripheral.radio.sent[-1][0] == received + 80 + 150
     assert connection.event_counter == 1 and not connection.update_window
     assert widening >= 0
+
+
+@pytest.mark.parametrize('update_window', (False, True))
+def test_peripheral_clock_correction_moves_only_its_cis(
+    peripheral, monkeypatch, update_window
+):
+    """An observed clock offset moves the CIS; a new ACL transmit window does not."""
+    connection = peripheral.connection
+    connection.update_window = update_window
+    same_acl = SimpleNamespace(
+        connection=connection, anchor_us=20_000, established=False
+    )
+    other_acl = SimpleNamespace(connection=object(), anchor_us=20_000)
+    monkeypatch.setattr(
+        peripheral.link.roles.cig, 'events', lambda: iter((same_acl, other_acl))
+    )
+    scheduled = connection.anchor_us
+    observed = scheduled + 3
+    peripheral.radio.incoming.append(
+        Received(bytes((1, 0)), -45, observed, observed + 80, True)
+    )
+    run(peripheral, scheduled)
+    assert connection.last_anchor_rx_us == observed
+    assert connection.anchor_us == observed + INTERVAL_US
+    assert same_acl.anchor_us == (20_000 if update_window else 20_003)
+    assert other_acl.anchor_us == 20_000
 
 
 def test_peripheral_two_crc_errors_close_the_event(peripheral):

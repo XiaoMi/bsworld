@@ -10,7 +10,6 @@ sees the resulting transmission constraints and committed PHY configuration.
 
 from __future__ import annotations
 
-import struct
 from typing import TYPE_CHECKING
 
 from bscontroller.capabilities import CONTROLLER_SUPPORTED_PHY_MASK
@@ -21,8 +20,10 @@ from bscontroller.linklayer import (
     PDU_CONTROL_PHY_UPDATE_SIZE,
     ControlOpcode,
 )
-from bscontroller.linklayer.instant import InstantUpdate
+from bscontroller.linklayer.instant import PHY_UPDATE, InstantUpdate
 from bscontroller.linklayer.procedure import (
+    DIFFERENT_TRANSACTION_COLLISION,
+    PROCEDURE_COLLISION,
     ProcedureContext,
     ProcedureOrigin,
     ProcedurePhase,
@@ -34,9 +35,6 @@ if TYPE_CHECKING:
     from bscontroller.linklayer.control import ControlProcedures
 
 Opcode = ControlOpcode
-PROCEDURE_COLLISION = (
-    ErrorCode.LMP_ERROR_TRANSACTION_COLLISION_OR_LL_PROCEDURE_COLLISION_ERROR
-)
 
 
 class PhyProcedure:
@@ -70,14 +68,14 @@ class PhyProcedure:
     def finish(self, status: int, *, notify: bool = True) -> None:
         context = self.context
         if context is not None:
-            self.owner.response_timer.stop(context)
+            self.owner.stop_instant_timer(context)
             context.finish()
         if notify:
             self.owner.listener.on_phy_updated(self.connection, status)
 
     def indication_sent(self, payload: bytes) -> None:
         if self.context is not None:
-            self.owner.response_timer.stop(self.context)
+            self.owner.stop_instant_timer(self.context)
         if not (payload[1] or payload[2]):
             self.finish(ErrorCode.SUCCESS, notify=self.phy_request_local)
 
@@ -89,8 +87,8 @@ class PhyProcedure:
         """Send LL_PHY_REQ (Core Vol 6, Part B, 5.1.10)."""
         self.tx_phys, self.rx_phys = tx_phys, rx_phys
         context = self.begin(ProcedureOrigin.LOCAL)
-        self.owner.response_timer.start(context, self.connection.radio.now_us)
-        self.owner.enqueue(bytes([Opcode.LL_PHY_REQ, tx_phys, rx_phys]))
+        self.owner.start_instant_timer(context)
+        self.connection.enqueue_control(bytes([Opcode.LL_PHY_REQ, tx_phys, rx_phys]))
 
     def reject_phy(self, reason: int) -> None:
         """Finish a rejected PHY request and retain any other procedure's response
@@ -133,25 +131,17 @@ class PhyProcedure:
             central, peripheral = connection.tx_phy, connection.rx_phy
         central_change = central if central != connection.tx_phy else 0
         peripheral_change = peripheral if peripheral != connection.rx_phy else 0
-        instant = self.owner.instant() if central_change or peripheral_change else 0
-        self.owner.enqueue(
-            struct.pack(
-                '<BBBH',
-                Opcode.LL_PHY_UPDATE_IND,
-                (1 << (central_change - 1)) if central_change else 0,
-                (1 << (peripheral_change - 1)) if peripheral_change else 0,
-                instant,
-            )
+        update = InstantUpdate(
+            self.owner.instant() if central_change or peripheral_change else 0,
+            central_tx_phy=central_change,
+            peripheral_tx_phy=peripheral_change,
+            local=True,
         )
-        if instant:
+        self.connection.enqueue_control(update.encode())
+        if central_change or peripheral_change:
             if self.context is not None:
                 self.context.phase = ProcedurePhase.WAIT_INSTANT
-            self.owner.pending = InstantUpdate(
-                instant,
-                central_tx_phy=central_change,
-                peripheral_tx_phy=peripheral_change,
-                local=True,
-            )
+            self.owner.pending = update
             self.owner.transmitted = self.owner.acknowledged = False
 
     def control(self, payload: bytes) -> bool:
@@ -185,18 +175,18 @@ class PhyProcedure:
                         (
                             PROCEDURE_COLLISION
                             if self.phy_request
-                            else ErrorCode.DIFFERENT_TRANSACTION_COLLISION_ERROR
+                            else DIFFERENT_TRANSACTION_COLLISION
                         ),
                     )
                 else:
                     context = self.begin(ProcedureOrigin.REMOTE)
-                    self.owner.response_timer.start(context, connection.radio.now_us)
+                    self.owner.start_instant_timer(context)
                     if connection.role == Role.CENTRAL:
                         # The Central chooses the resulting PHY pair and Instant;
                         # a Peripheral only returns its directional preferences.
                         self._phy_update(peer_tx, peer_rx)
                     else:
-                        self.owner.enqueue(
+                        self.connection.enqueue_control(
                             bytes([Opcode.LL_PHY_RSP, self.tx_phys, self.rx_phys])
                         )
             elif self.phy_request and connection.role == Role.CENTRAL:
@@ -207,8 +197,8 @@ class PhyProcedure:
             opcode == Opcode.LL_PHY_UPDATE_IND
             and len(payload) == PDU_CONTROL_PHY_UPDATE_SIZE
         ):
-            central, peripheral, instant = struct.unpack(
-                '<BBH', payload[PDU_CONTROL_OPCODE_SIZE:]
+            central, peripheral, instant = PHY_UPDATE.unpack_from(
+                payload, PDU_CONTROL_OPCODE_SIZE
             )
             if (
                 connection.role != Role.PERIPHERAL
@@ -221,7 +211,7 @@ class PhyProcedure:
                     # Acceptance at the current event can apply synchronously and
                     # finish this context. Publish the wait phase before that call.
                     self.context.phase = ProcedurePhase.WAIT_INSTANT
-                    self.owner.response_timer.stop(self.context)
+                    self.owner.stop_instant_timer(self.context)
                 self.owner.accept_instant(
                     InstantUpdate(
                         instant,

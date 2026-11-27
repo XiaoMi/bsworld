@@ -10,6 +10,7 @@ values so an upper layer cannot mutate an active LL context.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -19,7 +20,7 @@ from bscontroller.linklayer import (
     AdvertisingMode,
     AdvertisingPduType,
 )
-from bscontroller.linklayer.advertising import AdvertisingCoding
+from bscontroller.linklayer.advertising_pdu import AdvertisingCoding
 from bscontroller.linklayer.bis import BigInfo
 from bscontroller.linklayer.data_length import DataLengths
 from bscontroller.linklayer.parameters import Parameters
@@ -30,6 +31,24 @@ from bscontroller.radio.base import Phy
 if TYPE_CHECKING:
     from bscontroller.linklayer.connection import Connection
     from bscontroller.linklayer.discovery import Advertising, PeriodicSync
+
+
+@dataclass
+class PreparedProcedure:
+    """An admitted operation started after HCI has published Command Status.
+
+    Some procedures complete immediately from cached peer information. Keeping
+    admission separate from execution preserves Command Status before completion;
+    start consumes the action so a caller cannot accidentally initiate it twice.
+    """
+
+    status: int
+    action: Callable[[], None] | None = None
+
+    def start(self) -> None:
+        action, self.action = self.action, None
+        if action is not None:
+            action()
 
 
 @dataclass(frozen=True, eq=False, init=False)
@@ -76,6 +95,7 @@ class AdvertisingConfig:
     decision: bool = False
     decision_address: bool = False
     decision_adi: bool = False
+    use_public_address: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, 'address', AddressSnapshot(self.address))

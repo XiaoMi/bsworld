@@ -12,7 +12,7 @@ import pytest
 from cryptography.exceptions import InvalidTag
 
 from bscontroller.linklayer import LlId
-from bscontroller.linklayer.data_path import PacketCipher, PacketSecurity
+from bscontroller.linklayer.packet_security import PacketCipher, PacketSecurity
 from tests.unit.linklayer.llcp.harness import ControlOpcode
 
 # Vol 6, Part C, 1: sample session key and IV.

@@ -14,6 +14,7 @@ import pytest
 
 from bscontroller.linklayer import PDU_ADV_ACCESS_ADDRESS, PDU_HEADER_SIZE
 from bscontroller.radio.babblesim import (
+    BSIM_CODED_CI_S8,
     BSIM_FREQUENCY_BASE_MHZ,
     BSIM_FREQUENCY_SCALE,
     BSIM_RSSI_SCALE,
@@ -33,10 +34,18 @@ from bscontroller.radio.babblesim import (
     RX_STATUS_IN_PROGRESS,
     RX_STATUS_NO_SYNC,
     RX_STATUS_OK,
+    RX_V2,
+    RX_V2_ADDRESS,
+    RX_V2_CONTINUE,
+    RX_V2_DONE,
+    RX_V2_END,
+    RX_V2_REQUEST,
     TIME,
     TX,
     TX_END,
     TX_REQUEST,
+    TX_V2,
+    TX_V2_REQUEST,
     WAIT,
     WAIT_END,
     BabbleSimRadio,
@@ -565,6 +574,48 @@ async def test_tx_packet_layout_crc_and_completion_time(endpoints):
 
 
 @pytest.mark.asyncio
+async def test_coded_tx_filter_is_local_and_precedes_crc_and_capture(endpoints):
+    """Only the selected radio changes its PDU, once before Coded PHY segmentation.
+
+    Steps:
+        Send the same PDU from two radios. Install a filter on the first one.
+        Read the Coding Indicator and the payload of each PHY transmission.
+
+    Expected:
+        Both Coding Indicators select S=8. Each FEC2 payload and its capture
+        carry the correct bytes and CRC for that radio.
+    """
+    endpoint, peer = endpoints
+    filtered, normal = BabbleSimRadio(), BabbleSimRadio()
+    original, changed = bytes((1, 1, 0)), bytes((1, 1, 1))
+    calls = []
+
+    def change(pdu):
+        calls.append(pdu)
+        return changed
+
+    filtered.tx_filter = change
+    for radio, expected in ((filtered, changed), (normal, original)):
+        radio.connection = endpoint
+        capture = []
+        radio.on_air_packet = capture.append
+        packet = expected + crc24(expected)
+
+        async def acknowledge():
+            for payload in (BSIM_CODED_CI_S8, packet):
+                assert await peer.receive(HEADER.size) == HEADER.pack(TX_V2_REQUEST)
+                fields = TX_V2.unpack(await peer.receive(TX_V2.size))
+                assert await peer.receive(fields[-1]) == payload
+                await peer.send(HEADER.pack(TX_END) + TIME.pack(fields[1]))
+
+        await asyncio.gather(
+            radio.transmit(37, original, phy=Phy.LE_CODED), acknowledge()
+        )
+        assert [record.packet for record in capture] == [packet]
+    assert calls == [original]
+
+
+@pytest.mark.asyncio
 async def test_tx_switching_rejects_early_start_before_submitting_phy(endpoints):
     """A transmit starting before the radio is ready is rejected locally.
 
@@ -845,6 +896,62 @@ async def test_rx_failure_has_no_packet_payload(endpoints, status):
 
     result, _ = await asyncio.gather(radio.receive(37, 1000), respond())
     assert result is None and radio.now_us == 1000
+
+
+@pytest.mark.asyncio
+async def test_coded_rx_keeps_reservation_deadline_through_fec2(endpoints):
+    """An acquired Coded packet must yield the radio at the next reservation.
+
+    Steps:
+        Accept the Coding Indicator and start receiving the payload. Return a
+        CRC error at the reservation deadline with candidate bytes available.
+
+    Expected:
+        Both PHY requests and both continuations retain the same deadline.
+        The truncated packet is discarded even with bad-CRC reception enabled.
+    """
+    device, peer = endpoints
+    radio = BabbleSimRadio()
+    radio.connection = device
+    deadline = 600
+    pdu = bytes((2, 0))
+
+    async def respond():
+        for data, start, sync, end, status in (
+            (BSIM_CODED_CI_S8, 1, 376, 400, RX_STATUS_OK),
+            (pdu + crc24(pdu), 401, 401, deadline, RX_STATUS_CRC_ERROR),
+        ):
+            assert await peer.receive(HEADER.size) == HEADER.pack(RX_V2_REQUEST)
+            request = RX_V2.unpack(await peer.receive(RX_V2.size))
+            assert request[:3] == (start, deadline, NEVER)
+            if start == 1:
+                assert await peer.receive(TIME.size) == TIME.pack(
+                    PDU_ADV_ACCESS_ADDRESS
+                )
+            await peer.send(
+                HEADER.pack(RX_V2_ADDRESS)
+                + RX_V2_DONE.pack(sync, sync, 0, 0, 0, RX_STATUS_IN_PROGRESS, len(data))
+                + data
+            )
+            assert await peer.receive(HEADER.size + 2 * TIME.size) == (
+                HEADER.pack(RX_V2_CONTINUE) + TIME.pack(deadline) + TIME.pack(NEVER)
+            )
+            await peer.send(
+                HEADER.pack(RX_V2_END)
+                + RX_V2_DONE.pack(sync, end, 0, 0, 0, status, len(data))
+            )
+
+    packet, _ = await asyncio.gather(
+        radio.receive(
+            37, 390, phy=Phy.LE_CODED, deadline_us=deadline, accept_bad_crc=True
+        ),
+        respond(),
+    )
+    assert packet is None and radio.now_us == deadline
+    assert (
+        radio.earliest_start_us(0, Phy.LE_1M, transmit=True)
+        == deadline + RADIO_SWITCH_TIME_US
+    )
 
 
 @pytest.mark.asyncio

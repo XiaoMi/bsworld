@@ -22,8 +22,10 @@ from tests.unit.linklayer.llcp.harness import (
     PROCEDURE_COLLISION,
     ErrorCode,
     Opcode,
+    feature,
     hci,
     instant_of,
+    length,
     phy_req,
     phy_rsp,
     phy_update_ind,
@@ -90,7 +92,7 @@ def test_central_loc(central, host, peer, ind, result):
           Data Length Change when a coded PHY raises the effective times.
         - The procedure is idle afterwards.
     """
-    central.host_start('prepare_phy', *host, PHY_CODED_S8_FACTOR, 0)
+    central.host_start('prepare_phy', *host, PHY_CODED_S8_FACTOR)
     central.event_prepare()
     central.lt_rx(Opcode.LL_PHY_REQ, phy_req(*host))
     central.lt_tx(phy_rsp(*peer))
@@ -118,6 +120,21 @@ def test_central_loc(central, host, peer, ind, result):
     assert_idle(central)
 
 
+def test_phy_update_at_event_counter_wrap(central):
+    """Apply the changed PHYs when the six-event lead wraps to Instant zero."""
+    central.connection.event_counter = 0xFFFA
+    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
+    central.lt_rx(Opcode.LL_PHY_REQ)
+    central.lt_tx(phy_rsp(PHY_2M, PHY_2M))
+    update = central.lt_rx(Opcode.LL_PHY_UPDATE_IND, phy_update_ind(PHY_2M, PHY_2M, 0))
+    central.lt_rx(Opcode.LL_PHY_UPDATE_IND, update)
+    central.tx_ack()
+    central.wait_instant(0)
+    assert_phys(central, Phy.LE_1M, Phy.LE_1M)
+    central.event_prepare()
+    assert_phys(central, Phy.LE_2M, Phy.LE_2M)
+
+
 def test_central_loc_no_actual_change(central):
     """A Central PHY Update with no change completes on transmission.
 
@@ -135,7 +152,7 @@ def test_central_loc_no_actual_change(central):
         - Host gets PHY Update Complete (SUCCESS, 1M/1M) before the ACK.
         - The procedure is idle and nothing else reaches the Host.
     """
-    central.host_start('prepare_phy', PHY_1M, PHY_1M, 0, 0)
+    central.host_start('prepare_phy', PHY_1M, PHY_1M, 0)
     central.event_prepare()
     central.lt_rx(Opcode.LL_PHY_REQ)
     central.lt_tx(phy_rsp(ALL_PHYS, ALL_PHYS))
@@ -188,7 +205,7 @@ def test_loc_peer_refuses(iut, role, response, status):
         - The procedure is idle; no stale timer later closes the link.
     """
     dut = iut(role)
-    dut.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    dut.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     dut.event_prepare()
     dut.lt_rx(Opcode.LL_PHY_REQ)
     dut.lt_tx(response)
@@ -217,7 +234,7 @@ def test_loc_legacy_reject_does_not_end_phy_request(central):
         - The PHY request is still pending.
     """
     # LL_REJECT_IND carries no opcode; it is not a valid PHY_REQ answer (2.4.2.14).
-    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     central.event_prepare()
     central.lt_rx(Opcode.LL_PHY_REQ)
     central.lt_tx(reject_ind(PROCEDURE_COLLISION))
@@ -246,7 +263,7 @@ def test_loc_invalid_response_preferences(iut, role):
         - The PHY request is still pending; no Host notification is produced.
     """
     dut = iut(role)
-    dut.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    dut.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     dut.event_prepare()
     dut.lt_rx(Opcode.LL_PHY_REQ)
     # Zero preferences are invalid in either direction (2.4.2.22).
@@ -282,7 +299,7 @@ def test_loc_response_timeout(iut, role):
         - Host gets Disconnection Complete (response timeout); nothing else.
     """
     dut = iut(role)
-    dut.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    dut.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     dut.event_prepare()
     dut.lt_rx(Opcode.LL_PHY_REQ)
     dut.tx_ack()
@@ -296,26 +313,41 @@ def test_loc_response_timeout(iut, role):
     dut.ut_rx_q_is_empty()
 
 
-def test_loc_queued_pdu_restarts_response_timer(central):
-    """Queuing the request PDU restarts the response timer from that moment.
-
-    Purpose: Verify that the response timer is anchored at the time the request
-    PDU is actually enqueued, not at Host admission, so time elapsed before
-    queuing shifts the deadline accordingly.
+@pytest.mark.parametrize(
+    'peer_request,response',
+    [
+        (feature(Opcode.LL_PERIPHERAL_FEATURE_REQ, 1), Opcode.LL_FEATURE_RSP),
+        (length(Opcode.LL_LENGTH_REQ, 27, 328, 27, 328), Opcode.LL_LENGTH_RSP),
+    ],
+    ids=['feature', 'length'],
+)
+def test_peer_request_restarts_phy_response_timer(central, peer_request, response):
+    """A queued response renews the running PHY procedure timer (Core 6.B.5.2).
 
     Steps:
-        1. Upper Tester starts a PHY Update and record the initial deadline.
-        2. Advance 1000 us.
-        3. Enqueue a PHY_REQ control PDU.
+        1. Start a PHY Update. While waiting for PHY_RSP, receive a peer request.
+        2. Transmit the response twice without a link-layer acknowledgment.
+        3. Keep the ACL alive through the old deadline and let the new one expire.
 
     Expected:
-        - The deadline becomes the initial deadline plus 1000 us.
+        - The 40 seconds run from queuing the response, including both transmissions.
+        - Only the new deadline disconnects the ACL with LL Response Timeout.
     """
-    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
-    started = central.controls.deadline_us
-    central.elapse(1000)
-    central.controls.enqueue(phy_req(PHY_2M, PHY_2M))
-    assert central.controls.deadline_us == started + 1000
+    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
+    central.lt_rx(Opcode.LL_PHY_REQ)
+    old_deadline = central.controls.deadline_us
+    central.elapse(1_000_000)
+    central.lt_tx(peer_request)
+    deadline = central.radio.now_us + LL_RESPONSE_TIMEOUT_US
+    packet = central.lt_rx(response)
+    central.lt_rx(response, packet)
+    assert not central.elapse(old_deadline - central.radio.now_us)
+    assert not central.elapse(deadline - 1 - central.radio.now_us)
+    assert central.elapse(1)
+    central.ut_rx(
+        hci.HCI_Disconnection_Complete_Event,
+        reason=ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR,
+    )
 
 
 @pytest.mark.parametrize('role', [CENTRAL, PERIPHERAL])
@@ -336,7 +368,7 @@ def test_loc_disconnect_during_procedure(iut, role):
         - The procedure deadline is cleared.
     """
     dut = iut(role)
-    dut.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    dut.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     dut.event_prepare()
     dut.lt_rx(Opcode.LL_PHY_REQ)
     dut.lt_tx(pdu_terminate())
@@ -358,12 +390,12 @@ def pdu_terminate():
 def test_host_admission(central):
     """Host PHY Update admission validates arguments and rejects a second start.
 
-    Purpose: Verify that the Host entry point rejects invalid coding options,
+    Purpose: Verify that the Host entry point rejects unsupported PHY masks,
     admits a valid request, and disallows a concurrent second request while one
     is outstanding.
 
     Steps:
-        1. Start a PHY Update with an unsupported coding option.
+        1. Start a PHY Update with an unsupported PHY mask.
         2. Start a valid PHY Update.
         3. Start another PHY Update while the first is still outstanding.
 
@@ -372,18 +404,15 @@ def test_host_admission(central):
         - The third start returns Command Disallowed.
         - Only one request PDU is queued.
     """
-    central.host_start(
-        'prepare_phy',
-        PHY_2M,
-        PHY_2M,
-        0,
-        ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR,
+    central.hci(hci.HCI_LE_Set_PHY_Command(central.handle, 0, 0x80, PHY_2M, 0))
+    central.ut_rx(
+        hci.HCI_Command_Status_Event,
         status=ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR,
     )
-    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     # A second Host request while one is outstanding is disallowed.
     central.host_start(
-        'prepare_phy', PHY_2M, PHY_2M, 0, 0, status=ErrorCode.COMMAND_DISALLOWED_ERROR
+        'prepare_phy', PHY_2M, PHY_2M, 0, status=ErrorCode.COMMAND_DISALLOWED_ERROR
     )
     assert len(central.connection.event.queue) == 1
 
@@ -593,7 +622,7 @@ def test_periph_loc(peripheral):
         - PHYs become 2M/2M at the Instant.
         - Host gets PHY Update Complete (SUCCESS, 2M/2M); the procedure is idle.
     """
-    peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     peripheral.event_prepare()
     peripheral.lt_rx(Opcode.LL_PHY_REQ, phy_req(PHY_2M, PHY_2M))
     peripheral.tx_ack()
@@ -629,7 +658,7 @@ def test_periph_loc_asymmetric_wire_fields_are_role_relative(peripheral):
         - PHYs become TX 2M, RX coded at the Instant.
         - Host gets PHY Update Complete with TX 2M, RX coded.
     """
-    peripheral.host_start('prepare_phy', ALL_PHYS, ALL_PHYS, 0, 0)
+    peripheral.host_start('prepare_phy', ALL_PHYS, ALL_PHYS, 0)
     peripheral.event_prepare()
     peripheral.lt_rx(Opcode.LL_PHY_REQ)
     instant = peripheral.event_counter + 6
@@ -658,7 +687,7 @@ def test_periph_loc_no_actual_change(peripheral):
         - Host gets PHY Update Complete (SUCCESS, 1M/1M); nothing else.
         - The procedure is idle.
     """
-    peripheral.host_start('prepare_phy', PHY_1M, PHY_1M, 0, 0)
+    peripheral.host_start('prepare_phy', PHY_1M, PHY_1M, 0)
     peripheral.event_prepare()
     peripheral.lt_rx(Opcode.LL_PHY_REQ)
     peripheral.lt_tx(phy_update_ind(0, 0, 0))
@@ -716,7 +745,7 @@ def test_periph_update_at_current_instant_applies_immediately(peripheral, counte
         - The PHY procedure context is in the COMPLETE phase.
     """
     peripheral.connection.event_counter = counter
-    peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     peripheral.event_prepare()
     peripheral.lt_rx(Opcode.LL_PHY_REQ)
     peripheral.lt_tx(phy_update_ind(PHY_2M, PHY_2M, counter))
@@ -933,7 +962,7 @@ def test_periph_unexpected_pdu_awaiting_instant(peripheral, origin):
         - Host gets PHY Update Complete (SUCCESS).
     """
     if origin == 'loc':
-        peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+        peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
         peripheral.event_prepare()
         peripheral.lt_rx(Opcode.LL_PHY_REQ)
     else:

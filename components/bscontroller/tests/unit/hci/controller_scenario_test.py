@@ -10,6 +10,8 @@ information commands x return values; {power-on, Reset} x default state;
 families after Reset.
 """
 
+import logging
+
 import pytest
 
 from bscontroller import hci
@@ -325,6 +327,25 @@ def test_backend_belongs_to_one_controller():
     asyncio.run(create('first'))
     with pytest.raises(ValueError, match='one Controller'):
         asyncio.run(create('second'))
+
+
+def test_radio_trace_formats_packet_only_when_debug_logging_is_enabled(host, caplog):
+    """The radio hot path formats the H4 Controller's trace only for a debug reader."""
+    calls = []
+
+    class Pdu(bytes):
+        def hex(self):
+            calls.append(self)
+            return super().hex()
+
+    pdu = Pdu(b'\x02\x00')
+    with caplog.at_level(logging.INFO, logger='bscontroller.hci.controller'):
+        host.loop.run_until_complete(host.link.transmit(37, pdu))
+    assert not calls
+    with caplog.at_level(logging.DEBUG, logger='bscontroller.hci.controller'):
+        host.loop.run_until_complete(host.link.transmit(37, pdu))
+    assert calls == [pdu]
+    assert 'RADIO TX ch=37 pdu=0200' in caplog.text
 
 
 def test_controller_without_host_sink_drops_events():
@@ -1076,10 +1097,47 @@ def test_public_and_random_address_setters_accept_strings(fresh):
         1. Assign string public and random addresses on a fresh Controller.
 
     Expected:
-        - Both addresses stringify to the assigned values.
+        - Both addresses stringify to the assigned values. Active scanning uses
+          the same random address exposed by the LL.
     """
     controller = fresh.controller
     controller.public_address = 'F0:F1:F2:F3:F4:09'
     controller.random_address = 'C0:F1:F2:F3:F4:09'
     assert str(controller.public_address).startswith('F0:F1:F2:F3:F4:09')
     assert str(controller.random_address).startswith('C0:F1:F2:F3:F4:09')
+    fresh.cmd(hci.HCI_LE_Set_Scan_Parameters_Command(1, 16, 16, 1, 0))
+    fresh.cmd(hci.HCI_LE_Set_Scan_Enable_Command(1, 0))
+    assert (
+        fresh.link.scan.address
+        == fresh.link.random_address
+        == controller.random_address
+    )
+
+
+def test_public_address_setter_updates_ll_and_subsequent_scans(fresh):
+    """HCI and LL share the configured public address across HCI Reset.
+
+    Scan parameters may predate the assignment. An active scan keeps its
+    address until it is restarted, even if the Controller address changes.
+    """
+    first = hci.Address('F0:F1:F2:F3:F4:09', hci.AddressType.PUBLIC_DEVICE)
+    second = hci.Address('F0:F1:F2:F3:F4:0A', hci.AddressType.PUBLIC_DEVICE)
+    fresh.cmd(hci.HCI_LE_Set_Scan_Parameters_Command(1, 16, 16, 0, 0))
+    fresh.controller.public_address = str(first).split('/')[0]
+    assert fresh.cmd(hci.HCI_Read_BD_ADDR_Command()).bd_addr == first
+    assert fresh.link.public_address == first
+    fresh.cmd(hci.HCI_LE_Set_Scan_Enable_Command(1, 0))
+    assert fresh.link.scan.address == first
+
+    fresh.controller.public_address = second
+    assert fresh.cmd(hci.HCI_Read_BD_ADDR_Command()).bd_addr == second
+    assert fresh.link.public_address == second
+    assert fresh.link.scan.address == first
+    fresh.cmd(hci.HCI_LE_Set_Scan_Enable_Command(0, 0))
+    fresh.cmd(hci.HCI_LE_Set_Scan_Enable_Command(1, 0))
+    assert fresh.link.scan.address == second
+
+    fresh.cmd(hci.HCI_Reset_Command())
+    assert fresh.cmd(hci.HCI_Read_BD_ADDR_Command()).bd_addr == second
+    fresh.cmd(hci.HCI_LE_Set_Scan_Enable_Command(1, 0))
+    assert fresh.link.scan.address == fresh.link.public_address == second

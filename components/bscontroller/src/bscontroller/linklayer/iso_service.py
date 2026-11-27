@@ -13,6 +13,7 @@ from bscontroller.linklayer.iso import IsoTestCounters
 if TYPE_CHECKING:
     from bscontroller.linklayer.api import BigConfig, BigSyncConfig, CigConfig
     from bscontroller.linklayer.iso import IsoTxSync
+    from bscontroller.linklayer.isoal import IsoSdu
     from bscontroller.linklayer.link import RadioLink
 
 
@@ -93,21 +94,8 @@ class IsoService:
             handle
         )
 
-    def input(
-        self,
-        handle: int,
-        fragment: bytes,
-        pb_flag: int,
-        sequence_number: int | None,
-        length: int | None,
-        timestamp_us: int | None,
-    ) -> None:
-        self._paths.input(
-            handle,
-            fragment,
-            pb_flag,
-            sequence_number,
-            length,
-            timestamp_us,
-            self._link.now_us,
-        )
+    def tx_limits(self, handle: int) -> tuple[int, int] | None:
+        return self._paths.tx_limits(handle)
+
+    def enqueue_sdu(self, handle: int, sdu: IsoSdu) -> None:
+        self._paths.enqueue_sdu(handle, sdu)

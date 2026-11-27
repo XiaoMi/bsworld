@@ -51,7 +51,7 @@ from bscontroller.linklayer import (
     ControlOpcode,
     LlId,
 )
-from bscontroller.linklayer.advertising import ExtendedPdu, SyncInfo
+from bscontroller.linklayer.advertising_pdu import ExtendedPdu, SyncInfo
 from bscontroller.linklayer.bitstream import generate_access_address
 from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.discovery import (
@@ -61,8 +61,9 @@ from bscontroller.linklayer.discovery import (
     ScanBackoff,
     Scanning,
 )
+from bscontroller.linklayer.extended import respond_to_aux_request
+from bscontroller.linklayer.extended_scanning import initiate_extended
 from bscontroller.linklayer.link import RadioLink
-from bscontroller.linklayer.periodic import periodic_receive, periodic_transmit
 from bscontroller.linklayer.primary import advertising_request, receive_scan_event
 from bscontroller.linklayer.resource import RadioResourceManager
 from bscontroller.linklayer.results import (
@@ -161,11 +162,11 @@ def test_commit_stops_advertiser_and_assigns_handles(link):
     """
     item = Advertising(SELF, enabled=True, events=7)
     link.roles.advertising.publish(4, item)
-    first = link.roles.connections.accepted(accepted(advertiser=item))
+    first = link.roles.accepted(accepted(advertiser=item))
     assert first.handle == 1 and not item.enabled
     assert (first.advertising_handle, first.advertising_events) == (4, 7)
     assert link.listener.events == [('on_connected', (first,))]
-    second = link.roles.connections.accepted(accepted('C0:11:22:33:44:66'))
+    second = link.roles.accepted(accepted('C0:11:22:33:44:66'))
     assert second.handle == 2
     del link.connections[first.handle]
     assert link.roles.connections.allocate_handle() == 1
@@ -196,7 +197,7 @@ def test_released_advertiser_cannot_commit(link, action):
         item.enabled = False
     else:
         link.roles.advertising.remove(4)
-    assert link.roles.connections.accepted(accepted(advertiser=item)) is None
+    assert link.roles.accepted(accepted(advertiser=item)) is None
     assert not link.connections and not link.listener.events
 
 
@@ -220,9 +221,9 @@ def test_delayed_result_cannot_complete_newer_initiation(link):
     current = replace(original, start_us=100)
     link.roles.scanning.start_initiating(current)
     delayed = accepted(role=Role.CENTRAL, initiator=original)
-    assert link.roles.connections.accepted(delayed) is None
+    assert link.roles.accepted(delayed) is None
     assert link.roles.scanning.initiating is current
-    assert link.roles.connections.accepted(replace(delayed, initiator=current))
+    assert link.roles.accepted(replace(delayed, initiator=current))
     assert link.roles.scanning.initiating is None
 
 
@@ -280,9 +281,9 @@ def test_old_connection_cannot_release_reused_handle(link):
         - The handle still maps to the new connection.
     """
     manager = link.roles.connections
-    old = manager.accepted(accepted())
+    old = link.roles.accepted(accepted())
     assert manager.release(old)
-    current = manager.accepted(accepted('C0:11:22:33:44:66'))
+    current = link.roles.accepted(accepted('C0:11:22:33:44:66'))
     assert old.handle == current.handle
     assert not manager.release(old)
     assert manager.contexts[current.handle] is current
@@ -319,7 +320,7 @@ def test_reset_discards_in_flight_acl_receive(iut, role, llid, payload, reuse):
         radio transmission. Any new connection keeps its handle.
     """
     connections = iut.link.roles.connections
-    old = connections.accepted(accepted(role=role))
+    old = iut.link.roles.accepted(accepted(role=role))
     iut.lt_tx(
         bytes((LlId.CONTINUATION, 0)), access_address=old.parameters.access_address
     )
@@ -332,7 +333,7 @@ def test_reset_discards_in_flight_acl_receive(iut, role, llid, payload, reuse):
         iut.ut(hci.HCI_Set_Event_Mask_Command(b'\xff' * 8))
         iut.ut(hci.HCI_LE_Set_Event_Mask_Command(b'\xff' * 8))
         if reuse:
-            current = connections.accepted(
+            current = iut.link.roles.accepted(
                 accepted('C0:11:22:33:44:66', end_us=iut.now_us + 20000)
             )
             assert current.handle == old.handle
@@ -366,7 +367,7 @@ def test_duplicate_connect_request_from_existing_peer_is_ignored(link, extended)
 
     Parameters range over the legacy and extended request paths.
     """
-    existing = link.roles.connections.accepted(accepted(str(PEER)))
+    existing = link.roles.accepted(accepted(str(PEER)))
     link.listener.events.clear()
     item = Advertising(
         SELF,
@@ -379,9 +380,9 @@ def test_duplicate_connect_request_from_existing_peer_is_ignored(link, extended)
     packet = Received(connect_ind(PEER, SELF), -40, 100, 500, True)
     result = run(
         link,
-        link.extended.request(item, 0, packet)
+        respond_to_aux_request(link.roles.advertising, item, 0, packet)
         if extended
-        else advertising_request(link, item, 37, packet),
+        else advertising_request(link.roles.advertising, item, 37, packet),
     )
     assert not result and link.connections == {existing.handle: existing}
     assert item.enabled and not link.listener.events and not link.radio.sent
@@ -407,7 +408,7 @@ def test_aux_connect_without_radio_room_is_not_attempted(link):
         mode=AdvertisingMode.CONNECTABLE, address=bytes(PEER), random_address=True
     )
     packet = Received(aux.encode(), -40, 1, 300, True)
-    run(link, link.extended.initiate(link.initiating, 12, packet, PEER))
+    run(link, initiate_extended(link, link.initiating, 12, packet, PEER))
     assert not link.radio.sent
 
 
@@ -632,25 +633,6 @@ def test_backoff_saturates_at_256_and_streaks_reset():
     assert backoff.successes == 0 and backoff.failures == 1
 
 
-def test_pending_sync_without_scanner_uses_default_scan(link):
-    """A pending sync with no scanner provides a default scan context.
-
-    Purpose: Verify that when a periodic-sync acquisition is pending and no
-    scanner is configured, the scanning manager yields a default scan context
-    targeting the sync's advertiser (Vol 6, Part B, 4.4.5).
-
-    Steps:
-        1. Start a pending periodic sync for the peer.
-        2. Ask the scanning manager for its next context.
-
-    Expected:
-        - The context is a Scanning for the peer address.
-    """
-    link.roles.synchronization.start(PeriodicSync(PEER, 2, 100_000, 0))
-    scan = link.roles.scanning.next_context()
-    assert isinstance(scan, Scanning) and scan.address == PEER
-
-
 # ---------------------------------------------------------------------------
 # Synchronization lifetime
 # ---------------------------------------------------------------------------
@@ -845,7 +827,7 @@ def test_periodic_rx_yields_without_refreshing_timeout(link, winner):
         link.advertisers[0] = Advertising(
             PEER, periodic_enabled=True, periodic_next_us=10_100, periodic_interval=40
         )
-    run(link, periodic_receive(link, sync))
+    run(link, link.roles.synchronization.run_periodic(sync))
     assert link.radio.now_us == 9999 and not link.radio.listens
     assert sync.next_us == 10_000 + 3 * 40 * LL_PERIODIC_INTERVAL_UNIT_US
     assert sync.counter == 1
@@ -875,7 +857,7 @@ def test_periodic_rx_of_non_periodic_pdu_is_ignored(link):
     link.radio.script.append(
         Air(ExtendedPdu(mode=AdvertisingMode.CONNECTABLE).encode(), at=100)
     )
-    run(link, periodic_receive(link, sync))
+    run(link, link.roles.synchronization.run_periodic(sync))
     assert not link.listener.events and sync.last_rx_us == 0
 
 
@@ -910,7 +892,7 @@ def test_periodic_tx_yields_and_skips_counter(link):
         periodic_data=bytes(200),
     )
     link.advertisers[0] = item
-    run(link, periodic_transmit(link, item, 0))
+    run(link, link.roles.advertising.run_periodic(item, 0))
     assert not link.radio.sent
     assert item.periodic_next_us == 10_000 + 160 * LL_PERIODIC_INTERVAL_UNIT_US
     assert item.periodic_counter == 0
@@ -1256,7 +1238,9 @@ def test_txadd_identity_is_part_of_connect_peer(link):
 
     run(
         link,
-        advertising_request(link, item, 37, Received(bytes(pdu), -40, 1, 400, True)),
+        advertising_request(
+            link.roles.advertising, item, 37, Received(bytes(pdu), -40, 1, 400, True)
+        ),
     )
     (connection,) = link.connections.values()
     assert connection.peer == public

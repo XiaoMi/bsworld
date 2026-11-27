@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from bscontroller import hci
@@ -36,6 +37,7 @@ from bscontroller.config import ControllerConfig
 from bscontroller.errors import InvalidPacketError
 from bscontroller.hci.records import AdvertisingSet, ConnectionRecord, LegacyAdvertiser
 from bscontroller.hci.transport import TransportSink
+from bscontroller.linklayer.api import PreparedProcedure
 from bscontroller.linklayer.features import (
     FEATURE_SET_SIZE,
     feature_max_page,
@@ -44,7 +46,6 @@ from bscontroller.linklayer.features import (
 
 if TYPE_CHECKING:
     from bscontroller.hci.backend import ControllerBackend
-    from bscontroller.hci.le import LeControllerProcedures
     from bscontroller.hci.snoop import BtsnoopWriter
 
 logger = logging.getLogger(__name__)
@@ -56,10 +57,9 @@ class Controller:
     def __init__(
         self,
         name: str,
-        host_source=None,
+        *,
         host_sink: TransportSink | None = None,
         public_address: bytes | str | hci.Address | None = None,
-        *,
         backend: ControllerBackend,
         snoop: BtsnoopWriter | None = None,
         config: ControllerConfig | None = None,
@@ -68,8 +68,11 @@ class Controller:
         self.config = config or ControllerConfig()
         self.backend = backend
         self._snoop = snoop
-        self.le_procedures: LeControllerProcedures
-        self.le_connections: dict[hci.Address, ConnectionRecord] = {}
+        self._command_events: list[hci.HCI_Packet] | None = None
+        self.supported_commands = set(backend.supported_commands)
+        self.lmp_features = backend.lmp_features
+        self.le_states = backend.le_states
+        self.le_connections: dict[int, ConnectionRecord] = {}
         self.advertising_sets: dict[int, AdvertisingSet] = {}
         self.le_legacy_advertiser = LegacyAdvertiser(self)
         # Vol 4, Part E, 7.3.1, 7.3.69 and 7.8.1: power-on masks equal the Reset
@@ -77,23 +80,21 @@ class Controller:
         self.event_mask = hci.HCI_EVENT_MASK_DEFAULT
         self.event_mask_page_2 = 0
         self.le_event_mask = hci.HCI_LE_EVENT_MASK_DEFAULT
-        self._random_address = hci.Address('00:00:00:00:00:00')
-        if isinstance(public_address, hci.Address):
-            self._public_address = public_address
-        else:
-            self._public_address = hci.Address(
-                public_address or '00:00:00:00:00:00', hci.AddressType.PUBLIC_DEVICE
+        if not isinstance(public_address, hci.Address):
+            public_address = hci.Address(
+                public_address or bytes(6), hci.AddressType.PUBLIC_DEVICE
             )
         self.hci_sink = host_sink
         self.terminated: asyncio.Future[None] = (
             asyncio.get_running_loop().create_future()
         )
-        backend.bind(self)
-        if host_source is not None:
-            host_source.set_packet_sink(self)
+        self.le_procedures = backend.bind(self, public_address)
 
-    def trace(self, message: str) -> None:
-        logger.debug('[%s] %s', self.name, message)
+    def trace(self, message: str | Callable[[], str]) -> None:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                '[%s] %s', self.name, message() if callable(message) else message
+            )
 
     @property
     def host(self) -> TransportSink | None:
@@ -115,24 +116,25 @@ class Controller:
 
     @property
     def public_address(self) -> hci.Address:
-        return self._public_address
+        return self.le_procedures.ll.public_address
 
     @public_address.setter
     def public_address(self, address: hci.Address | str) -> None:
         if isinstance(address, str):
-            address = hci.Address(address)
-        self._public_address = address
+            address = hci.Address(address, hci.AddressType.PUBLIC_DEVICE)
+        self.le_procedures.ll.set_public_address(address)
 
     @property
     def random_address(self) -> hci.Address:
-        return self._random_address
+        return self.le_procedures.ll.random_address or hci.Address.ANY_RANDOM
 
     @random_address.setter
     def random_address(self, address: hci.Address | str) -> None:
         if isinstance(address, str):
             address = hci.Address(address)
-        self._random_address = address
-        logger.debug(f'new random address: {address}')
+        status = self.le_procedures.ll.set_random_address(address)
+        if status:
+            raise ValueError(f'cannot set random address: {status.name}')
 
     @property
     def le_features(self) -> int:
@@ -178,10 +180,14 @@ class Controller:
         self.on_hci_packet(command)
 
     def on_hci_packet(self, packet: hci.HCI_Packet) -> None:
-        logger.debug(
-            f'{color("<<<", "blue")} [{self.name}] '
-            f'{color("HOST -> CONTROLLER", "blue")}: {packet}'
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                '%s [%s] %s: %s',
+                color('<<<', 'blue'),
+                self.name,
+                color('HOST -> CONTROLLER', 'blue'),
+                packet,
+            )
 
         # If the packet is a command, invoke the handler for this packet
         match packet:
@@ -197,63 +203,57 @@ class Controller:
                 logger.warning(f'!!! unknown packet type {packet.hci_packet_type}')
 
     def on_hci_command_packet(self, command: hci.HCI_Command) -> None:
-        # Vol 4, Part E, 4.5: unknown and disallowed commands complete with an error
-        # through Command Status (asynchronous) or Command Complete (synchronous).
         handler_name = f'on_{command.name.lower()}'
-        if command.op_code not in self.supported_commands:
-            if isinstance(command, hci.HCI_AsyncCommand):
-                self._send_hci_command_status(
-                    hci.HCI_ErrorCode.UNKNOWN_HCI_COMMAND_ERROR, command.op_code
-                )
-                return
-            handler = self.on_hci_command
-        else:
-            handler = getattr(
-                self.le_procedures,
-                handler_name,
-                getattr(self, handler_name, self.on_hci_command),
+        handler = getattr(
+            self.le_procedures, handler_name, getattr(self, handler_name, None)
+        )
+        asynchronous = isinstance(command, hci.HCI_AsyncCommand)
+        events = []
+        if command.op_code not in self.supported_commands or handler is None:
+            result = (
+                hci.HCI_ErrorCode.UNKNOWN_HCI_COMMAND_ERROR
+                if asynchronous
+                else self.on_hci_command(command)
             )
-        if handler != self.on_hci_command and not self.le_procedures.command_allowed(
-            command.op_code
-        ):
-            if isinstance(command, hci.HCI_AsyncCommand):
-                self._send_hci_command_status(
-                    hci.HCI_ErrorCode.COMMAND_DISALLOWED_ERROR, command.op_code
-                )
-                return
-            result = command.error_return_parameters(
-                hci.HCI_ErrorCode.COMMAND_DISALLOWED_ERROR, command.parameters
+        elif not self.le_procedures.command_allowed(command.op_code):
+            status = hci.HCI_ErrorCode.COMMAND_DISALLOWED_ERROR
+            result = (
+                status
+                if asynchronous
+                else command.error_return_parameters(status, command.parameters)
             )
         else:
-            result = handler(command)
-        if isinstance(command, hci.HCI_SyncCommand) or handler == self.on_hci_command:
-            if result is None:
-                logger.error("Sync command handlers should return parameters, got None")
-                return
+            # LL callbacks can complete synchronously during admission or cancellation.
+            # Publish the command response before any notifications it generated.
+            self._command_events = events
+            try:
+                result = handler(command)
+            finally:
+                self._command_events = None
+
+        if asynchronous:
+            status = result.status if isinstance(result, PreparedProcedure) else result
+            self._send_hci_command_status(status, command.op_code)
+        else:
             self.send_hci_packet(
-                hci.HCI_Command_Complete_Event(
-                    num_hci_command_packets=1,
-                    command_opcode=command.op_code,
-                    return_parameters=result,
-                )
+                hci.HCI_Command_Complete_Event(1, command.op_code, result)
             )
-        elif result is not None:
-            logger.error("Async command handlers should return None, got %s", result)
+        for event in events:
+            self.send_hci_packet(event)
+        if isinstance(result, PreparedProcedure):
+            result.start()
+
+    def send_event(self, event: hci.HCI_Event) -> None:
+        if self._command_events is None:
+            self.send_hci_packet(event)
+        else:
+            self._command_events.append(event)
 
     def on_hci_event_packet(self, _event: hci.HCI_Packet) -> None:
         logger.warning('!!! unexpected event packet')
 
     def on_hci_acl_data_packet(self, packet: hci.HCI_AclDataPacket) -> None:
-        # Look for the connection to which this data belongs
-        connection = self.find_connection_by_handle(packet.connection_handle)
-        if connection is None:
-            logger.warning(
-                f'!!! no connection for handle 0x{packet.connection_handle:04X}'
-            )
-            return
-
-        # Pass the packet to the connection
-        connection.on_hci_acl_data_packet(packet)
+        self.le_procedures.on_hci_acl_data_packet(packet)
 
     def send_hci_packet(self, packet: hci.HCI_Packet) -> None:
         self.send_hci_packets((packet,))
@@ -373,7 +373,7 @@ class Controller:
         '''
         return hci.HCI_Read_BD_ADDR_ReturnParameters(
             status=hci.HCI_ErrorCode.SUCCESS,
-            bd_addr=self._public_address or hci.Address.ANY,
+            bd_addr=self.public_address,
         )
 
     def on_hci_le_set_event_mask_command(
@@ -435,11 +435,4 @@ class Controller:
         )
 
     def find_connection_by_handle(self, handle: int) -> ConnectionRecord | None:
-        return next(
-            (
-                record
-                for record in self.le_connections.values()
-                if record.handle == handle
-            ),
-            None,
-        )
+        return self.le_connections.get(handle)

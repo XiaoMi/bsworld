@@ -28,7 +28,12 @@ from bscontroller.linklayer.timing import (
     LL_RESPONSE_START_TOLERANCE_US,
     window_widening,
 )
-from bscontroller.radio.base import PHY_CODED_S8_FACTOR, RADIO_SWITCH_TIME_US, Phy
+from bscontroller.radio.base import (
+    PHY_CODED_S8_FACTOR,
+    PHY_TIME_UNITS_PER_SECOND,
+    RADIO_SWITCH_TIME_US,
+    Phy,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -153,6 +158,7 @@ class CisEvent:
         parameters: CisEventParameters,
         *,
         iso: IsoDataPaths,
+        clock_remainder: int = 0,
     ):
         self.connection = connection
         self.handle = handle
@@ -166,9 +172,10 @@ class CisEvent:
         self.tx_power_phy = PowerPhy.from_radio(self.tx.phy, self.tx.coding)
         self.rx_power_phy = PowerPhy.from_radio(self.rx.phy, self.rx.coding)
         self.anchor_us = anchor_us
-        self.last_rx_us = connection.last_rx_us
+        self._clock_remainder = clock_remainder
+        self.last_rx_us = connection.last_anchor_rx_us
         self.last_valid_rx_us: int | None = None
-        self._supervision_start_us: int | None = None if self.central else anchor_us
+        self._supervision_start = None if self.central else self._anchor_fixed
         self.counter = self.subevent = 0
         self.established = self.mic_failed = False
         self._event_closed = self._active_clock = False
@@ -181,29 +188,46 @@ class CisEvent:
         self._iv_xor = access_address.to_bytes(4, 'little') + bytes(4)
 
     @property
+    def _anchor_fixed(self) -> int:
+        return self.anchor_us * PHY_TIME_UNITS_PER_SECOND + self._clock_remainder
+
+    @property
+    def interval_fixed_us(self) -> int:
+        return self.parameters.interval_us * self.connection.clock_rate
+
+    def anchor_at_or_after(self, time_us: int) -> tuple[int, int]:
+        """Project the recurring CIS phase onto an integer PHY deadline."""
+        interval = self.interval_fixed_us
+        events = -(
+            (self._anchor_fixed - time_us * PHY_TIME_UNITS_PER_SECOND) // interval
+        )
+        return divmod(self._anchor_fixed + events * interval, PHY_TIME_UNITS_PER_SECOND)
+
+    @property
     def awaiting_indication_ack(self) -> bool:
-        return self.central and self._supervision_start_us is None
+        return self.central and self._supervision_start is None
 
     def start_supervision(self) -> None:
         """Start at the next CIS event after the Central receives the ACL ACK."""
-        interval = self.parameters.interval_us
-        elapsed = self.connection.radio.now_us - self.anchor_us
-        intervals = max(0, elapsed // interval + 1)
-        self._supervision_start_us = self.anchor_us + intervals * interval
+        start, phase = self.anchor_at_or_after(
+            max(self.anchor_us, self.connection.radio.now_us + 1)
+        )
+        self._supervision_start = start * PHY_TIME_UNITS_PER_SECOND + phase
 
     @property
     def deadline_us(self) -> int | None:
         if not self.established:
-            if self._supervision_start_us is None:
+            if self._supervision_start is None:
                 return None
-            return self._supervision_start_us + (
-                CIS_ESTABLISHMENT_EVENTS * self.parameters.interval_us
-            )
+            return (
+                self._supervision_start
+                + CIS_ESTABLISHMENT_EVENTS * self.interval_fixed_us
+            ) // PHY_TIME_UNITS_PER_SECOND
         last_rx = self.last_valid_rx_us
         if last_rx is None:
-            last_rx = self._supervision_start_us
-        if last_rx is None:
-            return None
+            if self._supervision_start is None:
+                return None
+            last_rx = self._supervision_start // PHY_TIME_UNITS_PER_SECOND
         return (
             last_rx
             + self.connection.parameters.timeout * LL_SUPERVISION_TIMEOUT_UNIT_US
@@ -242,7 +266,7 @@ class CisEvent:
         last_sync = (
             self.last_rx_us
             if active
-            else max(self.last_rx_us, self.connection.last_rx_us)
+            else max(self.last_rx_us, self.connection.last_anchor_rx_us)
         )
         return window_widening(
             nominal - last_sync,
@@ -253,9 +277,10 @@ class CisEvent:
 
     @property
     def next_us(self) -> int:
-        return self._reservation(self.subevent, self.anchor_us).start_us
+        return self.reservation().start_us
 
-    def _reservation(self, subevent: int, anchor_us: int) -> RadioReservation:
+    def _reservation(self, subevent: int, anchor_fixed: int) -> RadioReservation:
+        anchor_us, phase = divmod(anchor_fixed, PHY_TIME_UNITS_PER_SECOND)
         nominal = anchor_us + subevent * self.parameters.subinterval_us
         widening = self._widening_us(nominal)
         preparation = widening + RADIO_SWITCH_TIME_US
@@ -267,29 +292,29 @@ class CisEvent:
             + widening
             + LL_RESPONSE_START_TOLERANCE_US
         )
+        interval, fraction = divmod(self.interval_fixed_us, PHY_TIME_UNITS_PER_SECOND)
         return RadioReservation(
             nominal - preparation,
             duration,
-            self.parameters.interval_us,
+            interval,
             RadioPriority.ISOCHRONOUS,
+            interval_fraction=fraction,
+            start_fraction=phase,
         )
 
     def reservation(self) -> RadioReservation:
-        return self._reservation(self.subevent, self.anchor_us)
+        return self._reservation(self.subevent, self._anchor_fixed)
 
     def reservations(self) -> list[RadioReservation]:
-        parameters = self.parameters
+        following = self._anchor_fixed + self.interval_fixed_us
         return [
             self._reservation(
                 index,
-                self.anchor_us
-                + (
-                    parameters.interval_us
-                    if index < self.subevent or self._event_closed
-                    else 0
-                ),
+                following
+                if index < self.subevent or self._event_closed
+                else self._anchor_fixed,
             )
-            for index in range(parameters.nse)
+            for index in range(self.parameters.nse)
         ]
 
     def _open_event(self) -> None:
@@ -353,9 +378,9 @@ class CisEvent:
         stream = self.iso.get_stream(self.handle, False)
         while (self._delivered + 1) * self.rx.bn <= self._rx_next:
             anchor = (
-                self.anchor_us
-                - (self.counter - self._delivered) * self.parameters.interval_us
-            )
+                self._anchor_fixed
+                - (self.counter - self._delivered) * self.interval_fixed_us
+            ) // PHY_TIME_UNITS_PER_SECOND
             start = self._delivered * self.rx.bn
             pdus = tuple(
                 self._inbound.pop(index, None)
@@ -373,7 +398,9 @@ class CisEvent:
         if self.subevent == self.parameters.nse:
             self.subevent = 0
             self.counter += 1
-            self.anchor_us += self.parameters.interval_us
+            self.anchor_us, self._clock_remainder = divmod(
+                self._anchor_fixed + self.interval_fixed_us, PHY_TIME_UNITS_PER_SECOND
+            )
             self._event_closed = self._active_clock = False
 
     def skip_missed(self) -> None:
@@ -409,7 +436,9 @@ class CisEvent:
             return cipher.aes.encrypt(nonce, payload, associated)
         return cipher.aes.decrypt(nonce, payload, associated)
 
-    async def _send(self, channel: int, start_us: int) -> int | None:
+    async def _send(
+        self, channel: int, start_us: int, is_current: Callable[[], bool]
+    ) -> int | None:
         radio = self.connection.radio
         if start_us < radio.earliest_start_us(channel, self.tx.phy, transmit=True):
             return None
@@ -427,7 +456,7 @@ class CisEvent:
         if not self.connection.link.resource.fits_radio(end_us):
             return None
         packet = bytes([header, len(data)]) + data
-        self.connection.link.trace(f'RADIO TX ch={channel} pdu={packet.hex()}')
+        self.connection.link.trace(lambda: f'RADIO TX ch={channel} pdu={packet.hex()}')
         end_us = await radio.transmit(
             channel,
             packet,
@@ -440,7 +469,9 @@ class CisEvent:
                 self.tx_power_phy
             ),
         )
-        if pdu is not None and self.iso.contains(self.handle):
+        if not is_current():
+            return None
+        if pdu is not None:
             if self._tx_sent:
                 self._quality.retransmitted += 1
             self._tx_sent = True
@@ -476,10 +507,12 @@ class CisEvent:
         if not self.central:
             # Reception synchronizes the active clock even if the CRC fails.
             self._active_clock = True
-            self.last_rx_us = packet.start_us
-            self.anchor_us = (
+            observed_anchor = (
                 packet.start_us - self.subevent * self.parameters.subinterval_us
             )
+            self.connection.synchronize_clock(observed_anchor, self.anchor_us)
+            self.last_rx_us = packet.start_us
+            self.anchor_us = observed_anchor
         if not packet.valid_crc:
             self._quality.crc_error += 1
             return
@@ -516,10 +549,13 @@ class CisEvent:
             self._rx_next += 1
 
     async def advance(
-        self, *, on_established: Callable[[], None] | None = None
+        self,
+        *,
+        is_current: Callable[[], bool],
+        on_established: Callable[[], None] | None = None,
     ) -> None:
         """Run one subevent so different CISes may interleave on the same radio."""
-        if self.connection.closed or not self.iso.contains(self.handle):
+        if not is_current():
             return
         if not self.subevent:
             self._open_event()
@@ -530,22 +566,26 @@ class CisEvent:
         ):
             channel = self._channels[self.subevent]
             if self.central:
-                end = await self._send(channel, nominal)
-                if end is not None and self.iso.contains(self.handle):
+                end = await self._send(channel, nominal, is_current)
+                if end is not None:
                     packet = await self._receive(
                         channel, end + self.spacing_us, LL_RESPONSE_START_TOLERANCE_US
                     )
-                    if packet is not None and self.iso.contains(self.handle):
+                    if packet is not None and is_current():
                         self._accept(packet)
             else:
                 packet = await self._receive(
                     channel, nominal, self._widening_us(nominal)
                 )
-                if packet is not None and self.iso.contains(self.handle):
+                if packet is not None and is_current():
                     self._accept(packet)
                     if not self.mic_failed:
-                        await self._send(channel, packet.end_us + self.spacing_us)
-        if self.iso.contains(self.handle):
-            if on_established is not None and self.established and not self.mic_failed:
-                on_established()
+                        await self._send(
+                            channel, packet.end_us + self.spacing_us, is_current
+                        )
+        if not is_current():
+            return
+        if on_established is not None and self.established and not self.mic_failed:
+            on_established()
+        if is_current():
             self._close_subevent()

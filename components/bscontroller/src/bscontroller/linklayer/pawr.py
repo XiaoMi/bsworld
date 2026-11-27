@@ -25,7 +25,7 @@ from bscontroller.linklayer import (
     PDU_ACCESS_ADDRESS_SIZE,
     AdvertisingPduType,
 )
-from bscontroller.linklayer.advertising import ExtendedPdu
+from bscontroller.linklayer.advertising_pdu import ExtendedPdu
 from bscontroller.radio.base import PHY_CODED_S8_FACTOR, Phy
 
 # Bluetooth Assigned Numbers, Common Data Types: Periodic Advertising Response

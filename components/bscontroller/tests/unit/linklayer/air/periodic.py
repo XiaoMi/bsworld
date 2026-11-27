@@ -9,7 +9,7 @@ from bscontroller.linklayer import (
     LL_EVENT_COUNTER_MASK,
     LL_PERIODIC_INTERVAL_UNIT_US,
 )
-from bscontroller.linklayer.advertising import AuxPtr, ExtendedPdu, SyncInfo
+from bscontroller.linklayer.advertising_pdu import AuxPtr, ExtendedPdu, SyncInfo
 from bscontroller.linklayer.channel_selection import channel_selection_2
 from bscontroller.radio.base import Phy
 from tests.unit.linklayer.air.harness import PEER

@@ -26,13 +26,14 @@ from bscontroller.linklayer import (
     LL_PERIODIC_INTERVAL_UNIT_US,
     LL_PERIODIC_SYNC_ESTABLISHMENT_EVENTS,
 )
-from bscontroller.linklayer.advertising import AuxPtr, ExtendedPdu, SyncInfo
+from bscontroller.linklayer.advertising_pdu import AuxPtr, ExtendedPdu, SyncInfo
 from bscontroller.linklayer.channel_selection import channel_selection_2
 from bscontroller.linklayer.pdu import PDU_ADV_ADI_DID_BITS, PDU_ADV_ADI_DID_MASK
 from bscontroller.radio.base import Phy
 from tests.support import AD_CHANNEL_MAP_UPDATE_INDICATION, advertising_data
 from tests.unit.linklayer.air.advertising import (
     configure_extended,
+    create_extended_connection,
     enable_extended,
     split_primary_auxiliary,
 )
@@ -525,8 +526,19 @@ def create_sync(
     )
 
 
+def enable_sync_scan(iut):
+    # A passive scan with an empty accept list suppresses unrelated Host reports.
+    iut.ut(
+        hci.HCI_LE_Set_Extended_Scan_Parameters_Command(
+            0, 1, 1, [0], [WINDOW], [WINDOW]
+        )
+    )
+    iut.ut(hci.HCI_LE_Set_Extended_Scan_Enable_Command(1, 0, 0, 0))
+
+
 def acquire(iut, train, **sync):
     """Deliver SyncInfo and stop before the first train event it announced."""
+    enable_sync_scan(iut)
     create_sync(iut, **sync)
     train.announce()
     iut.run(10_000)
@@ -538,12 +550,14 @@ def establish(iut, train, data=b'first', **sync):
     acquire(iut, train, **sync)
     train.send(data)
     train.run_through()
-    return iut.ut_rx(
+    event = iut.ut_rx(
         ESTABLISHED,
         status=0,
         advertiser_address=train.address,
         advertising_sid=train.sid,
     )
+    iut.ut(hci.HCI_LE_Set_Extended_Scan_Enable_Command(0, 0, 0, 0))
+    return event
 
 
 @pytest.mark.parametrize('occurrence', [1, 2], ids=['primary', 'auxiliary'])
@@ -592,6 +606,64 @@ def test_scan_and_sync_have_independent_receive_lifetimes(iut, restart, occurren
     train.run_through()
     iut.ut_rx(ESTABLISHED, status=0, advertiser_address=PEER)
     assert drain_periodic(iut) == [b'first']
+    iut.ut_rx_q_is_empty()
+
+
+@pytest.mark.parametrize(
+    'disable_after_info', [False, True], ids=['initially-off', 'after-syncinfo']
+)
+def test_pending_sync_waits_for_enabled_scanning(iut, disable_after_info):
+    """A pending request may span a disabled scanner (Vol 4, Part E, 7.8.67).
+
+    Steps:
+        Disable scanning before the announcement or after receiving SyncInfo.
+        Send the train while scanning is off, then resume scanning and announce again.
+
+    Expected:
+        Only the new announcement establishes the sync. Once established the
+        train continues to deliver periodic reports with scanning disabled.
+    """
+    train = Train(iut)
+    create_sync(iut)
+    if disable_after_info:
+        enable_sync_scan(iut)
+        train.announce()
+        iut.run(10_000)
+        train.first_anchor()
+        iut.ut(hci.HCI_LE_Set_Extended_Scan_Enable_Command(0, 0, 0, 0))
+        train.send(b'off')
+        train.run_through()
+    else:
+        train.announce()
+        iut.run(10_000)
+    assert iut.link.sync is not None and iut.link.sync.info is None
+    assert len(iut.radio.delivered) == (2 if disable_after_info else 0)
+    iut.ut_rx_q_is_empty()
+    # These Lower Tester transmissions elapsed without a receive operation.
+    iut.radio.script.clear()
+    enable_sync_scan(iut)
+    train.announce()
+    iut.run(10_000)
+    train.first_anchor()
+    train.send(b'on')
+    train.run_through()
+    iut.ut_rx(ESTABLISHED, status=0)
+    assert drain_periodic(iut) == [b'on']
+    iut.ut(hci.HCI_LE_Set_Extended_Scan_Enable_Command(0, 0, 0, 0))
+    train.send(b'next')
+    train.run_through()
+    assert drain_periodic(iut) == [b'next']
+
+
+def test_initiating_does_not_acquire_a_periodic_train_with_scanning_off(iut):
+    """The initiator's primary RX cannot substitute for scan enable (HCI 7.8.67)."""
+    create_sync(iut)
+    create_extended_connection(iut)
+    train = Train(iut)
+    train.announce()
+    iut.run(10_000)
+    assert iut.radio.delivered
+    assert iut.link.sync.info is None
     iut.ut_rx_q_is_empty()
 
 
@@ -867,6 +939,7 @@ def test_other_advertiser_or_sid_is_not_acquired(iut, use_list):
             )
         )
     train = Train(iut, address=PEER, sid=4)
+    enable_sync_scan(iut)
     create_sync(iut, options=Options.USE_PERIODIC_ADVERTISER_LIST if use_list else 0)
     train.announce()
     iut.run(WINDOW_US)

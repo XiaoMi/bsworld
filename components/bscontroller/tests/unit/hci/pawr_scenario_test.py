@@ -9,7 +9,7 @@ from dataclasses import replace
 import pytest
 
 from bscontroller import hci
-from bscontroller.linklayer.advertising import SyncInfo
+from bscontroller.linklayer.advertising_pdu import SyncInfo
 from bscontroller.linklayer.discovery import PeriodicSync, TransferOrigin
 from bscontroller.linklayer.pawr import PawrSync, PawrTiming, SlotResponse
 from tests.unit.hci.harness import PEERS

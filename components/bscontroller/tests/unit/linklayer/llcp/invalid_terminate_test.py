@@ -514,12 +514,12 @@ def test_disconnect_of_connection_with_hci_record(central):
     disconnection (5.1.6).
 
     Steps:
-        1. Attach an HCI ConnectionRecord for the connection's peer.
+        1. Attach an HCI ConnectionRecord for the connection's handle.
         2. Lower Tester sends TERMINATE_IND; the IUT acknowledges it.
 
     Expected:
         - Host gets Disconnection Complete (REMOTE_USER_TERMINATED).
-        - The record's disconnected callback fires and the peer is removed from
+        - The record's disconnected callback fires and the handle is removed from
           le_connections.
     """
     from bscontroller.hci.records import ConnectionRecord
@@ -528,8 +528,8 @@ def test_disconnect_of_connection_with_hci_record(central):
     record = ConnectionRecord.__new__(ConnectionRecord)
     released = []
     record.disconnected = released.append
-    controller.le_connections[central.connection.peer] = record
+    controller.le_connections[central.handle] = record
     central.lt_tx(terminate_ind(REMOTE))
     central.lt_rx_empty(ack=False)
     central.ut_rx(DISCONNECTED, reason=REMOTE)
-    assert released and central.connection.peer not in controller.le_connections
+    assert released and central.handle not in controller.le_connections

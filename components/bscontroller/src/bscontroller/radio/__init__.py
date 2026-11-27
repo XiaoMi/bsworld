@@ -3,6 +3,6 @@
 
 """Radio interface, PHY timing, scheduling, and simulator adapters."""
 
-from .base import Phy, Radio, Received
+from .base import PHY_TIME_UNITS_PER_SECOND, Phy, Radio, Received
 
-__all__ = ['Phy', 'Radio', 'Received']
+__all__ = ['PHY_TIME_UNITS_PER_SECOND', 'Phy', 'Radio', 'Received']

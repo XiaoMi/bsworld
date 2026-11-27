@@ -11,6 +11,7 @@ listeners for qualification and unit tests.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol
 
 from bscontroller.linklayer.iso import IsoListener
@@ -29,13 +30,13 @@ if TYPE_CHECKING:
 class ConnectionListener(Protocol):
     """ACL lifetime and data flow (Core 6.3, Vol 6, Part B, 4.5)."""
 
-    def trace(self, message: str) -> None: ...
+    def trace(self, message: str | Callable[[], str]) -> None: ...
     def on_connected(self, connection: Connection) -> None: ...
     def on_disconnected(self, connection: Connection, reason: int) -> None: ...
     def on_acl_received(
         self, connection: Connection, continuation: bool, data: bytes
     ) -> None: ...
-    def on_acl_completed(self, connection: Connection) -> None: ...
+    def on_acl_completed(self, connection: Connection, count: int = 1) -> None: ...
 
 
 class ControlListener(Protocol):

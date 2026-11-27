@@ -82,7 +82,7 @@ async def run_big_event(link: RadioLink, manager: BroadcastManager, group: Big) 
             )
             if nominal < link.radio.earliest_start_us(channel, info.phy, transmit=True):
                 continue
-            await link._transmit(
+            await link.transmit(
                 channel,
                 bytes([header, len(data)]) + data,
                 start_us=nominal,
@@ -172,7 +172,7 @@ async def _control(link: RadioLink, manager: BroadcastManager, group: Big) -> No
             else payload
         )
         if nominal >= link.radio.earliest_start_us(channel, info.phy, transmit=True):
-            await link._transmit(
+            await link.transmit(
                 channel,
                 bytes([header, len(data)]) + data,
                 start_us=nominal,

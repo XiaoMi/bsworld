@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
-    LL_RESPONSE_TIMEOUT_US,
     PDU_CONTROL_OPCODE_SIZE,
     PDU_CONTROL_REJECT_EXT_SIZE,
     PDU_CONTROL_UNKNOWN_RSP_SIZE,
@@ -29,7 +28,7 @@ from bscontroller.linklayer import (
     ControlOpcode,
 )
 from bscontroller.linklayer.features import LeFeatureMask
-from bscontroller.linklayer.procedure import ProcedureContext
+from bscontroller.linklayer.procedure import LocalProcedure, ProcedureContext
 from bscontroller.radio.base import PHY_CODED_S8_FACTOR, Phy
 
 if TYPE_CHECKING:
@@ -74,7 +73,7 @@ class DataLengths:
         )
 
 
-class DataLengthProcedure:
+class DataLengthProcedure(LocalProcedure):
     def __init__(self, connection: Connection, frame_space: FrameSpaceProcedure):
         self.connection = connection
         self.frame_space = frame_space
@@ -100,14 +99,6 @@ class DataLengthProcedure:
         """Host-suggested TX limits capped by connMaxTx supported (4.5.10)."""
         config = self.connection.link.config
         return min(octets, config.max_tx_octets), min(time_us, config.max_tx_time)
-
-    @property
-    def pending(self) -> bool:
-        return self.context is not None and self.context.active
-
-    @property
-    def deadline_us(self) -> int:
-        return self.context.deadline_us if self.pending else 0
 
     @property
     def listener(self) -> ControlListener:
@@ -243,7 +234,7 @@ class DataLengthProcedure:
             Opcode.LL_LENGTH_REQ,
             frozenset((Opcode.LL_LENGTH_RSP,)),
             self,
-            deadline_us=self.connection.radio.now_us + LL_RESPONSE_TIMEOUT_US,
+            response_timer=self.connection.llcp.response_timer,
         )
         self.enqueue(Opcode.LL_LENGTH_REQ)
 
@@ -313,11 +304,5 @@ class DataLengthProcedure:
                     initial_time,
                 )
                 self.refresh()
-            return True
-        return False
-
-    def check_timeout(self) -> bool:
-        if self.deadline_us and self.connection.radio.now_us >= self.deadline_us:
-            self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
             return True
         return False

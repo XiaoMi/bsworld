@@ -32,8 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from bscontroller import EllisysCapture
-from bscontroller.radio.babblesim import PhyConnection
-from bscontroller.runtime.session import BabbleSimClock
+from bscontroller.runtime import BabbleSimClock, phy_command
 
 from ..deps import check_babblesim_ready
 from ..devices.bscontroller import BSController
@@ -62,7 +61,6 @@ _RESIDUAL_PATTERNS = (
 )
 
 _PHY_ID = "2G4"
-_DEFAULT_MODEM = "BLE_simple"
 
 
 @dataclass
@@ -173,34 +171,23 @@ class BabbleSimBackend:
 
         # Spawn phy.
         phy_bin = self.env.bsim_bin_dir / f"bs_{_PHY_ID}_phy_v1"
-        phy_argv: list = [
+        ca = self.channel_attenuation
+        matrix_file = ca.matrix_file if ca else None
+        if ca and (ca.static_paths or ca.timed_paths):
+            matrix_file = _write_attenuation_matrix(
+                static_paths=ca.static_paths,
+                timed_paths=ca.timed_paths,
+                out_dir=bsim_log_dir,
+                layout=layout,
+            )
+        phy_argv = phy_command(
             phy_bin,
-            f"-s={self.sim_id}",
-            f"-D={num_devs}",
-            f"-defmodem={_DEFAULT_MODEM}",
-        ]
-        if self.channel_attenuation is not None:
-            ca = self.channel_attenuation
-            matrix_file = ca.matrix_file
-            if ca.static_paths or ca.timed_paths:
-                matrix_file = _write_attenuation_matrix(
-                    static_paths=ca.static_paths,
-                    timed_paths=ca.timed_paths,
-                    out_dir=bsim_log_dir,
-                    layout=layout,
-                )
-            phy_argv += [
-                "-channel=multiatt",
-                "-argschannel",
-                f"-at={ca.default_attenuation_db}",
-            ]
-            if ca.extra_attenuation_db:
-                phy_argv.append(f"-atextra={ca.extra_attenuation_db}")
-            if matrix_file is not None:
-                phy_argv.append(f"-file={Path(matrix_file).resolve()}")
-            # Switch back to main PHY args before disabling CSV dumps.
-            phy_argv.append("-argsmain")
-        phy_argv.append("-nodump")
+            self.sim_id,
+            num_devs,
+            attenuation_db=ca.default_attenuation_db if ca else None,
+            extra_attenuation_db=ca.extra_attenuation_db if ca else 0,
+            matrix_file=Path(matrix_file) if matrix_file else None,
+        )
         self.prepare()
         self._phy_process = pm.spawn(
             "bs_2G4_phy_v1",
@@ -212,9 +199,7 @@ class BabbleSimBackend:
         wait_for_path(sim_dir / "2G4.phy.lock", timeout=ready_timeout)
         log("phy ready")
 
-        self.clock = BabbleSimClock(
-            PhyConnection(sim_dir, layout.clock_dev_id, _PHY_ID)
-        )
+        self.clock = BabbleSimClock.for_device(sim_dir, layout.clock_dev_id)
 
         capture = self._ellisys_capture = EllisysCapture(bsim_log_dir / "ellisys.bttrp")
         for ctl in self.controllers:
@@ -249,7 +234,7 @@ class BabbleSimBackend:
         locks = self.device_lock_paths()
         log(f"waiting for {len(locks)} BabbleSim device lock(s)")
         if self.clock is not None:
-            connecting = asyncio.create_task(self.clock.connection.connect(timeout))
+            connecting = asyncio.create_task(self.clock.connect(timeout))
             phy = self._phy_process
             try:
                 while not connecting.done():
@@ -278,7 +263,7 @@ class BabbleSimBackend:
         self._phy_process = None
         if self.clock is not None:
             try:
-                self.clock.connection.close()
+                self.clock.close()
             except Exception as exc:
                 warn(f"simulation clock close failed: {exc}")
             finally:

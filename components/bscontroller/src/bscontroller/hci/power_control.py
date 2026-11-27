@@ -33,11 +33,8 @@ class LePowerControlCommands(LeControllerContext):
 
     def on_hci_le_read_remote_transmit_power_level_command(self, command):
         """Request the peer's transmit power (Core Vol 4, Part E, 7.8.118)."""
-        self._run_ll_request(
-            command,
-            self.ll.prepare_read_remote_transmit_power(
-                command.connection_handle, command.phy
-            ),
+        return self.ll.prepare_read_remote_transmit_power(
+            command.connection_handle, command.phy
         )
 
     def on_hci_le_set_path_loss_reporting_parameters_command(self, command):

@@ -24,6 +24,7 @@ E).
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from typing import TYPE_CHECKING
 
 from bscontroller import hci
@@ -170,6 +171,8 @@ class AdvertisingSet:
     @property
     def address(self) -> hci.Address | None:
         '''Address used in advertising PDU.'''
+        if (state := self._snapshot) is not None:
+            return state.address
         if not self.parameters:
             return None
         if self.parameters.own_address_type == hci.Address.PUBLIC_DEVICE_ADDRESS:
@@ -181,19 +184,16 @@ class AdvertisingSet:
 class ScanDuplicateFilter:
     """Track advertising reports for duplicate filtering (Vol 6, Part B, 4.4.3.5)."""
 
-    def __init__(self, *, reset_each_period: bool):
+    def __init__(self, *, capacity: int, reset_each_period: bool):
+        self.capacity = capacity
         self.reset_each_period = reset_each_period
-        self._without_adi: set[
-            tuple[hci.Address, int | None, AdvertisingProperties, DataStatus, bytes]
-        ] = set()
-        self._with_adi: dict[
-            tuple[hci.Address, int | None, bool], tuple[int, int | None]
-        ] = {}
+        self._reports: OrderedDict[
+            tuple[hci.Address, int | None, bool], tuple[int | None, int | None]
+        ] = OrderedDict()
 
     def on_scan_period(self) -> None:
         if self.reset_each_period:
-            self._without_adi.clear()
-            self._with_adi.clear()
+            self._reports.clear()
 
     def is_duplicate(
         self,
@@ -202,28 +202,23 @@ class ScanDuplicateFilter:
         report: AdvertisingReport,
         data: bytes,
     ) -> bool:
-        if report.adi is None:
-            # Without an ADI, a change in the payload can be reported to the Host.
-            entry = (address, sid, report.properties, report.data_status, data)
-            if entry in self._without_adi:
-                return True
-            self._without_adi.add(entry)
-            return False
-
         scan_response = bool(report.properties & AdvertisingProperties.SCAN_RESPONSE)
-        key = (address, sid, scan_response)
-        # A complete report supersedes every prefix. For a truncated chain, keep
-        # the longest reported prefix until a new DID arrives.
+        key = (address, sid if report.adi is not None else None, scan_response)
+        # 6.B.4.4.3.5 compares advertiser identity, and DID when present.
+        # An incomplete report may still be followed by a longer prefix.
         prefix_length = None if report.data_status == DataStatus.COMPLETE else len(data)
-        previous = self._with_adi.get(key)
+        previous = self._reports.get(key)
         if previous is not None:
+            self._reports.move_to_end(key)
             last_adi, last_length = previous
             if last_adi == report.adi and (
                 last_length is None
                 or (prefix_length is not None and prefix_length <= last_length)
             ):
                 return True
-        self._with_adi[key] = (report.adi, prefix_length)
+        self._reports[key] = (report.adi, prefix_length)
+        if len(self._reports) > self.capacity:
+            self._reports.popitem(last=False)
         return False
 
 
@@ -240,7 +235,7 @@ class ConnectionRecord:
     def _snapshot(self) -> ConnectionSnapshot:
         # A numeric LL handle can identify another connection after release. Only
         # the currently published record may refresh its own connection's values.
-        if self.controller.le_connections.get(self._identity.peer) is self:
+        if self.controller.le_connections.get(self.handle) is self:
             current = self.controller.le_procedures.ll.connection_snapshot(self.handle)
             if current is not None:
                 self._identity = current

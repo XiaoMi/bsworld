@@ -6,9 +6,12 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
+from traceback import format_exception
 from typing import TYPE_CHECKING
 
 from bscontroller.radio.babblesim import (
+    BSIM_CONNECT_TIMEOUT_SECONDS,
     BSIM_IO_TIMEOUT_SECONDS,
     NEVER,
     PhyConnection,
@@ -16,6 +19,7 @@ from bscontroller.radio.babblesim import (
 )
 
 if TYPE_CHECKING:
+    from bscontroller.runtime.event_loop import RadioEventLoop
     from bscontroller.runtime.worker import RadioControllerWorker
 
 
@@ -28,6 +32,22 @@ class BabbleSimClock:
         self.connection = connection
         self.now_us = 0
         self.step_timeout = step_timeout
+
+    @classmethod
+    def for_device(cls, directory: Path, dev_id: int) -> BabbleSimClock:
+        """Create the clock participant for a caller-owned topology."""
+        return cls(PhyConnection(directory, dev_id))
+
+    async def connect(self, timeout: float = BSIM_CONNECT_TIMEOUT_SECONDS) -> None:
+        await self.connection.connect(timeout)
+
+    def bind(self, loop: RadioEventLoop) -> None:
+        """Obtain the first PHY grant before starting the Host clock."""
+        self.advance_to_us(0)
+        loop.bind_clock(self)
+
+    def close(self) -> None:
+        self.connection.close()
 
     def advance_to_us(self, target_us: int) -> int:
         if not self.now_us <= target_us < NEVER:
@@ -56,7 +76,7 @@ class BabbleSimSession:
         self.sim_id = sim_id
         self.controllers = list(controllers)
         self.clock = (
-            BabbleSimClock(PhyConnection(simulation_directory(sim_id), clock_dev_id))
+            BabbleSimClock.for_device(simulation_directory(sim_id), clock_dev_id)
             if clock_dev_id is not None
             else None
         )
@@ -70,9 +90,8 @@ class BabbleSimSession:
             for dev_id, worker in self.controllers:
                 await worker.start(self.sim_id, dev_id)
             if self.clock is not None:
-                await self.clock.connection.connect()
-                self.clock.advance_to_us(0)
-                loop.bind_clock(self.clock)
+                await self.clock.connect()
+                self.clock.bind(loop)
                 self.loop = loop
             return self
         except BaseException as error:
@@ -82,18 +101,46 @@ class BabbleSimSession:
             raise
 
     async def __aexit__(self, exc_type, exc, traceback):
+        failures: list[BaseException] = []
+        interrupted = None
         if self.loop is not None:
-            self.loop.unbind_clock()
+            try:
+                self.loop.unbind_clock()
+            except BaseException as error:
+                failures.append(error)
             self.loop = None
         try:
             results = await asyncio.gather(
                 *(worker.close() for _, worker in self.controllers),
                 return_exceptions=True,
             )
+            for (dev_id, _), result in zip(self.controllers, results, strict=True):
+                if isinstance(result, BaseException) and result is not exc:
+                    result.add_note(f'while closing Controller {dev_id}')
+                    failures.append(result)
+        except asyncio.CancelledError as error:
+            interrupted = error
+        except BaseException as error:
+            failures.append(error)
         finally:
             # Keep the Host's PHY grant until every radio has stopped submitting work.
             if self.clock is not None:
-                self.clock.connection.close()
-        for result in results:
-            if isinstance(result, Exception):
-                raise result
+                try:
+                    self.clock.close()
+                except BaseException as error:
+                    failures.append(error)
+        if exc is not None and interrupted is not None:
+            failures.append(interrupted)
+        original = exc if exc is not None else interrupted
+        if original is not None:
+            for failure in failures:
+                original.add_note(
+                    'Radio session cleanup failed:\n'
+                    + ''.join(format_exception(failure, chain=False)).rstrip()
+                )
+            if exc is None:
+                raise original
+        elif len(failures) == 1:
+            raise failures[0]
+        elif failures:
+            raise BaseExceptionGroup('errors while closing the radio session', failures)

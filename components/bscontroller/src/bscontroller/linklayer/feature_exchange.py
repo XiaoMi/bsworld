@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING
 
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
-    LL_RESPONSE_TIMEOUT_US,
     PDU_CONTROL_FEATURE_SET_SIZE,
     PDU_CONTROL_FEATURE_SIZE,
     PDU_CONTROL_REJECT_EXT_SIZE,
@@ -32,7 +31,7 @@ from bscontroller.linklayer.features import (
     feature_max_page,
     feature_page,
 )
-from bscontroller.linklayer.procedure import ProcedureContext
+from bscontroller.linklayer.procedure import LocalProcedure, ProcedureContext
 from bscontroller.linklayer.state import Role
 from bscontroller.radio.base import PHY_OCTET_MASK
 
@@ -42,7 +41,7 @@ if TYPE_CHECKING:
 Opcode = ControlOpcode
 
 
-class FeatureExchangeProcedure:
+class FeatureExchangeProcedure(LocalProcedure):
     def __init__(self, owner: ControlProcedures):
         self.owner = owner
         self.connection = owner.connection
@@ -54,17 +53,9 @@ class FeatureExchangeProcedure:
         self._completion: Callable[[int], None] | None = None
 
     @property
-    def pending(self) -> bool:
-        return self.context is not None and self.context.active
-
-    @property
     def all_pending(self) -> bool:
         """Whether the Host has an outstanding Read All Remote Features request."""
         return self.pending and self._pages_requested is not None
-
-    @property
-    def deadline_us(self) -> int:
-        return self.context.deadline_us if self.pending else 0
 
     @property
     def local_features(self) -> int:
@@ -122,8 +113,10 @@ class FeatureExchangeProcedure:
         if self.connection.peer_features is not None:
             self._continue()
             return
-        self.context.deadline_us = self.connection.radio.now_us + LL_RESPONSE_TIMEOUT_US
-        self.owner.enqueue(bytes([opcode]) + feature_page(self.local_features, 0))
+        self.context.response_timer = self.owner.response_timer
+        self.connection.enqueue_control(
+            bytes([opcode]) + feature_page(self.local_features, 0)
+        )
 
     def _continue(self) -> None:
         """Fetch the requested extended pages after page 0 (Vol 6, Part B, 5.1.4.3)."""
@@ -140,10 +133,10 @@ class FeatureExchangeProcedure:
             self,
             host_initiated=True,
         )
-        self.context.deadline_us = self.connection.radio.now_us + LL_RESPONSE_TIMEOUT_US
+        self.context.response_timer = self.owner.response_timer
         self._page_pending = page
         local = self.local_features
-        self.owner.enqueue(
+        self.connection.enqueue_control(
             bytes([Opcode.LL_FEATURE_EXT_REQ, feature_max_page(local), page])
             + feature_page(local, page)
         )
@@ -263,12 +256,5 @@ class FeatureExchangeProcedure:
             and payload[1] == self.context.request
         ):
             self.finish(payload[2])
-            return True
-        return False
-
-    def check_timeout(self) -> bool:
-        if self.deadline_us and self.connection.radio.now_us >= self.deadline_us:
-            self.finish(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
-            self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
             return True
         return False

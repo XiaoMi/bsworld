@@ -39,6 +39,7 @@ from tests.unit.linklayer.llcp.harness import (
     phy_update_ind,
     reject_ext_ind,
     unknown_rsp,
+    version_ind,
 )
 
 DIFFERENT = ErrorCode.DIFFERENT_TRANSACTION_COLLISION_ERROR
@@ -55,7 +56,6 @@ def request_parameters(dut, minimum, maximum=None):
         maximum or minimum,
         0,
         100,
-        valid_ce_lengths=True,
     )
 
 
@@ -80,7 +80,7 @@ def test_phy_central_loc_collision(central):
         - The Central's own PHY Update applies at its Instant.
         - Host gets LE PHY Update Complete (SUCCESS, 2M/2M) and nothing else.
     """
-    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     central.event_prepare()
     central.lt_rx(Opcode.LL_PHY_REQ)
     central.lt_tx(phy_req(PHY_CODED, PHY_CODED))
@@ -127,7 +127,6 @@ def test_phy_central_rem_collision(central):
         PHY_CODED,
         PHY_CODED,
         0,
-        0,
         status=ErrorCode.COMMAND_DISALLOWED_ERROR,
     )
     update = central.lt_rx(Opcode.LL_PHY_UPDATE_IND)
@@ -136,7 +135,7 @@ def test_phy_central_rem_collision(central):
     central.wait_instant(instant_of(update))
     central.event_prepare()
     central.ut_rx(PHY_DONE, status=0)
-    central.host_start('prepare_phy', PHY_CODED, PHY_CODED, 2, 0)
+    central.host_start('prepare_phy', PHY_CODED, PHY_CODED, 2)
 
 
 def test_phy_periph_loc_collision(peripheral):
@@ -164,7 +163,7 @@ def test_phy_periph_loc_collision(peripheral):
         - The deferred request is then served under a fresh LL_RESPONSE_TIMEOUT,
           completing with LE PHY Update Complete (SUCCESS, Coded).
     """
-    peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     deadline = peripheral.controls.deadline_us
     peripheral.event_prepare()
     peripheral.lt_rx(Opcode.LL_PHY_REQ)
@@ -220,7 +219,7 @@ def test_phy_periph_loc_collision_deferred_request_times_out(peripheral):
         - At the deadline the Host gets Disconnection Complete
           (LMP_OR_LL_RESPONSE_TIMEOUT).
     """
-    peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     deadline = peripheral.controls.deadline_us
     peripheral.event_prepare()
     peripheral.lt_rx(Opcode.LL_PHY_REQ)
@@ -251,7 +250,7 @@ def test_phy_conn_central_loc_collision(central):
           CONNECTION_PARAM_REQ opcode.
         - No remote parameters are stored and nothing reaches the Host.
     """
-    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     central.event_prepare()
     central.lt_rx(Opcode.LL_PHY_REQ)
     central.lt_tx(connection_param_req(30))
@@ -288,7 +287,7 @@ def test_phy_periph_loc_with_central_cpr(peripheral, host_replied):
         - At the deadline the Host gets Disconnection Complete
           (LMP_OR_LL_RESPONSE_TIMEOUT).
     """
-    peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     peripheral.event_prepare()
     peripheral.lt_rx(Opcode.LL_PHY_REQ)
     peripheral.lt_tx(connection_param_req(30))
@@ -325,7 +324,7 @@ def test_phy_periph_loc_with_identical_cpr_keeps_cpr_timer(peripheral):
           (LMP_OR_LL_RESPONSE_TIMEOUT).
     """
     parameters = peripheral.connection.parameters
-    peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     # Identical parameters: accepted without Host, the Peripheral still owes
     # PARAM_RSP and then awaits UPDATE_IND under its own timer.
     peripheral.lt_tx(
@@ -589,25 +588,30 @@ def test_cpr_loc_rejected_keeps_pending_channel_map(peripheral):
 
 
 def test_central_host_channel_classification_while_busy(central):
-    """Host channel classification is disallowed while a CPR is in flight.
-
-    Purpose: Verify that a Host Set Host Channel Classification is refused with
-    Command Disallowed while the Central already has a Connection Parameter
-    Request outstanding (5.3).
+    """Publish the Host channel map after earlier local procedures (Core 6.B.5).
 
     Steps:
-        1. Upper Tester starts a Central CPR (interval_min 30).
-        2. Upper Tester calls classify_channels while that CPR is in flight.
-        3. Lower Tester receives the outstanding LL_CONNECTION_PARAM_REQ.
+        1. Start a Connection Parameters Request, queue a Version Exchange, and
+           supply a new channel classification.
+        2. Reject the parameter request and complete the Version Exchange.
 
     Expected:
-        - classify_channels returns COMMAND_DISALLOWED.
-        - The CPR is still the outstanding PDU on air.
+        - The Host classification succeeds. The peer receives the channel map
+          only after both outstanding procedures have released the ACL.
     """
     request_parameters(central, 30)
-    service = central.controller.le_procedures.ll
-    assert service.classify_channels(0x0F) == ErrorCode.COMMAND_DISALLOWED_ERROR
     central.lt_rx(Opcode.LL_CONNECTION_PARAM_REQ)
+    central.host_start('prepare_version')
+    assert (
+        central.controller.le_procedures.ll.classify_channels(0x0F) == ErrorCode.SUCCESS
+    )
+    central.lt_tx(reject_ext_ind(Opcode.LL_CONNECTION_PARAM_REQ, DIFFERENT))
+    central.event_prepare()
+    central.lt_rx(Opcode.LL_VERSION_IND)
+    central.lt_tx(version_ind())
+    central.event_prepare()
+    update = central.lt_rx(Opcode.LL_CHANNEL_MAP_IND)
+    assert int.from_bytes(update[1:6], 'little') == 0x0F
 
 
 # ---------------------------------------------------------------------------
@@ -693,7 +697,7 @@ def test_phy_request_waits_for_local_data_length(central):
     _length_request(central)
     central.event_prepare()
     central.lt_rx(Opcode.LL_LENGTH_REQ)
-    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     assert not central.controls.phy.phy_request
     central.lt_tx(length(Opcode.LL_LENGTH_RSP, 251, 2120, 251, 2120))
     central.event_done()
@@ -705,7 +709,7 @@ def test_phy_request_waits_for_local_data_length(central):
 def test_host_phy_request_waits_for_local_power_read(central):
     """A second locally initiated procedure waits for Power Control to complete."""
     _start_power_read(central)
-    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     central.tx_ack()
     central.event_done()
 
@@ -736,7 +740,7 @@ def test_queued_request_of_same_kind_is_disallowed(central, kind):
           Disallowed.
     """
     if kind == 'data_length':
-        central.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+        central.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
         _length_request(central)
         assert (
             central.host('set_data_length', 251, 2120)
@@ -745,12 +749,11 @@ def test_queued_request_of_same_kind_is_disallowed(central, kind):
         return
     _length_request(central)
     if kind == 'phy':
-        central.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+        central.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
         central.host_start(
             'prepare_phy',
             PHY_CODED,
             PHY_CODED,
-            0,
             0,
             status=ErrorCode.COMMAND_DISALLOWED_ERROR,
         )
@@ -762,7 +765,6 @@ def test_queued_request_of_same_kind_is_disallowed(central, kind):
             40,
             0,
             100,
-            valid_ce_lengths=True,
             status=ErrorCode.COMMAND_DISALLOWED_ERROR,
         )
 
@@ -781,7 +783,7 @@ def test_queued_request_is_dropped_on_disconnect(central):
         - The deferred queue is empty after close.
     """
     _length_request(central)
-    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0, 0)
+    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
     assert central.connection.llcp.deferred
     central.connection.llcp.close(ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR)
     assert not central.connection.llcp.deferred

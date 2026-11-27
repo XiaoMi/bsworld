@@ -41,7 +41,12 @@ def test_every_default_lies_in_its_specification_range():
 
 @pytest.mark.parametrize(
     'name,value',
-    [('acl_packet_count', 0), ('max_tx_octets', 252), ('hci_version', 0x05)],
+    [
+        ('acl_packet_count', 0),
+        ('max_tx_octets', 252),
+        ('hci_version', 0x05),
+        ('max_scan_duplicate_entries', 0),
+    ],
 )
 def test_direct_construction_rejects_out_of_range(name, value):
     """Constructing a configuration with an invalid value raises.

@@ -80,7 +80,9 @@ async def test_start_requires_a_controller(tmp_path) -> None:
     await topo.stop()
 
 
-async def test_start_binds_clock_after_the_phy_barrier(tmp_path, monkeypatch) -> None:
+async def test_start_binds_clock_after_device_registration(
+    tmp_path, monkeypatch
+) -> None:
     topo = BluetoothTopology(make_env(tmp_path), "sim0", tmp_path / "log")
     topo.add_controller()
     events = []
@@ -88,11 +90,10 @@ async def test_start_binds_clock_after_the_phy_barrier(tmp_path, monkeypatch) ->
     class FakeClock:
         now_us = 0
 
-        def advance_to_us(self, target_us: int) -> int:
-            assert target_us == 0
+        def bind(self, loop) -> None:
             assert loop.radio_selector.clock is None
-            events.append("barrier")
-            return target_us
+            events.append("bind")
+            loop.bind_clock(self)
 
     topo.bsim.clock = FakeClock()
     monkeypatch.setattr(topo.bsim, "start", AsyncMock())
@@ -112,7 +113,7 @@ async def test_start_binds_clock_after_the_phy_barrier(tmp_path, monkeypatch) ->
     assert isinstance(loop, RadioEventLoop)
     await topo.start()
     try:
-        assert events == ["hci ready", "registered", "barrier"]
+        assert events == ["hci ready", "registered", "bind"]
         assert loop.radio_selector.clock is topo.bsim.clock
         with pytest.raises(RuntimeError, match="cannot modify a topology"):
             topo.add_controller()
@@ -247,7 +248,7 @@ async def test_cancelled_start_cleans_up_registration_before_closing_clock(
         finally:
             events.append("connection cancelled")
 
-    topo.bsim.clock = SimpleNamespace(connection=SimpleNamespace(connect=connect))
+    topo.bsim.clock = SimpleNamespace(connect=connect)
     start = asyncio.create_task(topo.start())
     await registering.wait()
 

@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
-    LL_RESPONSE_TIMEOUT_US,
     LL_SCA_500_PPM,
     LL_SCA_MAX,
     ControlOpcode,
@@ -76,9 +75,9 @@ class ClockAccuracyProcedure(LocalProcedure):
             frozenset((Opcode.LL_CLOCK_ACCURACY_RSP,)),
             self,
             host_initiated=host_read,
-            deadline_us=connection.radio.now_us + LL_RESPONSE_TIMEOUT_US,
+            response_timer=self.owner.response_timer,
         )
-        self.owner.enqueue(bytes([Opcode.LL_CLOCK_ACCURACY_REQ, advertised]))
+        connection.enqueue_control(bytes([Opcode.LL_CLOCK_ACCURACY_REQ, advertised]))
 
     def _report(self, status: int) -> None:
         self.owner.listener.on_peer_sca(

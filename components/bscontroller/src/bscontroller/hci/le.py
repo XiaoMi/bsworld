@@ -96,15 +96,16 @@ class LeControllerProcedures(
         '''
         # Drop active LL procedures first, then remove Host-facing views and HCI
         # staging buffers so no record can refer to a pre-reset connection or train.
-        self.ll.reset(self.controller.public_address)
+        self.ll.reset()
         self.acl_buffers.reset()
         self.iso_buffers.reset()
+        self.iso_assemblies.clear()
         self.cis_established.clear()
+        self.deferred_cis_credits.clear()
         self.controller.le_connections.clear()
         self.controller.advertising_sets.clear()
         self.fragments.clear()
         self.duplicate_filter = None
-        self.extended_scan = False
         # Recreate the record to restore parameters as well as payload/enabled state.
         self.controller.le_legacy_advertiser = LegacyAdvertiser(self.controller)
         self.controller.event_mask = HCI_EVENT_MASK_DEFAULT
@@ -118,7 +119,6 @@ class LeControllerProcedures(
         '''
         See Bluetooth spec Vol 4, Part E - 7.8.4 LE Set Random Address Command
         '''
-        status = self.ll.set_random_address(command.random_address)
-        if status == SUCCESS:
-            self.controller.random_address = command.random_address
-        return hci.HCI_StatusReturnParameters(status)
+        return hci.HCI_StatusReturnParameters(
+            self.ll.set_random_address(command.random_address)
+        )

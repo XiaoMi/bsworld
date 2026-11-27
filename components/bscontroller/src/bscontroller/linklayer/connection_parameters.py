@@ -27,9 +27,12 @@ from bscontroller.linklayer import (
     ControlOpcode,
 )
 from bscontroller.linklayer.features import LeFeatureMask
+from bscontroller.linklayer.instant import CONNECTION_UPDATE as UPDATE
 from bscontroller.linklayer.instant import InstantUpdate
 from bscontroller.linklayer.parameters import valid_timing
 from bscontroller.linklayer.procedure import (
+    DIFFERENT_TRANSACTION_COLLISION,
+    PROCEDURE_COLLISION,
     ProcedureContext,
     ProcedureOrigin,
     ProcedurePhase,
@@ -41,11 +44,7 @@ if TYPE_CHECKING:
     from bscontroller.linklayer.control import ControlProcedures
 
 Opcode = ControlOpcode
-PROCEDURE_COLLISION = (
-    ErrorCode.LMP_ERROR_TRANSACTION_COLLISION_OR_LL_PROCEDURE_COLLISION_ERROR
-)
 
-UPDATE = struct.Struct('<BHHHHH')
 PARAM_REQUEST = struct.Struct('<HHHHBH6H')
 
 
@@ -94,7 +93,11 @@ class ConnectionParametersProcedure:
     @property
     def remote_parameters(self) -> bytes | None:
         context = self.remote_context
-        return context.peer_payload if context is not None and context.active else None
+        return (
+            context.peer_payload
+            if context is not None and context.phase == ProcedurePhase.WAIT_HOST
+            else None
+        )
 
     @property
     def parameter_request(self) -> bool:
@@ -147,7 +150,7 @@ class ConnectionParametersProcedure:
     def finish(self) -> None:
         for context in (self.local_context, self.remote_context):
             if context is not None:
-                self.owner.response_timer.stop(context)
+                self.owner.stop_instant_timer(context)
                 context.finish()
 
     @property
@@ -225,12 +228,7 @@ class ConnectionParametersProcedure:
             notify=notify,
         )
         self.owner.transmitted = self.owner.acknowledged = False
-        self.owner.enqueue(
-            bytes([Opcode.LL_CONNECTION_UPDATE_IND])
-            + UPDATE.pack(
-                LL_CONN_WINDOW_SIZE_MIN, offset, interval, latency, timeout, instant
-            )
-        )
+        self.connection.enqueue_control(self.owner.pending.encode())
 
     def request_parameters(
         self, minimum: int, maximum: int, latency: int, timeout: int
@@ -246,10 +244,8 @@ class ConnectionParametersProcedure:
             requested_parameters=(minimum, maximum, latency, timeout),
             requested_interval_min=minimum,
         )
-        self.owner.response_timer.start(
-            self.local_context, self.connection.radio.now_us
-        )
-        self.owner.enqueue(
+        self.owner.start_instant_timer(self.local_context)
+        self.connection.enqueue_control(
             bytes([Opcode.LL_CONNECTION_PARAM_REQ])
             + PARAM_REQUEST.pack(
                 minimum,
@@ -282,7 +278,6 @@ class ConnectionParametersProcedure:
             self.remote_parameters
         )
         assert self.remote_context is not None
-        self.remote_context.peer_payload = None
         self.remote_context.phase = ProcedurePhase.WAIT_INSTANT
         self.remote_context.host_initiated = notify
         interval = preferred_interval(minimum, maximum, periodicity)
@@ -297,7 +292,7 @@ class ConnectionParametersProcedure:
             )
         else:
             self.remote_context.requested_interval_min = minimum if notify else 0
-            self.owner.enqueue(
+            self.connection.enqueue_control(
                 bytes([Opcode.LL_CONNECTION_PARAM_RSP])
                 + PARAM_REQUEST.pack(
                     minimum,
@@ -313,9 +308,7 @@ class ConnectionParametersProcedure:
                 )
             )
         assert self.remote_context is not None
-        self.owner.response_timer.start(
-            self.remote_context, self.connection.radio.now_us
-        )
+        self.owner.start_instant_timer(self.remote_context)
 
     def reject_parameters(self, reason: int) -> None:
         """Handle a rejected Connection Parameters Request; Unsupported Remote Feature
@@ -323,7 +316,7 @@ class ConnectionParametersProcedure:
         """
         requested = self.requested_parameters
         if self.local_context is not None:
-            self.owner.response_timer.stop(self.local_context)
+            self.owner.stop_instant_timer(self.local_context)
             self.local_context.finish()
         if reason == ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR:
             self.parameter_request_unsupported = True
@@ -349,7 +342,7 @@ class ConnectionParametersProcedure:
     def reject_remote_parameters(self, reason: int) -> None:
         self.owner.reject(Opcode.LL_CONNECTION_PARAM_REQ, reason)
         if self.remote_context is not None:
-            self.owner.response_timer.stop(self.remote_context)
+            self.owner.stop_instant_timer(self.remote_context)
             self.remote_context.finish()
 
     def notify_remote_parameters(self) -> None:
@@ -358,9 +351,7 @@ class ConnectionParametersProcedure:
             self.remote_parameters
         )
         assert self.remote_context is not None
-        self.owner.response_timer.start(
-            self.remote_context, self.connection.radio.now_us
-        )
+        self.owner.start_instant_timer(self.remote_context)
         parameters = self.connection.parameters
         if (
             minimum == maximum
@@ -445,9 +436,7 @@ class ConnectionParametersProcedure:
                     self.reject_parameters(reason)
             elif opcode == Opcode.LL_CONNECTION_PARAM_REQ:
                 if connection.role == Role.CENTRAL and self.owner.rate.instant_pending:
-                    self.owner.reject(
-                        opcode, ErrorCode.DIFFERENT_TRANSACTION_COLLISION_ERROR
-                    )
+                    self.owner.reject(opcode, DIFFERENT_TRANSACTION_COLLISION)
                 elif (
                     connection.role == Role.PERIPHERAL
                     and (self.parameter_request or self.owner.phy.phy_request_local)
@@ -467,7 +456,7 @@ class ConnectionParametersProcedure:
                     self.owner.reject(
                         opcode,
                         (
-                            ErrorCode.DIFFERENT_TRANSACTION_COLLISION_ERROR
+                            DIFFERENT_TRANSACTION_COLLISION
                             if self.owner.pending
                             and self.owner.pending.channel_map is not None
                             else PROCEDURE_COLLISION

@@ -11,9 +11,13 @@ from typing import TYPE_CHECKING, Protocol
 from bscontroller import hci
 from bscontroller.hci.capabilities import HCI_SUPPORTED_STATE_MASK
 from bscontroller.hci.le import LeControllerProcedures
+from bscontroller.linklayer.link import RadioLink
+from bscontroller.linklayer.notifications import NotificationAdapter
+from bscontroller.linklayer.service import LinkLayerService
 from bscontroller.radio.base import Radio
 
 if TYPE_CHECKING:
+    from bscontroller.address import Address
     from bscontroller.hci.controller import Controller
 
 
@@ -21,7 +25,15 @@ class ControllerBackend(Protocol):
     @property
     def supported_commands(self) -> frozenset[int]: ...
 
-    def bind(self, controller: Controller) -> None: ...
+    @property
+    def lmp_features(self) -> hci.LmpFeatureMask: ...
+
+    @property
+    def le_states(self) -> bytes: ...
+
+    def bind(
+        self, controller: Controller, address: Address
+    ) -> LeControllerProcedures: ...
 
 
 class RadioBackend:
@@ -223,14 +235,32 @@ class RadioBackend:
 
     def __init__(self, radio: Radio):
         self.radio = radio
+        self._link: RadioLink | None = None
 
-    def bind(self, controller: Controller) -> None:
-        if hasattr(self, 'link'):
+    @property
+    def link(self) -> RadioLink:
+        if self._link is None:
+            raise RuntimeError('bind the backend before accessing its radio link')
+        return self._link
+
+    def bind(self, controller: Controller, address: Address) -> LeControllerProcedures:
+        if self._link is not None:
             raise ValueError('a backend belongs to one Controller')
-        controller.supported_commands = set(self.supported_commands)
-        controller.lmp_features = self.lmp_features
-        controller.le_states = self.le_states
-        controller.le_procedures = LeControllerProcedures(
-            controller, self.radio, self.le_features
+        procedures = LeControllerProcedures(controller)
+        notifications = NotificationAdapter(procedures)
+        link = RadioLink(
+            self.radio,
+            notifications,
+            int(self.le_features),
+            seed=int.from_bytes(bytes(address), 'little'),
+            config=controller.config,
         )
-        self.link = controller.le_procedures.link
+        notifications.bind_advertising(link.roles.advertising.handle_of)
+        procedures.ll = LinkLayerService(
+            link,
+            address,
+            hci.HCI_LE_SCAN_INTERVAL_DEFAULT * hci.HCI_LE_SCAN_INTERVAL_UNIT_US,
+            hci.HCI_LE_SCAN_WINDOW_DEFAULT * hci.HCI_LE_SCAN_INTERVAL_UNIT_US,
+        )
+        self._link = link
+        return procedures

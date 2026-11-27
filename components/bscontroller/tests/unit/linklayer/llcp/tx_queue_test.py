@@ -105,7 +105,7 @@ def test_control_and_data_keep_fifo_order(iut, role):
     """
     dut = iut(role)
     dut.connection.enqueue_acl(False, b'first')
-    dut.host_start('prepare_phy', 2, 2, 0, 0)
+    dut.host_start('prepare_phy', 2, 2, 0)
     dut.connection.enqueue_acl(False, b'second')
     assert dut.lt_rx_data().payload == b'first'
     dut.tx_ack()
@@ -488,7 +488,7 @@ def test_failed_receive_observes_ack_without_consuming_pending(central):
     """
     from types import SimpleNamespace
 
-    central.host_start('prepare_phy', 1, 1, 0, 0)
+    central.host_start('prepare_phy', 1, 1, 0)
     central.lt_rx(Opcode.LL_PHY_REQ)
     event = central.connection.event
     pending, wire = event.pending, event.pending_wire
@@ -663,3 +663,26 @@ def test_header_bits(central):
     assert header & PDU_DATA_SN_MASK and header & PDU_DATA_NESN_MASK
     central.lt_tx_data(b'peer')
     assert central.acl_received() == [b'peer']
+
+
+def test_cancel_with_identical_control_pdus(central):
+    """Only the owner's unsent queue entry can be withdrawn (Vol 6, Part B, 5.2).
+
+    Steps:
+        Queue two identical Ping Responses and withdraw the second entry.
+        Send the first, try to withdraw it during retransmission, then ACK it.
+
+    Expected:
+        The first entry stays queued, transmits twice and is released by its ACK.
+    """
+    connection = central.connection
+    payload = bytes([Opcode.LL_PING_RSP])
+    first = connection.enqueue_control(payload)
+    second = connection.enqueue_control(payload)
+    assert connection.event.cancel_queued_control(second)
+    assert list(connection.event.queue) == [first]
+    central.lt_rx(Opcode.LL_PING_RSP)
+    assert not connection.event.cancel_queued_control(first)
+    central.lt_rx(Opcode.LL_PING_RSP)
+    central.tx_ack()
+    assert connection.event.pending is None

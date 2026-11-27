@@ -9,51 +9,56 @@ import struct
 from dataclasses import dataclass, field, replace
 from enum import Enum, auto
 from functools import partial
-from math import gcd
 from typing import TYPE_CHECKING
 
 from bscontroller.errors import ErrorCode
-from bscontroller.linklayer import (
-    LL_EVENT_COUNTER_MASK,
-    LL_RESPONSE_TIMEOUT_US,
-)
-from bscontroller.linklayer import (
-    ControlOpcode as Opcode,
-)
+from bscontroller.linklayer import ControlOpcode as Opcode
 from bscontroller.linklayer.api import CigConfig, CisEstablished
 from bscontroller.linklayer.bitstream import valid_access_address
+from bscontroller.linklayer.cig_schedule import (
+    future_window,
+    new_cis_window,
+    plan_frame_spaces,
+    validate_supervision,
+)
 from bscontroller.linklayer.cis import CisEvent, CisEventParameters
 from bscontroller.linklayer.cis_parameters import (
     CIS_IND_FIELDS,
     CIS_REQ_FIELDS,
     CIS_WINDOW_FIELDS,
     ISO_INTERVAL_UNIT_US,
-    MIN_CIS_OFFSET_US,
     CisIndication,
     CisRequest,
     CisWindow,
     UnsupportedCisBurstOrFlush,
     UnsupportedCisParameters,
     event_anchor,
+    event_distance,
     plan_cig,
     valid_cis_supervision_timeout,
 )
 from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.frame_space import REQUEST as FRAME_SPACE_REQUEST
+from bscontroller.linklayer.procedure import (
+    DIFFERENT_TRANSACTION_COLLISION,
+    PROCEDURE_COLLISION,
+)
 from bscontroller.linklayer.resource import PendingOperation
 from bscontroller.linklayer.scheduler import (
     RadioPriority,
     RadioReservation,
-    first_radio_gap,
 )
 from bscontroller.linklayer.state import Role
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from bscontroller.linklayer.connection import Connection
+    from bscontroller.linklayer.connection_event import Outbound
     from bscontroller.linklayer.iso import IsoDataPaths
-    from bscontroller.linklayer.link import RadioLink
+    from bscontroller.linklayer.listener import ConnectedIsoListener
+    from bscontroller.linklayer.procedure import ProcedureResponseTimer
+    from bscontroller.radio.base import Radio
 
 SUCCESS = ErrorCode.SUCCESS
 UNKNOWN = ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
@@ -62,7 +67,6 @@ INVALID = ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
 UNSUPPORTED = ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR
 REMOTE_UNSUPPORTED = ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
 NO_RESOURCES = ErrorCode.MEMORY_CAPACITY_EXCEEDED_ERROR
-DIFFERENT_COLLISION = ErrorCode.DIFFERENT_TRANSACTION_COLLISION_ERROR
 CANCELLED = ErrorCode.OPERATION_CANCELLED_BY_HOST_ERROR
 LOCAL_TERMINATED = ErrorCode.CONNECTION_TERMINATED_BY_LOCAL_HOST_ERROR
 
@@ -92,25 +96,76 @@ class Cis:
     stage: Setup = Setup.CONFIGURED
     window: CisWindow | None = None
     event: CisEvent | None = None
-    deadline_us: int = 0
+    setup_deadline_us: int = 0
+    response_timer: ProcedureResponseTimer | None = None
     reported: bool = False
     cancellation: bool = False
     failure: int | None = None
     indication: CisIndication | None = None
+    queued_setup: Outbound | None = None
+
+    @property
+    def setup_pending(self) -> bool:
+        if self.stage == Setup.ACTIVE:
+            # The initiator waits for establishment before starting another LLCP
+            # (6.B.5.1.15). A Peripheral that received LL_CIS_IND can already
+            # route the next ACL setup exchange to a different CIS.
+            return self.central and (
+                not self.reported or self.event.awaiting_indication_ack
+            )
+        return self.stage in (
+            Setup.REQUEST,
+            Setup.HOST,
+            Setup.RESPONSE,
+            Setup.INDICATION,
+        )
 
 
 @dataclass
 class Cig:
     config: CigConfig
     streams: dict[int, Cis] = field(default_factory=dict)
-    anchor_us: int | None = None
     started: bool = False
+
+    @property
+    def reference_event(self) -> CisEvent | None:
+        return next(
+            (
+                stream.event
+                for stream in self.streams.values()
+                if stream.event is not None
+            ),
+            None,
+        )
+
+    @property
+    def spans_acls(self) -> bool:
+        connections = {stream.connection for stream in self.streams.values()}
+        connections.discard(None)
+        return len(connections) > 1
 
 
 class CigManager:
-    def __init__(self, link: RadioLink, iso: IsoDataPaths):
-        self.link = link
+    def __init__(
+        self,
+        radio: Radio,
+        listener: ConnectedIsoListener,
+        iso: IsoDataPaths,
+        *,
+        available_handles: Callable[[], Iterator[int]],
+        find_connection: Callable[[int], Connection | None],
+        host_supports_cis: Callable[[], bool],
+        new_access_address: Callable[[], int],
+        used_access_addresses: Callable[[], set[int]],
+    ):
+        self.radio = radio
+        self.listener = listener
         self.iso = iso
+        self._available_handles = available_handles
+        self._find_connection = find_connection
+        self._host_supports_cis = host_supports_cis
+        self._new_access_address = new_access_address
+        self._used_access_addresses = used_access_addresses
         self.groups: dict[int, Cig] = {}
         self.streams: dict[int, Cis] = {}
         self.connection_accept_timeout = 0x1F40
@@ -155,6 +210,12 @@ class CigManager:
     def event_for_handle(self, handle: int) -> CisEvent | None:
         stream = self.streams.get(handle)
         return stream.event if stream is not None else None
+
+    def shift_anchors(self, connection: Connection, correction_us: int) -> None:
+        """Keep a Peripheral's active CISes synchronized with their Central."""
+        for event in self.events():
+            if event.connection is connection:
+                event.anchor_us += correction_us
 
     def waiting_for_establishment(self, handle: int) -> bool:
         stream = self.streams.get(handle)
@@ -203,7 +264,7 @@ class CigManager:
             ):
                 return DISALLOWED, ()
         new_ids = parameters.keys() - group.streams.keys()
-        free = self.link.roles.available_connection_handles()
+        free = self._available_handles()
         handles = [next(free, None) for _ in new_ids]
         if None in handles:
             return NO_RESOURCES, ()
@@ -234,7 +295,7 @@ class CigManager:
         return SUCCESS
 
     def create_cis(self, pairs: tuple[tuple[int, int], ...]) -> int:
-        if not self.link.features & LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM:
+        if not self._host_supports_cis():
             return DISALLOWED
         if any(
             item.central and not item.reported and item.stage != Setup.CONFIGURED
@@ -248,7 +309,7 @@ class CigManager:
         assignments = []
         for handle, acl_handle in pairs:
             stream = self.streams.get(handle)
-            connection = self.link.roles.connections.contexts.get(acl_handle)
+            connection = self._find_connection(acl_handle)
             if stream is None or not stream.central or connection is None:
                 return UNKNOWN
             if stream.stage != Setup.CONFIGURED:
@@ -297,7 +358,7 @@ class CigManager:
             stream.cancellation = True
         if stream.stage == Setup.ACTIVE or (
             stream.stage == Setup.INDICATION
-            and not connection.event.cancel_queued_control(stream.indication.encode())
+            and not connection.event.cancel_queued_control(stream.queued_setup)
         ):
             connection.enqueue_control(
                 bytes(
@@ -306,7 +367,8 @@ class CigManager:
                 priority=True,
             )
             stream.stage = Setup.TERMINATING
-            stream.deadline_us = self.link.now_us + LL_RESPONSE_TIMEOUT_US
+            stream.setup_deadline_us = 0
+            stream.response_timer = connection.llcp.response_timer
         elif stream.stage == Setup.INDICATION:
             connection.controls.reject(Opcode.LL_CIS_RSP, CANCELLED)
             stream.stage = Setup.QUEUED
@@ -322,21 +384,17 @@ class CigManager:
             (
                 stream
                 for stream in self.streams.values()
-                if stream.connection is connection
-                and (
-                    stream.stage
-                    in (Setup.REQUEST, Setup.HOST, Setup.RESPONSE, Setup.INDICATION)
-                    or (
-                        stream.stage == Setup.ACTIVE
-                        and stream.event.awaiting_indication_ack
-                    )
-                )
+                if stream.connection is connection and stream.setup_pending
             ),
             None,
         )
 
     def busy(self, connection: Connection) -> bool:
-        return self._exchange(connection) is not None
+        return any(
+            stream.connection is connection
+            and (stream.setup_pending or stream.stage == Setup.TERMINATING)
+            for stream in self.streams.values()
+        )
 
     def start_pending(self, connection: Connection) -> None:
         if connection.llcp.local_procedure_busy or connection.llcp.deferred:
@@ -366,141 +424,27 @@ class CigManager:
                 self._finish(stream, REMOTE_UNSUPPORTED)
             else:
                 try:
-                    self._plan_for_connection(stream)
-                    stream.window = self._new_window(stream)
+                    group = self.groups[stream.cig_id]
+                    plan_frame_spaces(group, stream)
+                    stream.window = new_cis_window(group, stream, self.reservations)
                 except ValueError:
                     self._finish(
                         stream, ErrorCode.UNACCEPTABLE_CONNECTION_PARAMETERS_ERROR
                     )
                     return
                 stream.stage = Setup.REQUEST
-                connection.enqueue_control(
+                stream.response_timer = connection.llcp.response_timer
+                stream.queued_setup = connection.enqueue_control(
                     CisRequest(
                         stream.cig_id, stream.cis_id, stream.parameters, stream.window
                     ).encode()
                 )
             return
 
-    @staticmethod
-    def _spaces(stream: Cis) -> tuple[int, int]:
-        params = stream.parameters
-        return stream.connection.controls.frame_space.cis_spaces(
-            params.c_to_p.phy, params.p_to_c.phy
-        )
-
-    def _plan_for_connection(self, stream: Cis) -> None:
-        group = self.groups[stream.cig_id]
-        if group.anchor_us is not None:
-            ifs, mss = self._spaces(stream)
-            params = stream.parameters
-            params = replace(params, spacing_us=ifs, minimum_subevent_space_us=mss)
-            if params.nse > 1 and params.subinterval_us < params.minimum_subevent_us:
-                raise ValueError('negotiated frame spaces exceed the reserved CIS slot')
-            stream.parameters = params
-            return
-        spaces = {
-            item.cis_id: self._spaces(item)
-            for item in group.streams.values()
-            if item.connection is not None
-        }
-        for cis_id, params in plan_cig(group.config, spaces=spaces).items():
-            group.streams[cis_id].parameters = params
-
-    def _new_window(self, stream: Cis) -> CisWindow:
-        connection, params = stream.connection, stream.parameters
-        self._validate_supervision(connection, params.interval_us)
-        group = self.groups[stream.cig_id]
-        interval = connection.parameters.interval_us
-        minimum = max(MIN_CIS_OFFSET_US, connection.first_exchange_us(max_rx=False))
-        maximum = interval - params.cis_sync_delay_us - params.minimum_subevent_space_us
-        minimum = max(minimum, params.cig_sync_delay_us - params.cis_sync_delay_us)
-        if minimum > maximum:
-            raise ValueError('CIS event does not fit the ACL interval')
-        offset = params.cig_sync_delay_us - params.cis_sync_delay_us
-        if group.anchor_us is None:
-            counter = (connection.event_counter + 6) & LL_EVENT_COUNTER_MASK
-            minimum = max(minimum, min(maximum, 2000 + offset))
-            reservations = self.reservations()
-            if reservations:
-                anchor = event_anchor(connection, counter) - offset
-                minimum, maximum = self._available_cig_offsets(
-                    params, reservations, anchor, minimum, maximum
-                )
-            return CisWindow(minimum, maximum, counter)
-        for ahead in range(6, 100):
-            counter = (connection.event_counter + ahead) & LL_EVENT_COUNTER_MASK
-            anchor = event_anchor(connection, counter)
-            selected = (group.anchor_us + offset - anchor) % params.interval_us
-            if selected < minimum:
-                selected += (
-                    (minimum - selected + params.interval_us - 1) // params.interval_us
-                ) * params.interval_us
-            if selected <= maximum:
-                return CisWindow(selected, selected, counter)
-        raise ValueError('CIS event does not align with the CIG')
-
-    @staticmethod
-    def _validate_supervision(connection: Connection, interval_us: int) -> None:
-        pending = connection.controls.pending
-        timeout = connection.parameters.timeout
-        if pending is not None and pending.supervision_timeout is not None:
-            # The new ACL timeout may already be in effect at the first CIS event.
-            timeout = min(timeout, pending.supervision_timeout)
-        if not valid_cis_supervision_timeout(interval_us, timeout):
-            raise ValueError('CIS interval exceeds the ACL supervision budget')
-
-    @staticmethod
-    def _available_cig_offsets(
-        params: CisEventParameters,
-        reservations: list[RadioReservation],
-        anchor_us: int,
-        minimum: int,
-        maximum: int,
-    ) -> tuple[int, int]:
-        # A gap must recur for every pair of CIG events. Project the windows
-        # onto their shared period and offer the largest clear window within
-        # one ISO interval, so the peer can choose a phase on its radio too.
-        duration = params.cig_sync_delay_us
-        recurring = []
-        for reservation in reservations:
-            period = gcd(params.interval_us, reservation.interval_us)
-            if duration + reservation.duration_us > period:
-                raise ValueError('no recurring gap between CIGs')
-            start = (reservation.start_us - anchor_us) % period - period
-            recurring.append(replace(reservation, start_us=start, interval_us=period))
-        maximum = min(maximum, minimum + params.interval_us - 1)
-        best = None
-        while (
-            start := first_radio_gap(recurring, minimum, duration, maximum)
-        ) is not None:
-            next_start = min(item.window_after(start)[0] for item in recurring)
-            end = min(maximum, next_start - duration)
-            if best is None or end - start > best[1] - best[0]:
-                best = (start, end)
-            minimum = next_start
-        if best is None:
-            raise ValueError('no recurring gap between CIGs')
-        return best
-
-    def _future_window(self, stream: Cis, window: CisWindow) -> CisWindow:
-        connection, period = stream.connection, stream.parameters.interval_us
-        old_start = window.anchor_us(connection)
-        if old_start >= connection.next_anchor_us:
-            return window
-        for ahead in range(2, 100):
-            counter = (connection.event_counter + ahead) & LL_EVENT_COUNTER_MASK
-            anchor = event_anchor(connection, counter)
-            offset = (old_start - anchor) % period
-            if offset < MIN_CIS_OFFSET_US:
-                offset += ((MIN_CIS_OFFSET_US - offset + period - 1) // period) * period
-            if offset + window.width_us < connection.parameters.interval_us:
-                return CisWindow(offset, offset + window.width_us, counter)
-        raise ValueError('CIS window does not fit a future ACL interval')
-
     def _respond(self, stream: Cis) -> None:
         connection = stream.connection
         try:
-            stream.window = self._future_window(stream, stream.window)
+            stream.window = future_window(stream, stream.window)
         except ValueError:
             connection.controls.reject(
                 Opcode.LL_CIS_REQ, ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR
@@ -508,18 +452,18 @@ class CigManager:
             stream.failure = ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR
             return
         stream.stage = Setup.RESPONSE
-        stream.deadline_us = 0
+        stream.setup_deadline_us = 0
         connection.enqueue_control(bytes([Opcode.LL_CIS_RSP]) + stream.window.encode())
 
     def _request(self, connection: Connection, payload: bytes) -> None:
-        if not self.link.features & LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM:
+        if not self._host_supports_cis():
             connection.controls.reject(Opcode.LL_CIS_REQ, REMOTE_UNSUPPORTED)
             return
         try:
             request = CisRequest.decode(payload)
             request.window.validate(connection)
             params = request.parameters
-            self._validate_supervision(connection, params.interval_us)
+            validate_supervision(connection, params.interval_us)
             ifs, mss = connection.controls.frame_space.cis_spaces(
                 params.c_to_p.phy, params.p_to_c.phy
             )
@@ -542,7 +486,7 @@ class CigManager:
         if self.busy(connection):
             connection.controls.reject(
                 Opcode.LL_CIS_REQ,
-                ErrorCode.LMP_ERROR_TRANSACTION_COLLISION_OR_LL_PROCEDURE_COLLISION_ERROR,
+                PROCEDURE_COLLISION,
             )
             return
         if self._stream_for_ids(connection, request.cig_id, request.cis_id) is not None:
@@ -550,7 +494,7 @@ class CigManager:
                 Opcode.LL_CIS_REQ, ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR
             )
             return
-        handle = next(self.link.roles.available_connection_handles(), None)
+        handle = next(self._available_handles(), None)
         if handle is None:
             connection.controls.reject(
                 Opcode.LL_CIS_REQ, ErrorCode.CONNECTION_LIMIT_EXCEEDED_ERROR
@@ -565,13 +509,15 @@ class CigManager:
             False,
             Setup.HOST,
             request.window,
-            deadline_us=self.link.now_us + 625 * self.connection_accept_timeout,
+            setup_deadline_us=self.radio.now_us + 625 * self.connection_accept_timeout,
+            response_timer=connection.llcp.response_timer,
         )
+        stream.response_timer.restart(self.radio.now_us)
         self.streams[handle] = stream
         frame_space = connection.controls.frame_space
         if frame_space.pending and frame_space.context.transmitted:
             frame_space.collision = True
-        if not self.link.listener.on_cis_request(
+        if not self.listener.on_cis_request(
             connection.handle, handle, request.cig_id, request.cis_id
         ):
             self.reject_cis(
@@ -587,28 +533,35 @@ class CigManager:
         try:
             window = CisWindow.decode(payload[1:])
             window.validate(connection)
-            shift = (
-                window.anchor_us(connection) - stream.window.anchor_us(connection)
-            ) % params.interval_us
+            requested = stream.window.offset_at(
+                connection, window.conn_event_count, params.interval_us
+            )
+            shift = (window.offset_min_us - requested) % params.interval_us
             if shift + window.width_us > stream.window.width_us:
                 raise ValueError('CIS response window lies outside request')
-            window = self._future_window(stream, window)
+            window = future_window(stream, window)
         except ValueError:
             connection.controls.reject(
                 Opcode.LL_CIS_RSP, ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR
             )
             self._finish(stream, ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR)
             return
+        # Center a shared CIG in the negotiated gap to leave room for the
+        # independent ACL exchanges on both sides of its recurring slot.
+        group = self.groups[stream.cig_id]
+        offset = window.offset_min_us
+        if group.spans_acls:
+            offset += window.width_us // 2
         stream.indication = CisIndication(
-            self.link.new_access_address(minimum_distance=2),
-            window.offset_min_us,
+            self._new_access_address(),
+            offset,
             params.cig_sync_delay_us,
             params.cis_sync_delay_us,
             window.conn_event_count,
         )
         stream.stage = Setup.INDICATION
-        stream.deadline_us = event_anchor(connection, window.conn_event_count)
-        connection.enqueue_control(stream.indication.encode())
+        stream.setup_deadline_us = event_anchor(connection, window.conn_event_count)
+        stream.queued_setup = connection.enqueue_control(stream.indication.encode())
 
     def _receive_indication(self, stream: Cis, payload: bytes) -> None:
         connection = stream.connection
@@ -618,14 +571,15 @@ class CigManager:
                 event_anchor(connection, indication.conn_event_count)
                 + indication.offset_us
             )
-            offset = (
-                anchor - stream.window.anchor_us(connection)
-            ) % stream.parameters.interval_us
+            requested = stream.window.offset_at(
+                connection, indication.conn_event_count, stream.parameters.interval_us
+            )
+            offset = (indication.offset_us - requested) % stream.parameters.interval_us
             if (
                 not valid_access_address(indication.access_address)
-                or indication.access_address in self.link.used_access_addresses()
+                or indication.access_address in self._used_access_addresses()
                 or offset > stream.window.width_us
-                or anchor < self.link.now_us
+                or anchor < self.radio.now_us
                 or not 0
                 < indication.cis_sync_delay_us
                 <= indication.cig_sync_delay_us
@@ -663,7 +617,9 @@ class CigManager:
                 # Stop CIS radio activity on receipt, then notify the Host
                 # when the ACL acknowledges it (Core Vol 6, Part B, 5.1.16).
                 stream.stage = Setup.TERMINATING
-                stream.deadline_us = 0
+                stream.setup_deadline_us = 0
+                stream.response_timer = connection.llcp.response_timer
+                stream.response_timer.restart(self.radio.now_us)
                 connection.event.after_acknowledgment(
                     partial(self._finish, stream, payload[3])
                 )
@@ -706,13 +662,15 @@ class CigManager:
         for stream in self.streams.values():
             if stream.connection is not connection or stream.reported:
                 continue
-            if stream.stage == Setup.REQUEST and stream.deadline_us:
+            if stream.stage == Setup.REQUEST and stream.queued_setup is None:
                 connection.controls.reject(
-                    Opcode.LL_FRAME_SPACE_REQ, DIFFERENT_COLLISION, priority=True
+                    Opcode.LL_FRAME_SPACE_REQ,
+                    DIFFERENT_TRANSACTION_COLLISION,
+                    priority=True,
                 )
                 return True
             if stream.stage in (Setup.INDICATION, Setup.ACTIVE):
-                connection.complete(DIFFERENT_COLLISION)
+                connection.complete(DIFFERENT_TRANSACTION_COLLISION)
                 return True
         return False
 
@@ -727,8 +685,8 @@ class CigManager:
             if stream.stage == Setup.INDICATION:
                 # The Central creates the CIS on transmission (Core 6.B.5.1.15).
                 self._activate(stream)
-        else:
-            stream.deadline_us = self.link.now_us + LL_RESPONSE_TIMEOUT_US
+        elif opcode == Opcode.LL_CIS_REQ:
+            stream.queued_setup = None
 
     def acknowledged(self, connection: Connection, payload: bytes) -> None:
         if payload[0] == Opcode.LL_CIS_IND:
@@ -756,18 +714,22 @@ class CigManager:
 
     def _activate(self, stream: Cis) -> None:
         connection, indication = stream.connection, stream.indication
-        anchor = (
-            event_anchor(connection, indication.conn_event_count) + indication.offset_us
+        anchor, phase = connection.project_anchor(
+            event_distance(connection, indication.conn_event_count)
         )
+        anchor += indication.offset_us
         parameters = replace(
             stream.parameters,
             cis_sync_delay_us=indication.cis_sync_delay_us,
             cig_sync_delay_us=indication.cig_sync_delay_us,
         )
-        if stream.central:
-            group = self.groups[stream.cig_id]
-            group.anchor_us = anchor - (
-                indication.cig_sync_delay_us - indication.cis_sync_delay_us
+        if stream.central and (reference := self.groups[stream.cig_id].reference_event):
+            _, phase = reference.anchor_at_or_after(
+                anchor
+                - (
+                    reference.parameters.cis_sync_delay_us
+                    - parameters.cis_sync_delay_us
+                )
             )
         stream.parameters = parameters
         self._configure_paths(stream)
@@ -779,9 +741,11 @@ class CigManager:
             anchor,
             parameters,
             iso=self.iso,
+            clock_remainder=phase,
         )
         stream.stage = Setup.ACTIVE
-        stream.deadline_us = 0
+        stream.setup_deadline_us = 0
+        stream.response_timer = None
 
     def _snapshot(self, stream: Cis) -> CisEstablished:
         params, tx, rx = (
@@ -824,25 +788,19 @@ class CigManager:
     def _configure_paths(self, stream: Cis) -> None:
         """Refresh ISOAL timing while preserving the Central's configured HCI paths."""
         params = stream.parameters
-        previous = self.iso.streams.get(stream.handle, {})
-        if previous:
-            self.iso.release(stream.handle)
         for forward, direction in ((True, params.c_to_p), (False, params.p_to_c)):
-            if not direction.bn:
-                continue
-            transmit = stream.central == forward
-            self.iso.add(
+            self.iso.configure_direction(
                 stream.handle,
-                transmit,
-                direction.isoal(framed=params.framed, interval_us=params.interval_us),
+                transmit=stream.central == forward,
+                parameters=direction.isoal(
+                    framed=params.framed, interval_us=params.interval_us
+                )
+                if direction.bn
+                else None,
                 synchronization_delay_us=params.synchronization_delay_us(
-                    central_to_peripheral=forward,
+                    central_to_peripheral=forward
                 ),
             )
-            if (old := previous.get(transmit)) is not None:
-                path = self.iso.get_stream(stream.handle, transmit)
-                path.configured = old.configured
-                path.controller_delay_us = old.controller_delay_us
 
     def _release(self, stream: Cis) -> None:
         if not stream.central:
@@ -852,14 +810,13 @@ class CigManager:
             return
         self._configure_paths(stream)
         stream.stage = Setup.CONFIGURED
+        stream.queued_setup = None
         stream.connection = stream.event = stream.window = stream.indication = None
         stream.reported = False
         stream.cancellation = False
-        stream.deadline_us = 0
+        stream.setup_deadline_us = 0
+        stream.response_timer = None
         stream.failure = None
-        group = self.groups[stream.cig_id]
-        if not any(item.event is not None for item in group.streams.values()):
-            group.anchor_us = None
 
     def _finish(self, stream: Cis, reason: int) -> None:
         if self.streams.get(stream.handle) is not stream or stream.connection is None:
@@ -870,30 +827,31 @@ class CigManager:
         handle, reported = stream.handle, stream.reported
         self._release(stream)
         if reported:
-            self.link.listener.on_cis_disconnected(handle, reason)
+            self.listener.on_cis_disconnected(handle, reason)
         else:
-            self.link.listener.on_cis_established(CisEstablished(handle), reason)
+            self.listener.on_cis_established(CisEstablished(handle), reason)
 
     def _cancelled(self, stream: Cis) -> None:
         self._release(stream)
-        self.link.listener.on_cis_established(CisEstablished(stream.handle), CANCELLED)
-        self.link.listener.on_cis_disconnected(stream.handle, LOCAL_TERMINATED)
+        self.listener.on_cis_established(CisEstablished(stream.handle), CANCELLED)
+        self.listener.on_cis_disconnected(stream.handle, LOCAL_TERMINATED)
 
     def _locally_terminated(self, stream: Cis) -> None:
         self._finish(stream, LOCAL_TERMINATED)
 
-    def _expire(self, stream: Cis) -> None:
-        if stream.stage == Setup.HOST:
+    def _expire(self, stream: Cis, deadline: int) -> None:
+        if (
+            stream.response_timer is not None
+            and stream.response_timer.deadline_us == deadline
+        ):
+            stream.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
+        elif stream.stage == Setup.HOST:
             stream.connection.controls.reject(
                 Opcode.LL_CIS_REQ, ErrorCode.CONNECTION_ACCEPT_TIMEOUT_ERROR
             )
             self._finish(stream, ErrorCode.CONNECTION_ACCEPT_TIMEOUT_ERROR)
-        elif stream.stage in (Setup.REQUEST, Setup.RESPONSE):
-            stream.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
         elif stream.stage == Setup.INDICATION:
             stream.connection.complete(ErrorCode.INSTANT_PASSED_ERROR)
-        elif stream.stage == Setup.TERMINATING:
-            self._locally_terminated(stream)
         elif stream.event is not None:
             self._finish(
                 stream,
@@ -903,26 +861,44 @@ class CigManager:
             )
 
     async def _wait_until(self, deadline: int) -> None:
-        await self.link.radio.advance_to_us(deadline)
+        await self.radio.advance_to_us(deadline)
+
+    def _active_stream(self, event: CisEvent) -> Cis | None:
+        stream = self.streams.get(event.handle)
+        if (
+            stream is not None
+            and stream.event is event
+            and stream.stage == Setup.ACTIVE
+            and not event.connection.closed
+        ):
+            return stream
+        return None
 
     async def run(self, event: CisEvent) -> None:
-        stream = self.streams.get(event.handle)
-        if stream is None or stream.event is not event or stream.stage != Setup.ACTIVE:
+        stream = self._active_stream(event)
+        if stream is None:
             return
+
+        def is_current() -> bool:
+            # A Host command can release the CIS during a PHY wait, even if a
+            # new CIS already has the same numeric handle when the wait ends.
+            return self._active_stream(event) is stream
+
         await event.advance(
+            is_current=is_current,
             on_established=None
             if stream.reported
-            else partial(self._report_established, stream)
+            else partial(self._report_established, event),
         )
-        if event.mic_failed and stream.event is event and stream.stage == Setup.ACTIVE:
+        if event.mic_failed and is_current():
             self._finish(
                 stream, ErrorCode.CONNECTION_TERMINATED_DUE_TO_MIC_FAILURE_ERROR
             )
 
-    def _report_established(self, stream: Cis) -> None:
-        if stream.stage == Setup.ACTIVE:
+    def _report_established(self, event: CisEvent) -> None:
+        if (stream := self._active_stream(event)) is not None:
             stream.reported = True
-            self.link.listener.on_cis_established(self._snapshot(stream), SUCCESS)
+            self.listener.on_cis_established(self._snapshot(stream), SUCCESS)
 
     def prepare(self) -> list[PendingOperation]:
         operations = []
@@ -944,9 +920,14 @@ class CigManager:
                     stream, ErrorCode.CONNECTION_TERMINATED_BY_LOCAL_HOST_ERROR
                 )
                 continue
-            deadline = event.deadline_us if event is not None else stream.deadline_us
-            if deadline and deadline <= self.link.now_us:
-                self._expire(stream)
+            deadline = (
+                event.deadline_us if event is not None else stream.setup_deadline_us
+            )
+            if stream.response_timer is not None:
+                response_deadline = stream.response_timer.deadline_us
+                deadline = min(deadline or response_deadline, response_deadline)
+            if deadline and deadline <= self.radio.now_us:
+                self._expire(stream, deadline)
                 continue
             if deadline:
                 operations.append(
@@ -975,10 +956,7 @@ class CigManager:
             return True
         if stream.stage != Setup.REQUEST:
             return False
-        payload = CisRequest(
-            stream.cig_id, stream.cis_id, stream.parameters, stream.window
-        ).encode()
-        return stream.connection.event.cancel_queued_control(payload)
+        return stream.connection.event.cancel_queued_control(stream.queued_setup)
 
     def reservations(self, exclude: object = None) -> list[RadioReservation]:
         return [

@@ -1,7 +1,7 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-"""Controller-defined parameters within their Core specification ranges.
+"""Controller-defined parameters and resource limits.
 
 Precedence: built-in defaults, ``defaults``, ``controllers.<name>``, keyword
 arguments. JSON keys are camelCase or snake_case. Invalid or unknown entries are
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 def _option(default: int, low: int, high: int) -> Any:
-    """A field with its inclusive specification range."""
+    """A field with its inclusive configuration range."""
     return field(default=default, metadata={'range': (low, high)})
 
 
@@ -68,6 +68,8 @@ class ControllerConfig:
     # 7.8.103 / 7.8.106 BIG resources; each BIG contains 1–31 BISes.
     max_bigs: int = _option(4, 1, 0xF0)
     max_bis: int = _option(16, 1, 0x0EFF)
+    # Local storage limit for LE scanning duplicate reports.
+    max_scan_duplicate_entries: int = _option(1024, 1, 65535)
 
     def __post_init__(self) -> None:
         for item in fields(self):
