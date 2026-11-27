@@ -81,7 +81,7 @@ def connection_request_parameters(link: RadioLink, pdu: bytes) -> Parameters | N
 
 
 def accept_advertising_connection(
-    link: RadioLink, item: Advertising, packet: Received
+    advertising: AdvertisingManager, item: Advertising, packet: Received
 ) -> ConnectionAccepted | None:
     """Validate CONNECT_IND or AUX_CONNECT_REQ before any radio or role change."""
     pdu = packet.pdu
@@ -89,10 +89,11 @@ def accept_advertising_connection(
         pdu[0] & PDU_ADV_TYPE_MASK != AdvertisingPduType.CONNECT_IND
     ):
         return None
+    link = advertising.link
     peer = advertising_request_peer(pdu, item.address)
     if peer is None or (identity := _identity(link, item, peer)) is None:
         return None
-    if not link.roles.connections.can_accept(peer):
+    if not advertising.can_accept_connection(peer):
         return None
     if (
         item.target is None

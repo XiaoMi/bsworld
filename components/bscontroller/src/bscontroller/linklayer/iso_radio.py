@@ -19,14 +19,13 @@ from bscontroller.linklayer.isoal import IsoPdu
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.broadcast import Big, BroadcastManager
-    from bscontroller.linklayer.link import RadioLink
 
 
-async def run_big_event(link: RadioLink, manager: BroadcastManager, group: Big) -> None:
+async def run_big_event(manager: BroadcastManager, group: Big) -> None:
     info = group.info
     assert info is not None
-    window = group.reservation(link.sleep_clock_accuracy)
-    admitted = link.resource.admit(
+    window = group.reservation(manager.sleep_clock_accuracy)
+    admitted = manager.resource.admit(
         group, window.start_us, window.start_us + window.duration_us, window.priority
     )
     received_pdus = (
@@ -80,9 +79,11 @@ async def run_big_event(link: RadioLink, manager: BroadcastManager, group: Big) 
                 if info.encrypted
                 else pdu.data
             )
-            if nominal < link.radio.earliest_start_us(channel, info.phy, transmit=True):
+            if nominal < manager.radio.earliest_start_us(
+                channel, info.phy, transmit=True
+            ):
                 continue
-            await link.transmit(
+            await manager.transmit(
                 channel,
                 bytes([header, len(data)]) + data,
                 start_us=nominal,
@@ -95,16 +96,16 @@ async def run_big_event(link: RadioLink, manager: BroadcastManager, group: Big) 
             manager.iso.get_stream(handle, True).transmitted(payload_count)
         else:
             widening = group.receive_window_us(
-                nominal, link.sleep_clock_accuracy, active=received
+                nominal, manager.sleep_clock_accuracy, active=received
             )
             until = nominal + widening + info.phy.address_us
             if group.deadline_us is not None:
                 until = min(until, group.deadline_us)
-            start = max(link.now_us + 1, nominal - widening)
+            start = max(manager.radio.now_us + 1, nominal - widening)
             if start >= until:
                 continue
             manager.listening(group)
-            packet = await link.radio.receive(
+            packet = await manager.radio.receive(
                 channel,
                 until,
                 start_us=start,
@@ -150,11 +151,11 @@ async def run_big_event(link: RadioLink, manager: BroadcastManager, group: Big) 
         group.control is not None if group.transmit else received and control_announced
     )
     if control_needed:
-        await _control(link, manager, group)
+        await _control(manager, group)
     manager.completed(group, received_pdus)
 
 
-async def _control(link: RadioLink, manager: BroadcastManager, group: Big) -> None:
+async def _control(manager: BroadcastManager, group: Big) -> None:
     info = group.info
     assert info is not None
     nominal = group.next_us + info.control_offset_us
@@ -171,8 +172,8 @@ async def _control(link: RadioLink, manager: BroadcastManager, group: Big) -> No
             if info.encrypted
             else payload
         )
-        if nominal >= link.radio.earliest_start_us(channel, info.phy, transmit=True):
-            await link.transmit(
+        if nominal >= manager.radio.earliest_start_us(channel, info.phy, transmit=True):
+            await manager.transmit(
                 channel,
                 bytes([header, len(data)]) + data,
                 start_us=nominal,
@@ -181,14 +182,16 @@ async def _control(link: RadioLink, manager: BroadcastManager, group: Big) -> No
                 phy=info.phy,
             )
         return
-    widening = group.receive_window_us(nominal, link.sleep_clock_accuracy, active=True)
-    start = max(link.now_us + 1, nominal - widening)
+    widening = group.receive_window_us(
+        nominal, manager.sleep_clock_accuracy, active=True
+    )
+    start = max(manager.radio.now_us + 1, nominal - widening)
     until = nominal + widening + info.phy.address_us
     if group.deadline_us is not None:
         until = min(until, group.deadline_us)
     if start >= until:
         return
-    packet = await link.radio.receive(
+    packet = await manager.radio.receive(
         channel,
         until,
         start_us=start,

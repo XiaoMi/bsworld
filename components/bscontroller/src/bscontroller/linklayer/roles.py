@@ -361,6 +361,9 @@ class LinkRoles:
             link,
             pending_initiation=self.scanning.pawr_initiating,
             connect=partial(pawr_connect, link),
+            can_accept_connection=self.connections.can_accept,
+            accept_connection=self.accepted,
+            sending_connect_response=self.sending_connect_response,
             channel_map=lambda: self.host_channel_map,
             big_info=lambda handle, start_us: self.broadcast.advertising_info(
                 handle, start_us
@@ -368,8 +371,15 @@ class LinkRoles:
         )
         self.iso = IsoDataPaths(link.listener)
         self.broadcast = BroadcastManager(
-            link,
+            link.radio,
+            link.listener,
             self.iso,
+            resource=link.resource,
+            config=link.config,
+            random=link.random,
+            sleep_clock_accuracy=lambda: link.sleep_clock_accuracy,
+            transmit=link.transmit,
+            used_access_addresses=link.used_access_addresses,
             available_handles=self.available_connection_handles,
             free_handle_count=self.free_connection_handle_count,
             find_advertiser=self.advertising.contexts.get,
