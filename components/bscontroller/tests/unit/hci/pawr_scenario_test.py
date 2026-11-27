@@ -347,7 +347,7 @@ def test_response_reports_fragment_and_preserve_slot_order(host):
         SlotResponse(1, None),
         SlotResponse(2, b'tail', -43),
     ]
-    host.notify('on_response_report', host.ll.advertising.snapshot(0), 3, True, source)
+    host.notify('on_response_report', host.link.advertisers[0], 3, True, source)
     entries = []
     while host.events:
         event = host.ut_rx(

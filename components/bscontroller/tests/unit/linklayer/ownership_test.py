@@ -25,9 +25,9 @@ from bscontroller.linklayer import roles
 from bscontroller.linklayer.api import (
     AdvertisingConfig,
     AdvertisingPayload,
+    AdvertisingTermination,
     ConnectionSnapshot,
     PeriodicSyncConfig,
-    advertising_snapshot,
 )
 from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.discovery import Advertising, PeriodicSync
@@ -526,7 +526,8 @@ def test_released_advertiser_cannot_notify_the_host_after_handle_reuse(connectio
     old = Advertising(
         connection.peer, handle=7, enabled=True, pawr=PawrTiming(1, 8, 1, 2)
     )
-    current = replace(old)
+    target = Address(bytes(connection.peer), connection.peer.address_type)
+    current = replace(old, target=target, events=3)
     manager.publish(old)
     manager.remove(old.handle)
     manager.publish(current)
@@ -541,7 +542,18 @@ def test_released_advertiser_cannot_notify_the_host_after_handle_reuse(connectio
         if item is old:
             assert not sink.mock_calls
 
-    assert [call.args[0].handle for call in sink.mock_calls] == [7, 7, 7, 7]
+    assert [call.args[0] for call in sink.mock_calls[:3]] == [7, 7, 7]
+    (ended,) = sink.on_advertising_ended.call_args_list
+    report, status = ended.args
+    target.address_bytes = bytes(6)
+    current.events = 0
+    assert isinstance(report, AdvertisingTermination)
+    assert (report.handle, report.target, report.completed_events) == (
+        7,
+        connection.peer,
+        3,
+    )
+    assert status == ErrorCode.ADVERTISING_TIMEOUT_ERROR
 
 
 def test_notification_contract_reaches_the_hci_receiver(connection):
@@ -559,7 +571,7 @@ def test_notification_contract_reaches_the_hci_receiver(connection):
     sink = create_autospec(NotificationSink, instance=True, spec_set=True)
     adapter = NotificationAdapter(sink)
     address = connection.peer
-    item = advertising_snapshot(Advertising(address, handle=0))
+    item = Advertising(address, handle=0)
     values = dict(
         connection=connection,
         item=item,

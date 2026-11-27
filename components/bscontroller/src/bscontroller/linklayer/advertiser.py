@@ -45,7 +45,6 @@ from bscontroller.linklayer.api import (
     AddressSnapshot,
     AdvertisingConfig,
     AdvertisingPayload,
-    advertising_snapshot,
 )
 from bscontroller.linklayer.channel_selection import channel_selection_2
 from bscontroller.linklayer.discovery import Advertising
@@ -343,11 +342,11 @@ class AdvertisingManager:
     def expire(self, item: Advertising, reason: int) -> None:
         if item.enabled and self.owns(item):
             self.stop(item)
-            self.link.listener.on_advertising_ended(advertising_snapshot(item), reason)
+            self.link.listener.on_advertising_ended(item, reason)
 
     def report_scan_request(self, item: Advertising, peer: Address) -> None:
         if self.owns(item):
-            self.link.listener.on_scan_request(advertising_snapshot(item), peer)
+            self.link.listener.on_scan_request(item, peer)
 
     async def expire_deadline(self, item: Advertising) -> None:
         self.expire(item, ErrorCode.ADVERTISING_TIMEOUT_ERROR)
@@ -496,7 +495,7 @@ class AdvertisingManager:
         assert timing is not None and state is not None
         state.window = state.next_window(current, timing.num_subevents)
         self.link.listener.on_subevent_data_request(
-            advertising_snapshot(item),
+            item,
             state.window.start % timing.num_subevents,
             len(state.window),
         )
@@ -610,7 +609,7 @@ class AdvertisingManager:
                 )
             else:
                 self.link.listener.on_response_report(
-                    advertising_snapshot(item),
+                    item,
                     current.subevent,
                     False,
                     [SlotResponse(slot, None) for slot in slots],
@@ -641,7 +640,7 @@ class AdvertisingManager:
         if not responses.slots:
             state.listening.remove(responses)
             self.link.listener.on_response_report(
-                advertising_snapshot(item),
+                item,
                 responses.subevent,
                 True,
                 responses.responses,
