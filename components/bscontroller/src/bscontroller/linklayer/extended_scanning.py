@@ -13,11 +13,13 @@ from bscontroller.address import Address, AddressType, OwnAddressType
 from bscontroller.linklayer import (
     LL_CONN_AUX_WINDOW_DELAY_CODED_US,
     LL_CONN_AUX_WINDOW_DELAY_UNCODED_US,
-    LL_IFS_US,
     PDU_ADV_ADDRESS_SIZE,
     PDU_ADV_ADI_DID_BITS,
     PDU_ADV_AUX_CONNECT_RSP_SIZE,
     PDU_ADV_CONNECT_SIZE,
+    PDU_ADV_EXT_PAYLOAD_SIZE_MAX,
+    PDU_ADV_SCAN_REQ_SIZE,
+    PDU_HEADER_SIZE,
     AdvertisingMode,
     AdvertisingPduType,
 )
@@ -309,7 +311,6 @@ async def _report_advertisement(
         or ext.mode != AdvertisingMode.SCANNABLE
         or not target_matches
         or channel is None
-        or not scan.backoff.permit()
     ):
         return
     result = await _request_scan_response(
@@ -328,18 +329,29 @@ async def _request_scan_response(
     link: RadioLink, scan, channel, received, ext, address, identity
 ):
     """Send AUX_SCAN_REQ and bind AUX_SCAN_RSP to this advertiser and ADI."""
+    slot = link.interframe_slot(
+        channel,
+        received.end_us,
+        PDU_ADV_SCAN_REQ_SIZE,
+        received.phy,
+        response_size=PDU_HEADER_SIZE + PDU_ADV_EXT_PAYLOAD_SIZE_MAX,
+    )
+    if slot is None or not scan.backoff.permit():
+        return None
     scan.address = link.privacy.local_address(
         scan.own_address_type, scan.identity_address or scan.address, identity
     )
     end_us = await link.transmit(
         channel,
         scan_request(scan.address, address),
-        start_us=received.end_us + LL_IFS_US,
+        start_us=slot[0],
         phy=received.phy,
     )
     if link.scan is not scan:
         return None
-    response = await link.receive_response(channel, end_us, received.phy)
+    response = await link.receive_response(
+        channel, end_us, received.phy, deadline_us=link.resource.deadline_us
+    )
     if link.scan is not scan:
         return None
     try:
@@ -366,9 +378,17 @@ async def initiate_extended(link: RadioLink, item, channel, packet, address):
     """
     if not link.roles.connections.can_accept(address):
         return
+    slot = link.interframe_slot(
+        channel,
+        packet.end_us,
+        PDU_ADV_CONNECT_SIZE,
+        packet.phy,
+        response_size=PDU_ADV_AUX_CONNECT_RSP_SIZE,
+    )
     # 4.4.4.2 reuses the scanner backoff after an unanswered AUX_CONNECT_REQ.
-    if not item.backoff.permit():
+    if slot is None or not item.backoff.permit():
         return
+    start_us, request_end = slot
     item.address, generated = link.privacy.select_local_address(
         item.own_address_type,
         item.identity_address or item.address,
@@ -382,23 +402,20 @@ async def initiate_extended(link: RadioLink, item, channel, packet, address):
         if packet.phy == Phy.LE_CODED
         else LL_CONN_AUX_WINDOW_DELAY_UNCODED_US
     )
-    request_end = (
-        packet.end_us + LL_IFS_US + packet.phy.airtime_us(PDU_ADV_CONNECT_SIZE)
-    )
     parameters = link.connection_parameters(
         parameters, request_end, window_delay, packet.phy
     )
-    if parameters is None or not link.resource.fits_radio(
-        request_end + LL_IFS_US + packet.phy.airtime_us(PDU_ADV_AUX_CONNECT_RSP_SIZE)
-    ):
+    if parameters is None:
         return
     request = connect_request(item.address, address, parameters)
     request_end = await link.transmit(
-        channel, request, start_us=packet.end_us + LL_IFS_US, phy=packet.phy
+        channel, request, start_us=start_us, phy=packet.phy
     )
     if link.initiating is not item:
         return
-    response = await link.receive_response(channel, request_end, packet.phy)
+    response = await link.receive_response(
+        channel, request_end, packet.phy, deadline_us=link.resource.deadline_us
+    )
     if link.initiating is not item:
         return
     if response is None:
