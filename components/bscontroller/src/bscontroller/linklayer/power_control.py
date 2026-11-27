@@ -308,8 +308,8 @@ class PowerControl(LocalProcedure):
             else:
                 fail(ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
 
-        self.connection.llcp.initiate(
-            DeferredProcedure('power_read', start, fail), defer=True
+        self.connection.llcp.queue_for_event(
+            DeferredProcedure('power_read', start, fail)
         )
 
     def _report(

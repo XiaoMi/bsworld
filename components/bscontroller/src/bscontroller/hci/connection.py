@@ -302,7 +302,7 @@ class LeConnectionCommands(LeControllerContext):
         )
 
     def on_hci_le_enable_encryption_command(self, command):
-        return self.ll.prepare_encryption(
+        return self.ll.enable_encryption(
             command.connection_handle,
             command.random_number,
             command.encrypted_diversifier,
@@ -416,10 +416,10 @@ class LeConnectionCommands(LeControllerContext):
         return SUCCESS
 
     def on_hci_le_read_remote_features_command(self, command):
-        return self.ll.prepare_features(command.connection_handle)
+        return self.ll.read_remote_features(command.connection_handle)
 
     def on_hci_le_read_all_remote_features_command(self, command):
-        return self.ll.prepare_features(
+        return self.ll.read_remote_features(
             command.connection_handle, command.pages_requested
         )
 
@@ -433,10 +433,10 @@ class LeConnectionCommands(LeControllerContext):
         return self.on_hci_le_set_host_feature_command(command)
 
     def on_hci_read_remote_version_information_command(self, command):
-        return self.ll.prepare_version(command.connection_handle)
+        return self.ll.read_remote_version(command.connection_handle)
 
     def on_hci_le_connection_update_command(self, command):
-        return self.ll.prepare_parameters(
+        return self.ll.request_connection_update(
             command.connection_handle,
             command.connection_interval_min,
             command.connection_interval_max,
@@ -460,7 +460,7 @@ class LeConnectionCommands(LeControllerContext):
 
     def on_hci_le_subrate_request_command(self, command):
         """Request a subrate change for an ACL (Core Vol 4, Part E, 7.8.124)."""
-        return self.ll.prepare_subrate(
+        return self.ll.request_subrate(
             command.connection_handle,
             command.subrate_min,
             command.subrate_max,
@@ -485,7 +485,7 @@ class LeConnectionCommands(LeControllerContext):
 
     def on_hci_le_connection_rate_request_command(self, command):
         """Request new connection timing (Core Vol 4, Part E, 7.8.154)."""
-        return self.ll.prepare_connection_rate(
+        return self.ll.request_connection_rate(
             command.connection_handle, self._connection_rate_parameters(command)
         )
 
@@ -503,7 +503,7 @@ class LeConnectionCommands(LeControllerContext):
 
     def on_hci_le_frame_space_update_command(self, command):
         """Request new frame spacing (Core Vol 4, Part E, 7.8.151)."""
-        return self.ll.prepare_frame_space(
+        return self.ll.request_frame_space(
             command.connection_handle,
             command.frame_space_min,
             command.frame_space_max,
@@ -617,7 +617,7 @@ class LeConnectionCommands(LeControllerContext):
             if command.phy_options == HCI_LE_PHY_OPTIONS_S2_PREFERRED
             else PHY_CODED_S8_FACTOR
         )
-        return self.ll.prepare_phy(command.connection_handle, *phys, coding)
+        return self.ll.request_phy(command.connection_handle, *phys, coding)
 
     def on_hci_acl_data_packet(self, packet):
         if packet.connection_handle not in self.controller.le_connections:

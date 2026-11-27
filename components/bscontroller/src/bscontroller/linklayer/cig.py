@@ -479,8 +479,9 @@ class CigManager:
                 else:
                     self._schedule_creation(stream, procedure)
 
-        connection.llcp.initiate(
-            DeferredProcedure('cis_creation', start, ready=ready), defer=True
+        # Use the event's applied Instants and current schedule to pick the window.
+        connection.llcp.queue_for_event(
+            DeferredProcedure('cis_creation', start, ready=ready)
         )
 
     def _respond(self, stream: Cis) -> None:

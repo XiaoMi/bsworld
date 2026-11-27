@@ -50,22 +50,18 @@ class ClockAccuracyProcedure(LocalProcedure):
         )
 
     def queue_read(self) -> None:
-        self.owner.connection.llcp.initiate(
-            DeferredProcedure(
-                'clock_accuracy', lambda: self._start(None), self._report
-            ),
-            defer=True,
+        self.owner.connection.llcp.queue_for_event(
+            DeferredProcedure('clock_accuracy', lambda: self._start(None), self._report)
         )
 
     def queue_change(self, accuracy: int) -> None:
         connection = self.owner.connection
-        connection.llcp.initiate(
+        connection.llcp.queue_for_event(
             DeferredProcedure(
                 'clock_accuracy',
                 lambda: self._start(accuracy),
                 ready=lambda: connection.link.can_change_sleep_clock_accuracy,
-            ),
-            defer=True,
+            )
         )
 
     def _start(self, target: int | None) -> None:

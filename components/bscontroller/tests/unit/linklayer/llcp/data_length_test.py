@@ -691,7 +691,7 @@ def test_peripheral_prospective_limit_tracks_request_response(peripheral, local)
     connection = peripheral.connection
     connection.tx_phy = connection.rx_phy = Phy.LE_2M
     if local:
-        peripheral.host_start('prepare_phy', PHY_1M, PHY_1M, 0)
+        peripheral.host_start('request_phy', PHY_1M, PHY_1M, 0)
         opcode = Opcode.LL_PHY_REQ
     else:
         peripheral.event_prepare()

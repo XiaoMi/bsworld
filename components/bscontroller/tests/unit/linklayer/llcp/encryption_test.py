@@ -73,7 +73,7 @@ def assert_data_paused(dut):
 # ---------------------------------------------------------------------------
 def central_start(dut, *, refresh=False):
     """Drive the Central through ENC_REQ ... START_ENC_RSP; stop before the end."""
-    dut.host_start('prepare_encryption', RAND, EDIV, LTK)
+    dut.host_start('enable_encryption', RAND, EDIV, LTK)
     dut.event_prepare()
     request = dut.lt_rx(Opcode.LL_ENC_REQ)
     assert request[1:9] == RAND and request[9:11] == EDIV.to_bytes(2, 'little')
@@ -156,7 +156,7 @@ def test_central_loc_start_refused(central, response, status):
         - Host gets Encryption Change with the expected failure status, disabled.
         - Data is not paused, the link is not closed, and encryption stays off.
     """
-    central.host_start('prepare_encryption', RAND, EDIV, LTK)
+    central.host_start('enable_encryption', RAND, EDIV, LTK)
     central.event_prepare()
     central.lt_rx(Opcode.LL_ENC_REQ)
     central.lt_tx(response)
@@ -169,7 +169,7 @@ def test_central_loc_start_refused(central, response, status):
 
 def test_host_channel_map_waits_for_encryption(central):
     """Hold the Host classification until Encryption Start releases this ACL (6.B.5)."""
-    central.host_start('prepare_encryption', RAND, EDIV, LTK)
+    central.host_start('enable_encryption', RAND, EDIV, LTK)
     central.lt_rx(Opcode.LL_ENC_REQ)
     central.hci(
         hci.HCI_LE_Set_Host_Channel_Classification_Command((0x1F).to_bytes(5, 'little'))
@@ -197,7 +197,7 @@ def test_central_loc_start_refused_after_enc_rsp(central):
         - Host gets Encryption Change (PIN_OR_KEY_MISSING).
         - Encryption stays off in both directions.
     """
-    central.host_start('prepare_encryption', RAND, EDIV, LTK)
+    central.host_start('enable_encryption', RAND, EDIV, LTK)
     central.event_prepare()
     central.lt_rx(Opcode.LL_ENC_REQ)
     central.lt_tx(enc_rsp())
@@ -226,7 +226,7 @@ def test_central_loc_start_timeout(central):
         - The timer does not fire one microsecond early but fires at the deadline.
         - Host gets Disconnection Complete (LMP_OR_LL_RESPONSE_TIMEOUT).
     """
-    central.host_start('prepare_encryption', RAND, EDIV, LTK)
+    central.host_start('enable_encryption', RAND, EDIV, LTK)
     central.event_prepare()
     central.lt_rx(Opcode.LL_ENC_REQ)
     central.tx_ack()
@@ -254,7 +254,7 @@ def test_central_unexpected_pdu_during_start_closes_link(central, opcode):
         - Host gets Disconnection Complete
           (CONNECTION_TERMINATED_DUE_TO_MIC_FAILURE).
     """
-    central.host_start('prepare_encryption', RAND, EDIV, LTK)
+    central.host_start('enable_encryption', RAND, EDIV, LTK)
     central.event_prepare()
     central.lt_rx(Opcode.LL_ENC_REQ)
     central.lt_tx(enc_rsp())
@@ -313,22 +313,22 @@ def test_central_plaintext_on_encrypted_link_closes(central):
 def test_central_host_admission(central):
     """Only one Encryption Start may be admitted at a time on the Central.
 
-    Purpose: Verify Host admission control: a second prepare_encryption while one
+    Purpose: Verify Host admission control: a second enable_encryption while one
     is outstanding, and a supply_key on the Central, are both refused with Command
     Disallowed (5.1.3).
 
     Steps:
         1. Host starts Encryption Start successfully.
-        2. Host tries prepare_encryption again.
+        2. Host tries enable_encryption again.
         3. Host calls supply_key.
 
     Expected:
-        - The second prepare_encryption returns COMMAND_DISALLOWED.
+        - The second enable_encryption returns COMMAND_DISALLOWED.
         - supply_key returns COMMAND_DISALLOWED.
     """
-    central.host_start('prepare_encryption', RAND, EDIV, LTK)
+    central.host_start('enable_encryption', RAND, EDIV, LTK)
     central.host_start(
-        'prepare_encryption', RAND, EDIV, LTK, status=ErrorCode.COMMAND_DISALLOWED_ERROR
+        'enable_encryption', RAND, EDIV, LTK, status=ErrorCode.COMMAND_DISALLOWED_ERROR
     )
     assert central.host('supply_key', LTK) == ErrorCode.COMMAND_DISALLOWED_ERROR
 
@@ -336,17 +336,17 @@ def test_central_host_admission(central):
 def test_peripheral_cannot_start_encryption(peripheral):
     """A Peripheral cannot initiate Encryption Start.
 
-    Purpose: Verify that a Host prepare_encryption on a Peripheral is refused with
+    Purpose: Verify that a Host enable_encryption on a Peripheral is refused with
     Command Disallowed, since only the Central may start encryption (5.1.3).
 
     Steps:
-        1. Host calls prepare_encryption on the Peripheral.
+        1. Host calls enable_encryption on the Peripheral.
 
     Expected:
         - The call returns COMMAND_DISALLOWED.
     """
     peripheral.host_start(
-        'prepare_encryption', RAND, EDIV, LTK, status=ErrorCode.COMMAND_DISALLOWED_ERROR
+        'enable_encryption', RAND, EDIV, LTK, status=ErrorCode.COMMAND_DISALLOWED_ERROR
     )
 
 
@@ -403,7 +403,7 @@ def test_central_loc_refresh(central):
     """
     central.enable_encryption()
     central.connection.enqueue_acl(False, b'queued')
-    central.host_start('prepare_encryption', RAND, EDIV, LTK)
+    central.host_start('enable_encryption', RAND, EDIV, LTK)
     central.event_prepare()
     central.lt_rx(Opcode.LL_PAUSE_ENC_REQ)
     # Encrypted pause response from the peer turns encryption off on both sides.
@@ -449,7 +449,7 @@ def test_central_loc_refresh_failure_closes_link(central):
         - Encryption is off in both directions.
     """
     central.enable_encryption()
-    central.host_start('prepare_encryption', RAND, EDIV, LTK)
+    central.host_start('enable_encryption', RAND, EDIV, LTK)
     central.event_prepare()
     central.lt_rx(Opcode.LL_PAUSE_ENC_REQ)
     central.lt_tx(pdu(Opcode.LL_PAUSE_ENC_RSP))
@@ -901,7 +901,7 @@ def phy_then_enc_req(dut, *, extended=False):
     dut.set_peer_features(
         int(LeFeatureMask.EXTENDED_REJECT_INDICATION) if extended else 0
     )
-    dut.host_start('prepare_phy', PHY_1M, PHY_1M, 0)
+    dut.host_start('request_phy', PHY_1M, PHY_1M, 0)
     dut.event_prepare()
     dut.lt_rx(Opcode.LL_PHY_REQ)
     dut.lt_tx(enc_req())
@@ -926,7 +926,7 @@ def test_delayed_feature_unknown_rsp_survives_ignored_page(peripheral, wrong_pag
         The connection stays open, Encryption Start retains its own deadline,
         and rejecting the missing key resumes the paused data path.
     """
-    peripheral.host_start('prepare_features', pages=1)
+    peripheral.host_start('read_remote_features', pages=1)
     peripheral.event_prepare()
     peripheral.lt_rx(Opcode.LL_PERIPHERAL_FEATURE_REQ)
     peripheral.lt_tx(pdu(Opcode.LL_FEATURE_RSP, (1 << 63).to_bytes(8, 'little')))
@@ -1115,7 +1115,7 @@ def test_other_control_waits_for_encryption(central, payload):
         - While encrypting, only an Empty PDU is sent and no control PDU waits.
         - After IDLE the queued control PDU is transmitted.
     """
-    central.host_start('prepare_encryption', RAND, EDIV, LTK)
+    central.host_start('enable_encryption', RAND, EDIV, LTK)
     central.connection.llcp.respond(payload)
     central.event_prepare()
     central.lt_rx(Opcode.LL_ENC_REQ)
@@ -1141,7 +1141,7 @@ def test_phy_update_completes_before_encryption(central):
         - Host gets LE PHY Update Complete (SUCCESS).
         - No local exchange remains recorded.
     """
-    central.host_start('prepare_phy', PHY_1M, PHY_1M, 0)
+    central.host_start('request_phy', PHY_1M, PHY_1M, 0)
     central.event_prepare()
     central.lt_rx(Opcode.LL_PHY_REQ)
     central.lt_tx(phy_rsp(PHY_1M, PHY_1M))

@@ -588,7 +588,7 @@ def test_min_used_waits_for_pending_instant(narrow):
     """
     controls = narrow.controls
     narrow.set_peer_features(0)
-    narrow.host_start('prepare_parameters', 40, 40, 0, 100)
+    narrow.host_start('request_connection_update', 40, 40, 0, 100)
     update = narrow.lt_rx(Opcode.LL_CONNECTION_UPDATE_IND)
     narrow.lt_tx(min_used(PHY_1M, 4))
     narrow.lt_rx_q_is_empty()
@@ -673,7 +673,7 @@ def test_min_used_periph_loc(peripheral, acknowledged):
         - If the ACK does not arrive, T_PRT expires and closes the ACL.
     """
     peripheral.set_peer_features(int(MIN_USED))
-    peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
+    peripheral.host_start('request_phy', PHY_2M, PHY_2M, 0)
     peripheral.lt_rx(Opcode.LL_PHY_REQ)
     peripheral.tx_ack()
     peripheral.controls.request_minimum_channels(PHY_1M, LL_DATA_CHANNEL_COUNT)
@@ -692,7 +692,7 @@ def test_min_used_periph_loc(peripheral, acknowledged):
     peripheral.lt_rx(
         Opcode.LL_MIN_USED_CHANNELS_IND, min_used(PHY_1M, LL_DATA_CHANNEL_COUNT)
     )
-    peripheral.host_start('prepare_version')
+    peripheral.host_start('read_remote_version')
     peripheral.event_done()
     peripheral.event_prepare()
     assert llcp.local_procedure_busy and not peripheral.connection.event.queue

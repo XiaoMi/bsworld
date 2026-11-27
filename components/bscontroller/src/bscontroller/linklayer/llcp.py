@@ -23,7 +23,6 @@ from bscontroller.linklayer import (
     ControlOpcode,
     LlId,
 )
-from bscontroller.linklayer.api import PreparedProcedure
 from bscontroller.linklayer.control import ControlProcedures
 from bscontroller.linklayer.data_length import valid_data_length
 from bscontroller.linklayer.encryption import KEY_MISSING_REJECTIONS, Encryption, State
@@ -104,10 +103,14 @@ class LlcpCoordinator:
             )
         )
 
-    def initiate(self, procedure: DeferredProcedure, *, defer: bool = False) -> None:
-        """Queue one local LL procedure. A prerequisite may delay its start."""
+    def queue_for_event(self, procedure: DeferredProcedure) -> None:
+        """Wait for ACL event preparation before trying to start a procedure."""
         self._deferred.append(procedure)
-        if not defer and len(self._deferred) == 1:
+
+    def initiate(self, procedure: DeferredProcedure) -> None:
+        """Start a local procedure if its slot is free, otherwise keep it queued."""
+        self.queue_for_event(procedure)
+        if len(self._deferred) == 1:
             self.start_deferred()
 
     def has_pending(self, kind: str) -> bool:
@@ -181,12 +184,11 @@ class LlcpCoordinator:
 
         self.initiate(DeferredProcedure(opcode.name, start))
 
-    def _prepare(
-        self, procedure: DeferredProcedure, *, active: bool = False
-    ) -> PreparedProcedure:
+    def _request(self, procedure: DeferredProcedure, *, active: bool = False) -> int:
         if active or self.has_pending(procedure.kind):
-            return PreparedProcedure(DISALLOWED)
-        return PreparedProcedure(SUCCESS, lambda: self.initiate(procedure))
+            return DISALLOWED
+        self.initiate(procedure)
+        return SUCCESS
 
     @property
     def all_features_pending(self) -> bool:
@@ -503,39 +505,37 @@ class LlcpCoordinator:
             # LL_UNKNOWN_RSP itself: two Link Layers would echo each other forever.
             self.respond(bytes([Opcode.LL_UNKNOWN_RSP, opcode]), priority=True)
 
-    def prepare_subrate(self, request: SubrateRequest) -> PreparedProcedure:
+    def request_subrate(self, request: SubrateRequest) -> int:
         if self.controls.rate.in_progress or self.has_pending('connection_rate'):
-            return PreparedProcedure(DISALLOWED)
+            return DISALLOWED
         if not self.connection.fits_cis_supervision_timeout(request.timeout):
-            return PreparedProcedure(INVALID)
+            return INVALID
         subrating = self.controls.subrating
         if not subrating.peer_supported:
-            return PreparedProcedure(ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
-        return self._prepare(
+            return ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
+        return self._request(
             DeferredProcedure(
                 'subrate', lambda: subrating.request(request), subrating.report
             ),
             active=subrating.pending,
         )
 
-    def prepare_connection_rate(
-        self, parameters: ConnectionRateParameters
-    ) -> PreparedProcedure:
+    def request_connection_rate(self, parameters: ConnectionRateParameters) -> int:
         rate = self.controls.rate
         if status := rate.validate(parameters):
-            return PreparedProcedure(status)
-        return self._prepare(
+            return status
+        return self._request(
             DeferredProcedure(
                 'connection_rate', lambda: rate.request(parameters), rate.report
             ),
             active=rate.in_progress,
         )
 
-    def prepare_frame_space(self, request: FrameSpaceRequest) -> PreparedProcedure:
+    def request_frame_space(self, request: FrameSpaceRequest) -> int:
         frame_space = self.controls.frame_space
         if status := frame_space.validate(request):
-            return PreparedProcedure(status)
-        return self._prepare(
+            return status
+        return self._request(
             DeferredProcedure(
                 'frame_space',
                 lambda: frame_space.request(request),
@@ -544,23 +544,21 @@ class LlcpCoordinator:
             active=frame_space.pending,
         )
 
-    def prepare_encryption(
-        self, rand: bytes, ediv: int, key: bytes
-    ) -> PreparedProcedure:
+    def enable_encryption(self, rand: bytes, ediv: int, key: bytes) -> int:
         connection = self.connection
         if (
             connection.role != Role.CENTRAL
             or self.encryption.busy
             or self.cig.has_created_cis(connection)
         ):
-            return PreparedProcedure(DISALLOWED)
-        return self._prepare(
+            return DISALLOWED
+        return self._request(
             DeferredProcedure(
                 'encryption', lambda: self.encryption.start(rand, ediv, key)
             ),
         )
 
-    def prepare_features(self, pages: int | None = None) -> PreparedProcedure:
+    def read_remote_features(self, pages: int | None = None) -> int:
         features = self.controls.features
         kind = 'features' if pages is None else 'all_features'
         if (
@@ -568,37 +566,34 @@ class LlcpCoordinator:
             or self.has_pending('features')
             or self.has_pending('all_features')
         ):
-            return PreparedProcedure(DISALLOWED)
-
-        def start():
-            if features.can_report_cached(pages):
-                features.request(pages)
-            else:
-                self.initiate(
-                    DeferredProcedure(
-                        kind,
-                        lambda: features.request(pages),
-                        lambda status: features.report(status, pages),
-                    )
+            return DISALLOWED
+        if features.can_report_cached(pages):
+            features.request(pages)
+        else:
+            self.initiate(
+                DeferredProcedure(
+                    kind,
+                    lambda: features.request(pages),
+                    lambda status: features.report(status, pages),
                 )
+            )
+        return SUCCESS
 
-        return PreparedProcedure(SUCCESS, start)
-
-    def prepare_version(self) -> PreparedProcedure:
+    def read_remote_version(self) -> int:
         if self.controls.version_request or self.has_pending('version'):
-            return PreparedProcedure(DISALLOWED)
+            return DISALLOWED
         if self.controls.peer_version is not None:
-            return PreparedProcedure(SUCCESS, self.controls.request_version)
-        return self._prepare(
-            DeferredProcedure('version', self.controls.request_version)
-        )
+            self.controls.request_version()
+            return SUCCESS
+        self.initiate(DeferredProcedure('version', self.controls.request_version))
+        return SUCCESS
 
-    def prepare_phy(self, tx: int, rx: int, coding: int) -> PreparedProcedure:
+    def request_phy(self, tx: int, rx: int, coding: int) -> int:
         def request():
             self.connection.tx_coding = coding
             self.controls.phy.request_phy(tx, rx)
 
-        return self._prepare(
+        return self._request(
             DeferredProcedure('phy', request), active=self.controls.phy.phy_request
         )
 
@@ -611,13 +606,13 @@ class LlcpCoordinator:
             or self.has_pending('connection_rate')
         )
 
-    def prepare_parameters(
+    def request_connection_update(
         self,
         minimum: int,
         maximum: int,
         latency: int,
         timeout: int,
-    ) -> PreparedProcedure:
+    ) -> int:
         def valid_request() -> bool:
             return (
                 self.connection.fits_cis_supervision_timeout(timeout)
@@ -632,12 +627,12 @@ class LlcpCoordinator:
             )
 
         if not valid_request():
-            return PreparedProcedure(INVALID)
+            return INVALID
         if (
             self.connection.role == Role.PERIPHERAL
             and not self.controls.connection_parameters.supports_parameter_request
         ):
-            return PreparedProcedure(ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
+            return ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
 
         def complete(status: int) -> None:
             self.controls.listener.on_connection_updated(self.connection, status)
@@ -660,7 +655,7 @@ class LlcpCoordinator:
                     allowed_minimum, maximum, latency, timeout
                 )
 
-        return self._prepare(
+        return self._request(
             DeferredProcedure('parameters', request, complete),
             active=self.controls.connection_parameters.parameter_request,
         )

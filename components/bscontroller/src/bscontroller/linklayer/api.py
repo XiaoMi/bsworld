@@ -10,7 +10,6 @@ values so an upper layer cannot mutate an active LL context.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -32,24 +31,6 @@ from bscontroller.radio.base import Phy
 if TYPE_CHECKING:
     from bscontroller.linklayer.connection import Connection
     from bscontroller.linklayer.discovery import Advertising, PeriodicSync
-
-
-@dataclass
-class PreparedProcedure:
-    """An admitted operation started after HCI has published Command Status.
-
-    The HCI command handler queues Command Status and starts the action in the
-    same callback. Some procedures complete immediately from cached information.
-    Starting consumes the action so a caller cannot accidentally run it twice.
-    """
-
-    status: int
-    action: Callable[[], None] | None = None
-
-    def start(self) -> None:
-        action, self.action = self.action, None
-        if action is not None:
-            action()
 
 
 @dataclass(frozen=True, eq=False, init=False)

@@ -37,7 +37,6 @@ from bscontroller.config import ControllerConfig
 from bscontroller.errors import InvalidPacketError
 from bscontroller.hci.records import AdvertisingSet, ConnectionRecord, LegacyAdvertiser
 from bscontroller.hci.transport import TransportSink
-from bscontroller.linklayer.api import PreparedProcedure
 from bscontroller.linklayer.features import (
     FEATURE_SET_SIZE,
     feature_max_page,
@@ -223,8 +222,8 @@ class Controller:
                 else command.error_return_parameters(status, command.parameters)
             )
         else:
-            # LL callbacks can complete synchronously during admission or cancellation.
-            # Publish the command response before any notifications it generated.
+            # The handler runs without yielding on the Controller loop. Buffer
+            # its notifications until the command response has been queued.
             self._command_events = events
             try:
                 result = handler(command)
@@ -232,16 +231,13 @@ class Controller:
                 self._command_events = None
 
         if asynchronous:
-            status = result.status if isinstance(result, PreparedProcedure) else result
-            self._send_hci_command_status(status, command.op_code)
+            self._send_hci_command_status(result, command.op_code)
         else:
             self.send_hci_packet(
                 hci.HCI_Command_Complete_Event(1, command.op_code, result)
             )
         for event in events:
             self.send_hci_packet(event)
-        if isinstance(result, PreparedProcedure):
-            result.start()
 
     def send_event(self, event: hci.HCI_Event) -> None:
         if self._command_events is None:

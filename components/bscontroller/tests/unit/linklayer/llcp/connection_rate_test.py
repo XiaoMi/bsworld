@@ -110,7 +110,7 @@ def test_peer_rate_request_waits_for_local_version(central, peer_features_known)
         central.link.features |= HOST_BIT | SUBRATING
         central.set_peer_features(LeFeatureMask.LL_EXTENDED_FEATURE_SET)
 
-    central.host_start('prepare_version')
+    central.host_start('read_remote_version')
     central.lt_rx(Opcode.LL_VERSION_IND)
     central.tx_ack()
     request = ConnectionRateParameters(60, 70)

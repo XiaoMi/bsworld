@@ -81,7 +81,7 @@ def test_extended_feature_wrong_page_keeps_exchange(iut, role):
         The matching page completes successfully with exactly the supplied data.
     """
     dut = iut(role)
-    dut.host_start('prepare_features', pages=1)
+    dut.host_start('read_remote_features', pages=1)
     dut.event_prepare()
     dut.lt_rx(request_opcode(role))
     dut.lt_tx(feature(Opcode.LL_FEATURE_RSP, 1 << 63))
@@ -121,7 +121,7 @@ def test_feature_loc(iut, role):
         - The second request completes from the cache with no PDU on air.
     """
     dut = iut(role)
-    dut.host_start('prepare_features')
+    dut.host_start('read_remote_features')
     dut.event_prepare()
     sent = dut.lt_rx(request_opcode(role))
     assert sent[1:] == local_page_zero(dut).to_bytes(FEATURE_PAGE_ZERO_SIZE, 'little')
@@ -135,7 +135,7 @@ def test_feature_loc(iut, role):
         and dut.connection.llcp.response_deadline_us is None
     )
     # The second request is served from the cache, without air traffic.
-    dut.host_start('prepare_features')
+    dut.host_start('read_remote_features')
     dut.ut_rx(FEATURES_DONE, status=0)
     dut.lt_rx_q_is_empty()
 
@@ -156,8 +156,8 @@ def test_feature_loc_busy(iut, role):
         - Only one request PDU is queued.
     """
     dut = iut(role)
-    dut.host_start('prepare_features')
-    dut.host_start('prepare_features', status=ErrorCode.COMMAND_DISALLOWED_ERROR)
+    dut.host_start('read_remote_features')
+    dut.host_start('read_remote_features', status=ErrorCode.COMMAND_DISALLOWED_ERROR)
     assert len(dut.connection.event.queue) == 1
 
 
@@ -191,7 +191,7 @@ def test_feature_loc_refused(iut, role, response, status):
     """
     dut = iut(role)
     opcode = request_opcode(role)
-    dut.host_start('prepare_features')
+    dut.host_start('read_remote_features')
     dut.event_prepare()
     dut.lt_rx(opcode)
     if response is None:
@@ -227,7 +227,7 @@ def test_feature_loc_timeout(iut, role):
         - Host then gets Disconnection Complete (response timeout); nothing else.
     """
     dut = iut(role)
-    dut.host_start('prepare_features')
+    dut.host_start('read_remote_features')
     dut.event_prepare()
     dut.lt_rx(request_opcode(role))
     dut.tx_ack()
@@ -258,7 +258,7 @@ def test_feature_loc_disconnect(iut, role):
         - No further Host notification.
     """
     dut = iut(role)
-    dut.host_start('prepare_features')
+    dut.host_start('read_remote_features')
     dut.connection.complete(ErrorCode.CONNECTION_TIMEOUT_ERROR)
     dut.ut_rx(FEATURES_DONE, status=ErrorCode.CONNECTION_TIMEOUT_ERROR)
     dut.ut_rx(DISCONNECTED, reason=ErrorCode.CONNECTION_TIMEOUT_ERROR)
@@ -284,7 +284,7 @@ def test_feature_loc_wrong_length_response_is_unknown(iut, role):
         - No Host notification is produced.
     """
     dut = iut(role)
-    dut.host_start('prepare_features')
+    dut.host_start('read_remote_features')
     dut.event_prepare()
     dut.lt_rx(request_opcode(role))
     dut.lt_tx(bytes([Opcode.LL_FEATURE_RSP]) + bytes(4))
@@ -318,7 +318,7 @@ def test_feature_loc_after_peer_already_exchanged(central):
     central.lt_rx(Opcode.LL_FEATURE_RSP)
     central.tx_ack()
     central.event_done()
-    central.host_start('prepare_features')
+    central.host_start('read_remote_features')
     event = central.ut_rx(FEATURES_DONE, status=0)
     assert le_features(event) == PEER_FEATURES
     central.lt_rx_q_is_empty()
@@ -436,7 +436,7 @@ def test_feature_collision_loc_and_rem(iut, role):
         - Host finally gets Read Remote Features Complete (SUCCESS), nothing else.
     """
     dut = iut(role)
-    dut.host_start('prepare_features')
+    dut.host_start('read_remote_features')
     # The peer's own request arrives before ours is answered.
     peer_opcode = request_opcode(PERIPHERAL if role == CENTRAL else CENTRAL)
     dut.event_prepare()
@@ -490,8 +490,8 @@ def test_version_loc(iut, role):
     """
     dut = iut(role)
     local = configure_version(dut)
-    dut.host_start('prepare_version')
-    dut.host_start('prepare_version', status=ErrorCode.COMMAND_DISALLOWED_ERROR)
+    dut.host_start('read_remote_version')
+    dut.host_start('read_remote_version', status=ErrorCode.COMMAND_DISALLOWED_ERROR)
     dut.event_prepare()
     dut.lt_rx(Opcode.LL_VERSION_IND, bytes([Opcode.LL_VERSION_IND]) + local)
     dut.lt_tx(version_ind(9, 0x1234, 0x5678))
@@ -503,7 +503,7 @@ def test_version_loc(iut, role):
     # Our VERSION_IND is sent at most once per connection.
     dut.run_events(1)
     # A later request completes from the cache.
-    dut.host_start('prepare_version')
+    dut.host_start('read_remote_version')
     dut.ut_rx(VERSION_DONE, status=0, version=9)
     dut.lt_rx_q_is_empty()
 
@@ -569,7 +569,7 @@ def test_version_collision_loc_and_rem(iut, role):
     """
     dut = iut(role)
     configure_version(dut)
-    dut.host_start('prepare_version')
+    dut.host_start('read_remote_version')
     # The peer's indication arrives before ours is transmitted.
     dut.event_prepare()
     dut.lt_tx(version_ind(9, 2, 3))
@@ -600,7 +600,7 @@ def test_version_loc_timeout(iut, role):
         - Host then gets Disconnection Complete (response timeout); nothing else.
     """
     dut = iut(role)
-    dut.host_start('prepare_version')
+    dut.host_start('read_remote_version')
     dut.event_prepare()
     dut.lt_rx(Opcode.LL_VERSION_IND)
     dut.tx_ack()
@@ -628,7 +628,7 @@ def test_version_loc_disconnect_reports_only_disconnection(iut, role):
         - The version request state is cleared.
     """
     dut = iut(role)
-    dut.host_start('prepare_version')
+    dut.host_start('read_remote_version')
     dut.connection.complete(ErrorCode.CONNECTION_TIMEOUT_ERROR)
     dut.ut_rx(DISCONNECTED, reason=ErrorCode.CONNECTION_TIMEOUT_ERROR)
     dut.ut_rx_q_is_empty()
@@ -637,10 +637,10 @@ def test_version_loc_disconnect_reports_only_disconnection(iut, role):
 
 def test_version_timer_starts_after_feature_exchange(central):
     """A queued Version Exchange gets a full timeout after Feature Exchange."""
-    central.host_start('prepare_features')
+    central.host_start('read_remote_features')
     first = central.controls.features.deadline_us
     central.elapse(1000)
-    central.host_start('prepare_version')
+    central.host_start('read_remote_version')
     assert central.controls.version_deadline_us is None
     assert central.connection.llcp.response_deadline_us == first
     central.controls.features.finish(ErrorCode.SUCCESS)
@@ -704,22 +704,22 @@ def test_cached_completion_follows_command_status(central, operation):
     assert isinstance(events[1], event_type)
 
 
-@pytest.mark.parametrize('method', ['prepare_features', 'prepare_version'])
+@pytest.mark.parametrize('method', ['read_remote_features', 'read_remote_version'])
 def test_unknown_handle(central, method):
-    """Preparing an exchange on an unknown handle is refused.
+    """A remote features or version read on an unknown handle is refused.
 
-    Purpose: Verify that preparing either exchange for a connection handle that
+    Purpose: Verify that requesting either exchange for a connection handle that
     does not exist fails with Unknown Connection Identifier, for both the
     features and the version entry point.
 
     Steps:
-        1. Call the prepare method with handle 0x0EFF.
+        1. Call the read method with handle 0x0EFF.
 
     Expected:
-        - The prepared procedure's status is Unknown Connection Identifier.
+        - The status is Unknown Connection Identifier.
     """
-    prepared = getattr(central.controller.le_procedures.ll, method)(0x0EFF)
-    assert prepared.status == ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+    status = getattr(central.controller.le_procedures.ll, method)(0x0EFF)
+    assert status == ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
 
 
 @pytest.mark.parametrize('role', ROLES)
@@ -747,7 +747,7 @@ def test_hci_only_features_are_never_sent_in_acl_exchange(iut, role, local):
     baseline = local_page_zero(dut)
     dut.link.features |= excluded
     if local:
-        dut.host_start('prepare_features')
+        dut.host_start('read_remote_features')
     else:
         dut.lt_tx(
             feature(request_opcode(PERIPHERAL if role == CENTRAL else CENTRAL), 0)

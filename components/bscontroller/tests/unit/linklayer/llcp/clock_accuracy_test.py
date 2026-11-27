@@ -27,7 +27,10 @@ def modify(iut, action, status=ErrorCode.SUCCESS):
 
 def test_local_clock_improves_before_request_and_degrades_after_response(central):
     nominal_us = central.connection.parameters.interval * LL_CONN_INTERVAL_UNIT_US
+    previous_accuracy = central.link.sleep_clock_accuracy
     modify(central, 0)
+    assert central.link.sleep_clock_accuracy == previous_accuracy
+    assert not central.connection.event.queue
     central.event_prepare()
     assert central.link.sleep_clock_accuracy == 7
     central.lt_rx(Opcode.LL_CLOCK_ACCURACY_REQ, pdu(Opcode.LL_CLOCK_ACCURACY_REQ, 7))

@@ -342,7 +342,7 @@ def test_transfer_owns_the_acl_until_first_transmission(central):
     central.event_prepare()
     deadline = central.radio.now_us + LL_RESPONSE_TIMEOUT_US
     assert central.connection.llcp.next_deadline_us == deadline
-    central.host_start('prepare_version')
+    central.host_start('read_remote_version')
     packet = central.lt_rx(Opcode.LL_PERIODIC_SYNC_IND)
     assert central.connection.llcp.next_deadline_us is None
     central.lt_rx(Opcode.LL_PERIODIC_SYNC_IND, packet)

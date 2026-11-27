@@ -264,7 +264,7 @@ def test_reserved_llid_participates_in_arq_only(central):
         - No pending event, no remote termination is recorded.
         - No control PDU is queued and no ACL data is delivered to the Host.
     """
-    central.host_start('prepare_features')
+    central.host_start('read_remote_features')
     central.lt_rx(Opcode.LL_FEATURE_REQ)
     # A reserved-LLID PDU acknowledges, but its payload is never interpreted.
     central.lt_tx_raw(LlId.RESERVED, terminate_ind(REMOTE))
@@ -397,7 +397,7 @@ def test_terminate_loc_preempts_queued_traffic(iut, role):
     """
     dut = iut(role)
     dut.connection.enqueue_acl(False, b'queued data')
-    dut.host_start('prepare_version')
+    dut.host_start('read_remote_version')
     dut.host('disconnect', REMOTE)
     dut.lt_rx(Opcode.LL_TERMINATE_IND)
 
@@ -422,7 +422,7 @@ def test_terminate_rem_during_procedure(iut, role):
           local exchange remains.
     """
     dut = iut(role)
-    dut.host_start('prepare_features')
+    dut.host_start('read_remote_features')
     dut.lt_rx(
         Opcode.LL_FEATURE_REQ if role == CENTRAL else Opcode.LL_PERIPHERAL_FEATURE_REQ
     )

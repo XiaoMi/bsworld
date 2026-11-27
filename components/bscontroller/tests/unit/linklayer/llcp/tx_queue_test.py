@@ -82,7 +82,7 @@ def test_control_only(iut, role):
         - No further control PDU is queued.
     """
     dut = iut(role)
-    dut.host_start('prepare_version')
+    dut.host_start('read_remote_version')
     assert dut.lt_rx(Opcode.LL_VERSION_IND)
     dut.tx_ack()
     dut.lt_rx_q_is_empty()
@@ -105,7 +105,7 @@ def test_control_and_data_keep_fifo_order(iut, role):
     """
     dut = iut(role)
     dut.connection.enqueue_acl(False, b'first')
-    dut.host_start('prepare_phy', 2, 2, 0)
+    dut.host_start('request_phy', 2, 2, 0)
     dut.connection.enqueue_acl(False, b'second')
     assert dut.lt_rx_data().payload == b'first'
     dut.tx_ack()
@@ -129,7 +129,7 @@ def test_version_indication_is_prioritized(iut, role):
     """
     dut = iut(role)
     dut.connection.enqueue_acl(False, b'data')
-    dut.host_start('prepare_version')
+    dut.host_start('read_remote_version')
     dut.lt_rx(Opcode.LL_VERSION_IND)
 
 
@@ -210,7 +210,7 @@ def test_data_paused_during_encryption_resumes_after(central):
         - After release the data goes out in order: 'before' then 'after'.
     """
     central.connection.enqueue_acl(False, b'before')
-    central.host_start('prepare_encryption', bytes(8), 0, LTK)
+    central.host_start('enable_encryption', bytes(8), 0, LTK)
     central.connection.enqueue_acl(False, b'after')
     central.lt_rx(Opcode.LL_ENC_REQ)
     central.tx_ack()
@@ -294,7 +294,7 @@ def test_multiple_pause_resume(central):
     central.enable_encryption()
     central.connection.enqueue_acl(False, b'kept')
     for _ in range(2):
-        central.host_start('prepare_encryption', bytes(8), 0, LTK)
+        central.host_start('enable_encryption', bytes(8), 0, LTK)
         central.lt_rx(Opcode.LL_PAUSE_ENC_REQ)
         central.lt_tx(pdu(Opcode.LL_PAUSE_ENC_RSP))
         central.lt_rx(Opcode.LL_PAUSE_ENC_RSP)
@@ -488,7 +488,7 @@ def test_failed_receive_observes_ack_without_consuming_pending(central):
     """
     from types import SimpleNamespace
 
-    central.host_start('prepare_phy', 1, 1, 0)
+    central.host_start('request_phy', 1, 1, 0)
     central.lt_rx(Opcode.LL_PHY_REQ)
     event = central.connection.event
     pending, wire = event.pending, event.pending_wire
