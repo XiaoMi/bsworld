@@ -62,6 +62,7 @@ class PhyProcedure:
             self.control,
             origin=origin,
             host_initiated=origin == ProcedureOrigin.LOCAL,
+            blocks_local=origin == ProcedureOrigin.REMOTE,
             on_sent=self._sent,
         )
         return self.context
@@ -162,17 +163,10 @@ class PhyProcedure:
                 if (
                     connection.role == Role.PERIPHERAL
                     and self.phy_request_local
-                    and not (
-                        self.owner.pending
-                        or self.remote_phy_request
-                        or self.owner.connection_parameters.remote_parameters
-                        or self.owner.connection_parameters.parameter_request
-                        or self.owner.data_length.pending
-                        or self.owner.feature_request
-                    )
+                    and not self.owner.peer_instant_blocked(allow_local_collision=True)
                 ):
                     self.remote_phy_request = payload
-                elif self.owner.peer_instant_blocked:
+                elif self.owner.peer_instant_blocked():
                     self.owner.reject(
                         opcode,
                         (

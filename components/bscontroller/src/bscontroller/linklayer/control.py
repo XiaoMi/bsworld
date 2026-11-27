@@ -52,7 +52,6 @@ from bscontroller.linklayer.procedure import (
     DeferredProcedure,
     ProcedureCompletion,
     ProcedureContext,
-    ProcedureOrigin,
 )
 from bscontroller.linklayer.state import Role
 from bscontroller.linklayer.subrating import Subrating
@@ -128,29 +127,22 @@ class ControlProcedures:
     def listener(self) -> ControlListener:
         return self.connection.link.listener
 
-    @property
-    def peer_instant_blocked(self) -> bool:
-        """Preserve the admission gates for peer-initiated Instant procedures."""
-        return bool(
-            self.pending
-            or self.connection_parameters.remote_parameters
-            or self.connection_parameters.parameter_request
-            or self.phy.phy_request
-            or self.data_length.pending
-            or self.feature_request
-        )
-
-    @property
-    def blocks_local_procedure(self) -> bool:
-        """Keep the shared Instant and peer decision paths available."""
+    def peer_instant_blocked(self, *, allow_local_collision: bool = False) -> bool:
+        """Check the shared Instant and any negotiations that can affect it."""
         return (
             self.pending is not None
-            or self.connection_parameters.remote_parameters is not None
+            or self.connection_parameters.remote_pending
+            or self.phy.remote_phy_request is not None
+            or self.data_length.pending
+            or self.feature_request
+            or (
+                not allow_local_collision
+                and self.connection_parameters.parameter_request
+            )
             or (
                 self.phy.phy_request
-                and self.phy.context.origin == ProcedureOrigin.REMOTE
+                and not (allow_local_collision and self.phy.phy_request_local)
             )
-            or self.frame_space.response is not None
         )
 
     def _instant_phys(self, update: InstantUpdate) -> tuple[int, int]:
