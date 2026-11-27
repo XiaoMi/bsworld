@@ -23,6 +23,7 @@ from bscontroller.linklayer.advertising_event import (
     periodic_time_us,
 )
 from bscontroller.linklayer.advertising_pdu import ExtendedPdu
+from bscontroller.linklayer.api import AdvertisingPayload
 from bscontroller.linklayer.discovery import Advertising, PeriodicSync
 from bscontroller.linklayer.state import (
     AdvertisingProperties,
@@ -147,9 +148,9 @@ def test_record_views_follow_ll_payloads_and_are_immutable(host):
     host.cmd(extended_parameters(advertising_event_properties=16))
     record = host.controller.advertising_sets[0]
     service = host.ll.advertising
-    service.store_data(0, 'data', b'advertising data')
-    service.store_data(0, 'scan_response', b'scan response')
-    service.store_data(0, 'periodic_data', b'periodic data')
+    service.store_data(0, AdvertisingPayload.ADVERTISING, b'advertising data')
+    service.store_data(0, AdvertisingPayload.SCAN_RESPONSE, b'scan response')
+    service.store_data(0, AdvertisingPayload.PERIODIC, b'periodic data')
     snapshot = record.data
     assert isinstance(snapshot, bytes)
     with pytest.raises(AttributeError):
@@ -165,7 +166,7 @@ def test_record_views_follow_ll_payloads_and_are_immutable(host):
         b'scan response',
         b'periodic data',
     )
-    service.store_data(0, 'data', b'new')
+    service.store_data(0, AdvertisingPayload.ADVERTISING, b'new')
     assert record.data == b'new' and snapshot == b'advertising data'
 
 
@@ -506,6 +507,25 @@ def test_fragments_publish_only_on_last(host):
     host.cmd(
         data(0, Operation.LAST_FRAGMENT, b'orphan'), ErrorCode.COMMAND_DISALLOWED_ERROR
     )
+
+
+def test_interleaved_advertising_and_periodic_fragments_stay_separate(host):
+    """Assemble each payload independently and reject a partial periodic train."""
+    host.cmd(extended_parameters(advertising_event_properties=0))
+    host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Parameters_Command(0, 80, 80, 0))
+    host.cmd(data(0, Operation.FIRST_FRAGMENT, b'adv-'))
+    host.cmd(periodic_data(0, Operation.FIRST_FRAGMENT, b'periodic-'))
+    host.cmd(data(0, Operation.LAST_FRAGMENT, b'tail'))
+
+    record = host.controller.advertising_sets[0]
+    assert record.data == b'adv-tail'
+    assert not record.periodic_advertising_data
+    enable = hci.HCI_LE_Set_Periodic_Advertising_Enable_Command(1, 0)
+    host.cmd(enable, ErrorCode.COMMAND_DISALLOWED_ERROR)
+
+    host.cmd(periodic_data(0, Operation.LAST_FRAGMENT, b'tail'))
+    assert record.periodic_advertising_data == b'periodic-tail'
+    host.cmd(enable)
 
 
 def test_oversize_sequence_discards_all_data(host):

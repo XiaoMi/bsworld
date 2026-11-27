@@ -39,7 +39,7 @@ from bscontroller.linklayer import (
     AdvertisingPduType,
 )
 from bscontroller.linklayer.advertising_pdu import AdvertisingCoding
-from bscontroller.linklayer.api import AdvertisingConfig
+from bscontroller.linklayer.api import AdvertisingConfig, AdvertisingPayload
 from bscontroller.linklayer.pawr import (
     LL_PAWR_RESPONSE_SLOT_DELAY_MAX,
     LL_PAWR_RESPONSE_SLOT_DELAY_MIN,
@@ -227,7 +227,9 @@ class LeAdvertisingCommands(LeControllerContext):
             return hci.HCI_StatusReturnParameters(INVALID)
         self.ll.advertising.configure_legacy(self._legacy_configuration())
         self.ll.advertising.store_data(
-            LEGACY_ADVERTISING_HANDLE, 'data', command.advertising_data
+            LEGACY_ADVERTISING_HANDLE,
+            AdvertisingPayload.ADVERTISING,
+            command.advertising_data,
         )
         return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
 
@@ -239,7 +241,9 @@ class LeAdvertisingCommands(LeControllerContext):
             return hci.HCI_StatusReturnParameters(INVALID)
         self.ll.advertising.configure_legacy(self._legacy_configuration())
         self.ll.advertising.store_data(
-            LEGACY_ADVERTISING_HANDLE, 'scan_response', command.scan_response_data
+            LEGACY_ADVERTISING_HANDLE,
+            AdvertisingPayload.SCAN_RESPONSE,
+            command.scan_response_data,
         )
         return hci.HCI_StatusReturnParameters(hci.HCI_ErrorCode.SUCCESS)
 
@@ -499,14 +503,15 @@ class LeAdvertisingCommands(LeControllerContext):
             )
         )
 
-    def _set_data(self, handle, operation, data, field):
+    def _set_data(
+        self, handle: int, operation: int, data: bytes, payload: AdvertisingPayload
+    ) -> hci.HCI_StatusReturnParameters:
         """Assemble and publish one advertising payload from HCI fragments.
 
         See Bluetooth Core 6.3, Vol 4, Part E, 7.8.54, 7.8.55 and 7.8.62.
 
-        ``field`` selects advertising, scan-response or periodic data. Keep each
-        partial assembly in ``self.fragments`` until LAST/COMPLETE publishes it
-        to the advertiser. Check the operation and state before changing buffers.
+        Keep each partial assembly in ``self.fragments`` until LAST/COMPLETE
+        publishes it. Check the operation and state before changing buffers.
         Once FIRST/COMPLETE discards the previous payload, later length/airtime
         failures leave it empty rather than restoring the old data.
         """
@@ -514,9 +519,11 @@ class LeAdvertisingCommands(LeControllerContext):
         if item is None:
             return hci.HCI_StatusReturnParameters(UNKNOWN_ADV)
 
-        # Stage fragments by set and payload field, so interleaved commands cannot
+        # Stage fragments by set and payload, so interleaved commands cannot
         # append advertising data to a scan-response or periodic-data sequence.
-        key = (handle, field)
+        key = (handle, payload)
+        scan_response = payload is AdvertisingPayload.SCAN_RESPONSE
+        periodic = payload is AdvertisingPayload.PERIODIC
         maximum = (
             self.controller.config.max_advertising_data_length
             if item.extended
@@ -525,23 +532,23 @@ class LeAdvertisingCommands(LeControllerContext):
         # Scannable extended events put their data in AUX_SCAN_RSP; other modes
         # cannot provide scan data (Vol 6, Part B, 4.4.2.11; Vol 4, Part E, 7.8.55).
         if item.extended and (
-            (field == 'data' and item.mode == AdvertisingMode.SCANNABLE and data)
-            or (
-                field == 'scan_response'
-                and item.mode != AdvertisingMode.SCANNABLE
+            (
+                payload is AdvertisingPayload.ADVERTISING
+                and item.mode == AdvertisingMode.SCANNABLE
                 and data
             )
+            or (scan_response and item.mode != AdvertisingMode.SCANNABLE and data)
         ):
             return hci.HCI_StatusReturnParameters(INVALID)
         if item.target is not None and not item.extended and data:
             # A legacy directed PDU contains the two addresses, with no data field.
             return hci.HCI_StatusReturnParameters(INVALID)
         if operation not in tuple(DataOperation) or (
-            field == 'scan_response' and operation == DataOperation.UNCHANGED_DATA
+            scan_response and operation == DataOperation.UNCHANGED_DATA
         ):
             return hci.HCI_StatusReturnParameters(INVALID)
         if (
-            field != 'periodic_data'
+            not periodic
             and not item.extended
             and (
                 operation != DataOperation.COMPLETE_DATA
@@ -557,9 +564,7 @@ class LeAdvertisingCommands(LeControllerContext):
         ):
             return hci.HCI_StatusReturnParameters(INVALID)
 
-        if (
-            item.enabled or (field == 'periodic_data' and item.periodic_enabled)
-        ) and operation not in (
+        if (item.enabled or (periodic and item.periodic_enabled)) and operation not in (
             DataOperation.COMPLETE_DATA,
             DataOperation.UNCHANGED_DATA,
         ):
@@ -568,13 +573,11 @@ class LeAdvertisingCommands(LeControllerContext):
             return hci.HCI_StatusReturnParameters(DISALLOWED)
         if operation == DataOperation.UNCHANGED_DATA:
             # Periodic data requires its own train to be enabled (7.8.62).
-            enabled = (
-                item.periodic_enabled if field == 'periodic_data' else item.enabled
-            )
-            if data or not enabled or not getattr(item, field):
+            enabled = item.periodic_enabled if periodic else item.enabled
+            if data or not enabled or not getattr(item, payload.value):
                 return hci.HCI_StatusReturnParameters(INVALID)
             # Renew the data identity without replacing the payload bytes.
-            self.ll.advertising.renew_data_identity(handle, field)
+            self.ll.advertising.renew_data_identity(handle, payload)
             return hci.HCI_StatusReturnParameters(SUCCESS)
 
         if (
@@ -589,7 +592,7 @@ class LeAdvertisingCommands(LeControllerContext):
             # FIRST/COMPLETE starts a new sequence: discard both staged and published
             # data. A later failure leaves the payload empty rather than restoring it.
             self.fragments.pop(key, None)
-            self.ll.advertising.store_data(handle, field, b'')
+            self.ll.advertising.store_data(handle, payload, b'')
 
         value = (
             self.fragments.get(key, b'')
@@ -600,18 +603,18 @@ class LeAdvertisingCommands(LeControllerContext):
         if len(value) > maximum:
             # Abandon the entire oversized sequence; later fragments must not revive it.
             self.fragments.pop(key, None)
-            self.ll.advertising.store_data(handle, field, b'')
+            self.ll.advertising.store_data(handle, payload, b'')
             return hci.HCI_StatusReturnParameters(
                 hci.HCI_ErrorCode.MEMORY_CAPACITY_EXCEEDED_ERROR
             )
 
         # LL checks the candidate's PDU placement and airtime without publishing it.
-        if self.ll.advertising.validate_data(handle, field, value) != SUCCESS:
+        if self.ll.advertising.validate_data(handle, payload, value) != SUCCESS:
             # Check airtime separately from byte capacity. Connectable data must fit
             # one AUX_ADV_IND; other trains must fit the configured interval
             # (Vol 4, Part E, 7.8.54/7.8.55/7.8.62; 7.8.56).
             self.fragments.pop(key, None)
-            self.ll.advertising.store_data(handle, field, b'')
+            self.ll.advertising.store_data(handle, payload, b'')
             return hci.HCI_StatusReturnParameters(
                 hci.HCI_ErrorCode.PACKET_TOO_LONG_ERROR
             )
@@ -619,14 +622,17 @@ class LeAdvertisingCommands(LeControllerContext):
         if operation in (DataOperation.LAST_FRAGMENT, DataOperation.COMPLETE_DATA):
             # Reserve room for both the advertising work and the running periodic
             # train before publishing the completed payload.
-            if self.ll.advertising.publication_status(handle, field, value) != SUCCESS:
+            if (
+                self.ll.advertising.publication_status(handle, payload, value)
+                != SUCCESS
+            ):
                 self.fragments.pop(key, None)
                 return hci.HCI_StatusReturnParameters(DISALLOWED)
 
             # Publish only on LAST/COMPLETE, renewing the payload's data identity
             # once, and release staging storage after the payload becomes visible
             # to LL.
-            self.ll.advertising.store_data(handle, field, value, renew=True)
+            self.ll.advertising.store_data(handle, payload, value, renew=True)
             self.fragments.pop(key, None)
         else:
             self.fragments[key] = value
@@ -641,7 +647,7 @@ class LeAdvertisingCommands(LeControllerContext):
             command.advertising_handle,
             command.operation,
             command.advertising_data,
-            'data',
+            AdvertisingPayload.ADVERTISING,
         )
 
     def on_hci_le_set_extended_scan_response_data_command(self, command):
@@ -653,7 +659,7 @@ class LeAdvertisingCommands(LeControllerContext):
             command.advertising_handle,
             command.operation,
             command.scan_response_data,
-            'scan_response',
+            AdvertisingPayload.SCAN_RESPONSE,
         )
 
     def on_hci_le_set_extended_advertising_enable_command(self, command):
@@ -852,7 +858,7 @@ class LeAdvertisingCommands(LeControllerContext):
             command.advertising_handle,
             command.operation,
             command.advertising_data,
-            'periodic_data',
+            AdvertisingPayload.PERIODIC,
         )
 
     def on_hci_le_set_periodic_advertising_enable_command(self, command):
@@ -866,7 +872,8 @@ class LeAdvertisingCommands(LeControllerContext):
         if command.enable & ~int(PERIODIC_ENABLE_BITS):
             return hci.HCI_StatusReturnParameters(UNSUPPORTED)
         enable = bool(command.enable & PeriodicEnable.ENABLE)
-        if enable and (command.advertising_handle, 'periodic_data') in self.fragments:
+        key = (command.advertising_handle, AdvertisingPayload.PERIODIC)
+        if enable and key in self.fragments:
             return hci.HCI_StatusReturnParameters(DISALLOWED)
         # Bit 1 asks for the ADI in AUX_SYNC_IND; disabling ignores it (7.8.63).
         return hci.HCI_StatusReturnParameters(

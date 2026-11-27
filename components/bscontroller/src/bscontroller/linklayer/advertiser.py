@@ -47,6 +47,7 @@ from bscontroller.linklayer.advertising_radio import (
 from bscontroller.linklayer.api import (
     AddressSnapshot,
     AdvertisingConfig,
+    AdvertisingPayload,
     advertising_snapshot,
 )
 from bscontroller.linklayer.channel_selection import channel_selection_2
@@ -220,18 +221,23 @@ class AdvertisingManager:
                 item.address = address
 
     def store_data(
-        self, item: Advertising, field: str, data: bytes, *, renew: bool = False
+        self,
+        item: Advertising,
+        payload: AdvertisingPayload,
+        data: bytes,
+        *,
+        renew: bool = False,
     ) -> None:
-        if field not in ('data', 'scan_response', 'periodic_data'):
-            raise ValueError('unknown advertising payload')
-        setattr(item, field, bytearray(data))
+        setattr(item, payload.value, bytearray(data))
         if renew:
-            self.renew_data_identity(item, field)
+            self.renew_data_identity(item, payload)
 
-    def renew_data_identity(self, item: Advertising, field: str) -> None:
+    def renew_data_identity(
+        self, item: Advertising, payload: AdvertisingPayload
+    ) -> None:
         """Choose a different DID for the set or train (Vol 6, Part B, 4.4.2.11)."""
         value = self.link.random.randrange(PDU_ADV_ADI_DID_MASK)
-        if field == 'periodic_data':
+        if payload is AdvertisingPayload.PERIODIC:
             item.periodic_did = value + (value >= item.periodic_did)
         else:
             item.did = value + (value >= item.did)

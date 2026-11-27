@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING
 
 from bscontroller.address import Address, AddressType, OwnAddressType
@@ -65,6 +66,14 @@ class AddressSnapshot(Address):
 
 def address_snapshot(address: Address | None) -> AddressSnapshot | None:
     return AddressSnapshot(address) if address is not None else None
+
+
+class AdvertisingPayload(Enum):
+    """Payload kind, mapped to its field on an advertising set and its snapshot."""
+
+    ADVERTISING = 'data'
+    SCAN_RESPONSE = 'scan_response'
+    PERIODIC = 'periodic_data'
 
 
 @dataclass(frozen=True)
