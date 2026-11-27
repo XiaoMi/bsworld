@@ -50,6 +50,7 @@ from bscontroller.linklayer import (
     AdvertisingPduType,
     ControlOpcode,
     LlId,
+    advertiser,
 )
 from bscontroller.linklayer.advertising_pdu import ExtendedPdu, SyncInfo
 from bscontroller.linklayer.bitstream import generate_access_address
@@ -73,6 +74,7 @@ from bscontroller.linklayer.results import (
     SyncInfoReceived,
 )
 from bscontroller.linklayer.scheduler import (
+    ONE_SHOT_INTERVAL_US,
     RadioPriority,
     RadioReservation,
     first_radio_gap,
@@ -524,6 +526,49 @@ def test_advertising_event_waits_for_a_free_radio_gap(link):
     run(link, link.roles.advertising.run(item))
     assert not link.radio.sent and item.next_us > link.radio.now_us
     assert item.events == 0
+
+
+@pytest.mark.parametrize('recurring', [True, False], ids=['no-gap', 'one-shot-only'])
+def test_one_shot_reservation_does_not_extend_advertising_search(
+    link, monkeypatch, recurring
+):
+    """Use a finite search horizon while still avoiding the one-shot window."""
+    item = Advertising(
+        SELF,
+        enabled=True,
+        interval_us=100_000,
+        pdu_type=AdvertisingPduType.ADV_IND,
+        data=bytearray(31),
+        scan_response=bytearray(31),
+    )
+    manager = link.roles.advertising
+    manager.publish(0, item)
+    start = link.radio.earliest_start_us(37, item.primary_phy, transmit=True)
+    one_shot = RadioReservation(
+        start, 80, ONE_SHOT_INTERVAL_US, RadioPriority.PERIODIC_RX
+    )
+    reservations = [one_shot]
+    period = 7_500
+    if recurring:
+        reservations.append(RadioReservation(start, 6_000, period))
+    link.resource = RadioResourceManager(lambda: link.now_us, lambda _: reservations)
+
+    def bounded_gap(reserved, start_us, duration_us, latest_us):
+        # Check the bound before running the search so a regression fails promptly.
+        assert latest_us - start_us == (period if recurring else item.interval_us)
+        return first_radio_gap(reserved, start_us, duration_us, latest_us)
+
+    monkeypatch.setattr(advertiser, 'first_radio_gap', bounded_gap)
+    run(link, manager.run(item))
+    assert not link.radio.sent and item.events == 0
+    if recurring:
+        assert item.next_us == start + item.interval_us
+    else:
+        assert item.next_us == one_shot.start_us + one_shot.duration_us
+        run(link, link.radio.advance_to_us(item.next_us - 1))
+        run(link, manager.run(item))
+        assert item.events == 1
+        assert link.radio.sent[0].start_us == one_shot.start_us + one_shot.duration_us
 
 
 # ---------------------------------------------------------------------------

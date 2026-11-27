@@ -588,11 +588,19 @@ class AdvertisingManager:
         reservations = link.resource.reservations()
         if reservations:
             duration = advertising_event_time_us(item)
-            latest = (
-                item.deadline_us - duration
-                if item.deadline_us
-                else start + max(entry.max_interval_us for entry in reservations)
-            )
+            if item.deadline_us:
+                latest = item.deadline_us - duration
+            else:
+                # Derive the horizon from recurring reservations' actual periods.
+                horizon = max(
+                    (
+                        entry.max_interval_us
+                        for entry in reservations
+                        if entry.interval_us != ONE_SHOT_INTERVAL_US
+                    ),
+                    default=item.interval_us,
+                )
+                latest = start + horizon
             gap = first_radio_gap(reservations, start, duration, latest)
             if gap != start:
                 item.next_us = (
