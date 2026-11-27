@@ -500,7 +500,7 @@ class LlcpCoordinator:
             self.respond(bytes([Opcode.LL_UNKNOWN_RSP, opcode]), priority=True)
 
     def request_subrate(self, request: SubrateRequest) -> int:
-        if self.controls.rate.in_progress or self.has_pending('connection_rate'):
+        if self.timing_update_pending:
             return DISALLOWED
         if not self.connection.fits_cis_supervision_timeout(request.timeout):
             return INVALID
