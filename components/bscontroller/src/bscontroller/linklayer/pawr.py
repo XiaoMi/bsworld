@@ -6,7 +6,7 @@
 A PAwR event holds numSubevents subevents. Each subevent starts with an
 AUX_SYNC_SUBEVENT_IND, followed by response slots in which synchronized devices
 send AUX_SYNC_SUBEVENT_RSP (Core Vol 6, Part B, 4.4.2.2.4 and 4.4.2.12.2).
-These records hold no radio operation; periodic.py runs the RF procedures.
+The advertising_radio and synchronization_radio modules run these exchanges.
 
 Subevents are numbered within an event. An *instance* numbers one subevent of
 one event, ``event * numSubevents + subevent``, with an unbounded event index

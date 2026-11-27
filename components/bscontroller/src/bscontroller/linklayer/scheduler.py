@@ -7,7 +7,7 @@
 from dataclasses import dataclass
 from enum import IntEnum
 
-from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND
+from bscontroller.linklayer.timing import fixed_time, project_anchor
 
 # A one-shot reservation's next occurrence lies beyond any simulated horizon.
 ONE_SHOT_INTERVAL_US = 1 << 48
@@ -40,20 +40,19 @@ class RadioReservation:
 
     def window_after(self, time_us: int) -> tuple[int, int]:
         """Include a window already in progress, or the next periodic occurrence."""
-        elapsed = time_us - self.start_us
         if self.interval_fraction:
-            scale = PHY_TIME_UNITS_PER_SECOND
-            interval = self.interval_us * scale + self.interval_fraction
-            phase = self.start_fraction
+            anchor = fixed_time(self.start_us, self.start_fraction)
+            interval = fixed_time(self.interval_us, self.interval_fraction)
+            # A start that rounds down to time_us is already in progress.
+            cycles = max(0, (fixed_time(time_us + 1) - 1 - anchor) // interval)
+            start, _ = project_anchor(anchor, interval, cycles)
+            if start + self.duration_us <= time_us:
+                start, _ = project_anchor(anchor, interval, cycles + 1)
         else:
-            scale, interval, phase = 1, self.interval_us, 0
-        # A start that rounds down to elapsed is already in progress.
-        cycles = max(0, ((elapsed + 1) * scale - 1 - phase) // interval)
-        offset = cycles * interval + phase
-        if offset // scale + self.duration_us <= elapsed:
-            # Half-open intervals allow a new operation exactly at the old end.
-            offset += interval
-        start = self.start_us + offset // scale
+            cycles = max(0, (time_us - self.start_us) // self.interval_us)
+            start = self.start_us + cycles * self.interval_us
+            if start + self.duration_us <= time_us:
+                start += self.interval_us
         return start, start + self.duration_us
 
 

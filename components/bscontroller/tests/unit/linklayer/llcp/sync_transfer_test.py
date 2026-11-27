@@ -240,7 +240,7 @@ def test_set_info_transfer_waits_for_the_first_aux_sync_ind(iut, role, local_sca
     item = periodic_set(dut)
     dut.set_peer_features(RECIPIENT)
     assert set_info_transfer(dut) == ErrorCode.SUCCESS
-    assert dut.connection.llcp.response_deadline_us == 0
+    assert dut.connection.llcp.response_deadline_us is None
     first_us = item.periodic_next_us
     while dut.connection.anchor_us <= first_us:
         dut.run_events(1)
@@ -337,14 +337,14 @@ def test_transfer_owns_the_acl_until_first_transmission(central):
     item = periodic_set(central)
     central.set_peer_features(RECIPIENT)
     assert set_info_transfer(central) == ErrorCode.SUCCESS
-    assert central.connection.llcp.next_deadline_us == 0
+    assert central.connection.llcp.next_deadline_us is None
     transmitted(central, item)
     central.event_prepare()
     deadline = central.radio.now_us + LL_RESPONSE_TIMEOUT_US
     assert central.connection.llcp.next_deadline_us == deadline
     central.host_start('prepare_version')
     packet = central.lt_rx(Opcode.LL_PERIODIC_SYNC_IND)
-    assert central.connection.llcp.next_deadline_us == 0
+    assert central.connection.llcp.next_deadline_us is None
     central.lt_rx(Opcode.LL_PERIODIC_SYNC_IND, packet)
     central.tx_ack()
     central.event_prepare()

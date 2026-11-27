@@ -98,7 +98,7 @@ async def run_big_event(link: RadioLink, manager: BroadcastManager, group: Big) 
                 nominal, link.sleep_clock_accuracy, active=received
             )
             until = nominal + widening + info.phy.address_us
-            if group.deadline_us:
+            if group.deadline_us is not None:
                 until = min(until, group.deadline_us)
             start = max(link.now_us + 1, nominal - widening)
             if start >= until:
@@ -183,7 +183,9 @@ async def _control(link: RadioLink, manager: BroadcastManager, group: Big) -> No
         return
     widening = group.receive_window_us(nominal, link.sleep_clock_accuracy, active=True)
     start = max(link.now_us + 1, nominal - widening)
-    until = min(nominal + widening + info.phy.address_us, group.deadline_us)
+    until = nominal + widening + info.phy.address_us
+    if group.deadline_us is not None:
+        until = min(until, group.deadline_us)
     if start >= until:
         return
     packet = await link.radio.receive(

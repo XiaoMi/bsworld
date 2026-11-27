@@ -101,7 +101,7 @@ class Big:
     counter: int = 0
     reported: bool = False
     cancelled: bool = False
-    deadline_us: int = 0
+    deadline_us: int | None = None
     last_rx_us: int = 0
     widening_us: int = 30
     sca: int = 0
@@ -802,7 +802,7 @@ class BroadcastManager:
                         partial(self._created, group),
                     )
                 )
-            if group.deadline_us:
+            if group.deadline_us is not None:
                 operations.append(
                     PendingOperation(
                         group.deadline_us,
@@ -843,6 +843,7 @@ class BroadcastManager:
         return operations
 
     async def _expired(self, group: Big) -> None:
+        assert group.deadline_us is not None
         await self.link.radio.advance_to_us(group.deadline_us)
 
     async def _created(self, group: Big) -> None:
@@ -878,7 +879,7 @@ class BroadcastManager:
 
     def expire(self) -> None:
         for group in tuple(self.groups.values()):
-            if group.deadline_us and self.link.now_us >= group.deadline_us:
+            if group.deadline_us is not None and self.link.now_us >= group.deadline_us:
                 self._close(
                     group,
                     ErrorCode.CONNECTION_TIMEOUT_ERROR

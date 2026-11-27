@@ -48,7 +48,7 @@ def assert_idle(iut):
         not iut.connection.llcp.local_procedure_busy
         and not iut.controls.phy.phy_request
     )
-    assert iut.connection.llcp.response_deadline_us == 0
+    assert iut.connection.llcp.response_deadline_us is None
     iut.lt_rx_q_is_empty()
 
 
@@ -107,7 +107,7 @@ def test_central_loc(central, host, peer, ind, result):
     assert update[1:3] == bytes(ind)
     central.tx_ack()
     # The response timer stops when UPDATE_IND is sent (5.1.10, 5.2).
-    assert central.connection.llcp.response_deadline_us == 0
+    assert central.connection.llcp.response_deadline_us is None
     central.event_done()
 
     central.wait_instant(instant_of(update))
@@ -382,7 +382,7 @@ def test_loc_disconnect_during_procedure(iut, role):
         reason=ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR,
     )
     dut.ut_rx_q_is_empty()
-    assert dut.connection.llcp.response_deadline_us == 0
+    assert dut.connection.llcp.response_deadline_us is None
 
 
 def pdu_terminate():
@@ -634,7 +634,7 @@ def test_periph_loc(peripheral):
     instant = peripheral.event_counter + 6
     peripheral.event_prepare()
     peripheral.lt_tx(phy_update_ind(PHY_2M, PHY_2M, instant))
-    assert peripheral.connection.llcp.response_deadline_us == 0
+    assert peripheral.connection.llcp.response_deadline_us is None
     peripheral.event_done()
     peripheral.wait_instant(instant)
     assert_phys(peripheral, Phy.LE_1M, Phy.LE_1M)
@@ -759,7 +759,7 @@ def test_periph_invalid_update_keeps_phy_in_affected_direction(
     peripheral.event_prepare()
     peripheral.lt_tx(phy_update_ind(central_phy, peripheral_phy, instant))
     assert not peripheral.connection.closed
-    assert peripheral.connection.llcp.response_deadline_us == 0
+    assert peripheral.connection.llcp.response_deadline_us is None
     current = (Phy.LE_1M, Phy.LE_1M)
     assert_phys(peripheral, *current)
     if expected != current:
@@ -924,7 +924,7 @@ def test_periph_rem(peripheral):
     instant = peripheral.event_counter + 6
     peripheral.event_prepare()
     peripheral.lt_tx(phy_update_ind(PHY_2M, PHY_2M, instant))
-    assert peripheral.connection.llcp.response_deadline_us == 0
+    assert peripheral.connection.llcp.response_deadline_us is None
     peripheral.event_done()
     peripheral.wait_instant(instant)
     peripheral.event_prepare()

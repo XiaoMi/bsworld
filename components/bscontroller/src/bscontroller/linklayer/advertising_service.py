@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
+    LEGACY_ADVERTISING_HANDLE,
     LL_ADV_DIRECT_HIGH_DUTY_TIMEOUT_US,
     LL_MAFS_US,
     LL_PERIODIC_INTERVAL_UNIT_US,
@@ -79,7 +80,9 @@ class AdvertisingService:
         return SUCCESS
 
     def has_extended_sets(self) -> bool:
-        return any(handle != -1 for handle in self._advertising.contexts)
+        return any(
+            handle != LEGACY_ADVERTISING_HANDLE for handle in self._advertising.contexts
+        )
 
     def _candidate(self, handle: int, config: AdvertisingConfig) -> Advertising:
         if not isinstance(config, AdvertisingConfig):
@@ -108,10 +111,10 @@ class AdvertisingService:
         )
 
     def configure_legacy(self, config: AdvertisingConfig) -> None:
-        current = self._advertising.contexts.get(-1)
+        current = self._advertising.contexts.get(LEGACY_ADVERTISING_HANDLE)
         if current is not None and current.enabled:
             return
-        self._advertising.configure(self._candidate(-1, config))
+        self._advertising.configure(self._candidate(LEGACY_ADVERTISING_HANDLE, config))
 
     def configuration_status(
         self, handle: int, secondary_phy: int, *, incompatible_periodic: bool
@@ -257,7 +260,7 @@ class AdvertisingService:
         return SUCCESS
 
     def enable_legacy(self, enable: bool) -> int:
-        item = self._advertising.contexts[-1]
+        item = self._advertising.contexts[LEGACY_ADVERTISING_HANDLE]
         if enable:
             if not self._address_available(item):
                 return INVALID

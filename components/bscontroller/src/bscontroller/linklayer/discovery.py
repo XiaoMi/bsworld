@@ -98,7 +98,7 @@ class Advertising:
     events: int = 0
     target: Address | None = None
     high_duty: bool = False
-    deadline_us: int = 0
+    deadline_us: int | None = None
     max_events: int = 0
     primary_phy: Phy = Phy.LE_1M
     secondary_phy: Phy = Phy.LE_1M
@@ -220,7 +220,7 @@ class Scanning:
     windows: tuple[ScanWindow, ...] = ()
     duration_us: int = 0
     period_us: int = 0
-    deadline_us: int = 0
+    deadline_us: int | None = None
     filter_policy: int = 0
     backoff: ScanBackoff = field(default_factory=ScanBackoff)
     own_address_type: int = OwnAddressType.PUBLIC
@@ -264,7 +264,7 @@ class PeriodicSync:
     address: Address
     sid: int
     timeout_us: int
-    deadline_us: int
+    deadline_us: int | None = None
     skip: int = 0
     reports_enabled: bool = True
     info: SyncInfo | None = None

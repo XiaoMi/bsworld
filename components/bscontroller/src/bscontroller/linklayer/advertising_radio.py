@@ -90,6 +90,7 @@ async def advertise_legacy(advertising: AdvertisingManager, item: Advertising) -
             # Do not start a high-duty packet that would run past advertising expiry.
             if (
                 item.high_duty
+                and item.deadline_us is not None
                 and link.now_us + 1 + Phy.LE_1M.airtime_us(len(pdu)) > item.deadline_us
             ):
                 await link.radio.advance_to_us(item.deadline_us)

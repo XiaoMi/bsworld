@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from bscontroller.address import AddressType
 from bscontroller.linklayer import (
+    LEGACY_ADVERTISING_HANDLE,
     LL_ADV_PRIMARY_CHANNELS,
     LL_CONN_INTERVAL_UNIT_US,
     LL_DATA_CHANNEL_MAP_ALL,
@@ -43,7 +44,8 @@ from bscontroller.linklayer.synchronization import (
     SynchronizationManager,
 )
 from bscontroller.linklayer.synchronization_radio import pawr_accept
-from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND, RADIO_SWITCH_TIME_US, Phy
+from bscontroller.linklayer.timing import split_fixed_time
+from bscontroller.radio.base import RADIO_SWITCH_TIME_US, Phy
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -74,7 +76,7 @@ def connection_window(connection: Connection) -> RadioReservation:
         )
     # An outstanding Frame Space request or a long ACL packet can make the
     # unconstrained exchange estimate larger than the event it protects.
-    own_interval = (period + phase) // PHY_TIME_UNITS_PER_SECOND
+    own_interval, _ = split_fixed_time(period + phase)
     duration = min(
         duration + connection.event_guard_us, own_interval + anchor_uncertainty
     )
@@ -84,7 +86,7 @@ def connection_window(connection: Connection) -> RadioReservation:
     regular = schedule.next_event(index) == index
     if regular and subrating.transition is None and connection.controls.pending is None:
         period *= schedule.factor
-    interval, fraction = divmod(period, PHY_TIME_UNITS_PER_SECOND)
+    interval, fraction = split_fixed_time(period)
     return RadioReservation(
         start - RADIO_SWITCH_TIME_US,
         duration + RADIO_SWITCH_TIME_US,
@@ -169,7 +171,7 @@ class ConnectionManager:
             window_delay_us=result.window_delay_us,
             phy=result.phy,
         )
-        if advertising_handle not in (None, -1):
+        if advertising_handle not in (None, LEGACY_ADVERTISING_HANDLE):
             connection.advertising_handle = advertising_handle
             connection.advertising_events = completed_events
         connection.pawr_advertising_handle = pawr_handle
@@ -242,7 +244,7 @@ class ScanningManager:
             backoff=ScanBackoff(),
             duration_us=duration_us,
             period_us=period_us,
-            deadline_us=now + duration_us if duration_us else 0,
+            deadline_us=now + duration_us if duration_us else None,
         )
 
     def stop(self) -> None:
@@ -294,7 +296,11 @@ class ScanningManager:
         """Apply scan duration/period rules before preparing the next RF slice."""
         link = self.link
         now = link.now_us
-        if isinstance(scan, Scanning) and scan.deadline_us and now >= scan.deadline_us:
+        if (
+            isinstance(scan, Scanning)
+            and scan.deadline_us is not None
+            and now >= scan.deadline_us
+        ):
             if not scan.period_us:
                 self.stop()
                 link.listener.on_scan_timeout()
@@ -319,7 +325,7 @@ class ScanningManager:
         if isinstance(scan, Scanning):
             if window is not None:
                 scan.active = window.active
-            if scan.deadline_us:
+            if scan.deadline_us is not None:
                 end = min(end, scan.deadline_us)
         if window is not None:
             channel = LL_ADV_PRIMARY_CHANNELS[cycle % len(LL_ADV_PRIMARY_CHANNELS)]

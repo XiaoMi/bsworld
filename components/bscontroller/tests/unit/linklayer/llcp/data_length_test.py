@@ -110,7 +110,7 @@ def test_loc(iut, role):
         max_rx_time=1500,
     )
     dut.ut_rx_q_is_empty()
-    assert not lengths(dut).pending and lengths(dut).deadline_us == 0
+    assert not lengths(dut).pending and lengths(dut).deadline_us is None
     # No new event when nothing changes.
     lengths(dut).refresh()
     dut.ut_rx_q_is_empty()
@@ -363,7 +363,7 @@ def test_rem(iut, role):
     assert lengths(dut).effective().rx_octets == MAX
     dut.ut_rx(CHANGED, max_rx_octets=MAX, max_tx_octets=MIN)
     dut.ut_rx_q_is_empty()
-    assert lengths(dut).deadline_us == 0
+    assert lengths(dut).deadline_us is None
 
 
 @pytest.mark.parametrize(
@@ -503,7 +503,7 @@ def test_collision_loc_and_rem(iut, role):
     dut.lt_rx(Opcode.LL_LENGTH_REQ)
     dut.lt_tx(length(Opcode.LL_LENGTH_RSP, MAX, MAX_TIME, MAX, MAX_TIME))
     dut.event_done()
-    assert not lengths(dut).pending and lengths(dut).deadline_us == 0
+    assert not lengths(dut).pending and lengths(dut).deadline_us is None
 
 
 # ---------------------------------------------------------------------------

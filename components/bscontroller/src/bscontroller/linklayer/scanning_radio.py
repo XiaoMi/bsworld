@@ -95,12 +95,7 @@ async def receive_scan_event(link: RadioLink, event: ScanEvent) -> None:
             scanner = None
         if initiator is None and scanner is None and sync is None:
             return
-        try:
-            await scan_extended(
-                link, packet, scan=scanner, sync=sync, initiator=initiator
-            )
-        except ValueError as error:
-            link.trace(f'LL EXTENDED REJECTED {error}')
+        await scan_extended(link, packet, scan=scanner, sync=sync, initiator=initiator)
     elif initiator is not None:
         await initiate_legacy(link, event.channel, packet, initiator)
     elif scanner is not None:
@@ -298,7 +293,7 @@ async def scan_extended(
             and (sync is None or sync is not link.sync)
         ):
             return
-        ext = _decode_auxiliary(primary, received, primary_addresses_valid)
+        ext = _decode_auxiliary(link, primary, received, primary_addresses_valid)
         if ext is None:
             return
     if ext.address is None and (ext.mode or ext.target is not None):
@@ -363,11 +358,21 @@ async def scan_extended(
     await _report_advertisement(link, scan, observation, target, target_matches)
 
 
+def _decode_extended_pdu(link: RadioLink, packet: Received) -> ExtendedPdu | None:
+    try:
+        return ExtendedPdu.decode(packet.pdu)
+    except ValueError as error:
+        link.trace(f'LL EXTENDED REJECTED {error}')
+        return None
+
+
 def _decode_primary(
     link: RadioLink, packet: Received, mode: DecisionMode
 ) -> ExtendedPdu | None:
     # Primary SyncInfo,CTEInfo,ACAD and AdvData are context-reserved CEAP fields.
-    primary = ExtendedPdu.decode(packet.pdu)
+    primary = _decode_extended_pdu(link, packet)
+    if primary is None:
+        return None
     decision = primary.kind == AdvertisingPduType.ADV_DECISION_IND
     if (
         decision
@@ -399,13 +404,15 @@ def _decode_primary(
 
 
 def _decode_auxiliary(
+    link: RadioLink,
     primary: ExtendedPdu,
     received: Received,
     primary_addresses_valid: bool,
 ) -> ExtendedPdu | None:
-    ext = ExtendedPdu.decode(received.pdu)
+    ext = _decode_extended_pdu(link, received)
     if (
-        ext.kind != AdvertisingPduType.AUX_ADV_IND
+        ext is None
+        or ext.kind != AdvertisingPduType.AUX_ADV_IND
         or ext.mode != primary.mode
         or (primary.adi is not None and ext.adi != primary.adi)
     ):

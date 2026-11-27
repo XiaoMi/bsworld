@@ -339,7 +339,7 @@ class RadioLink:
             if (delivery := iso.next_delivery_us) is not None:
                 end = min(end, delivery)
             for context in contexts:
-                if context.info is not None:
+                if context.info is not None and context.deadline_us is not None:
                     end = min(end, context.deadline_us)
             scan = self.roles.scanning.next_context()
             if scan:

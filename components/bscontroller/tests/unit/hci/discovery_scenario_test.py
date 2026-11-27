@@ -1444,7 +1444,9 @@ def test_high_duty_duration_validates_all_sets(host, duration):
         ErrorCode.SUCCESS if valid else ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
     )
     assert all(item.enabled == valid for item in host.link.advertisers.values())
-    assert host.link.advertisers[0].deadline_us == (duration * 10_000 if valid else 0)
+    assert host.link.advertisers[0].deadline_us == (
+        duration * 10_000 if valid else None
+    )
 
 
 @pytest.mark.parametrize(
@@ -2314,7 +2316,7 @@ def test_failed_sync_reports_handle_zero(host):
     Expected:
         - The Established event has sync handle 0 and interval 0.
     """
-    sync = PeriodicSync(PEER_ADDRESS, 2, 100_000, 0, handle=3)
+    sync = PeriodicSync(PEER_ADDRESS, 2, 100_000, handle=3)
     host.notify(
         'on_sync_established', sync, ErrorCode.CONNECTION_FAILED_TO_BE_ESTABLISHED_ERROR
     )

@@ -28,7 +28,10 @@ from bscontroller.hci import (
     HCI_LE_RESPONSE_REPORT_RESPONSES_MAX,
 )
 from bscontroller.hci.records import ConnectionRecord
-from bscontroller.linklayer import PDU_CONTROL_FEATURE_SET_SIZE
+from bscontroller.linklayer import (
+    LEGACY_ADVERTISING_HANDLE,
+    PDU_CONTROL_FEATURE_SET_SIZE,
+)
 from bscontroller.linklayer.api import (
     AdvertisingSnapshot,
     BigSnapshot,
@@ -679,7 +682,7 @@ class LeControllerEvents:
         7.7.65.18).
         """
         handle = item.handle
-        if handle == -1:
+        if handle == LEGACY_ADVERTISING_HANDLE:
             self._emit_hci_packet(
                 self._connection_complete_event(
                     status=status,

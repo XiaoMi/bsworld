@@ -98,7 +98,7 @@ class Cis:
     stage: Setup = Setup.CONFIGURED
     window: CisWindow | None = None
     event: CisEvent | None = None
-    setup_deadline_us: int = 0
+    setup_deadline_us: int | None = None
     procedure: ProcedureContext | None = None
     reported: bool = False
     cancellation: bool = False
@@ -394,7 +394,7 @@ class CigManager:
             return
         connection = stream.connection
         assert connection is not None
-        if connection.termination_deadline_us:
+        if connection.termination_deadline_us is not None:
             return
         # Stop CIS radio activity when the indication enters the ACL queue (6.B.5.1.16).
         stream.procedure = ProcedureContext(
@@ -407,7 +407,7 @@ class CigManager:
             stream.procedure, payload, priority=True
         )
         stream.stage = Setup.TERMINATING
-        stream.setup_deadline_us = 0
+        stream.setup_deadline_us = None
 
     def close_acl(self, connection: Connection, reason: int) -> None:
         for stream in tuple(self.streams.values()):
@@ -494,7 +494,7 @@ class CigManager:
             stream.failure = ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR
             return
         stream.stage = Setup.RESPONSE
-        stream.setup_deadline_us = 0
+        stream.setup_deadline_us = None
         connection.llcp.send(
             stream.procedure, bytes([Opcode.LL_CIS_RSP]) + stream.window.encode()
         )
@@ -669,7 +669,7 @@ class CigManager:
                 # Stop CIS radio activity on receipt, then notify the Host
                 # when the ACL acknowledges it (Core Vol 6, Part B, 5.1.16).
                 stream.stage = Setup.TERMINATING
-                stream.setup_deadline_us = 0
+                stream.setup_deadline_us = None
                 if stream.procedure is not None:
                     stream.procedure.finish()
                 stream.procedure = ProcedureContext(
@@ -808,7 +808,7 @@ class CigManager:
             clock_remainder=phase,
         )
         stream.stage = Setup.ACTIVE
-        stream.setup_deadline_us = 0
+        stream.setup_deadline_us = None
         stream.procedure.stop_response_timer()
         if not stream.central:
             stream.procedure.finish()
@@ -887,7 +887,7 @@ class CigManager:
         stream.connection = stream.event = stream.window = stream.indication = None
         stream.reported = False
         stream.cancellation = False
-        stream.setup_deadline_us = 0
+        stream.setup_deadline_us = None
         stream.failure = None
 
     def _finish(self, stream: Cis, reason: int) -> None:
@@ -991,10 +991,10 @@ class CigManager:
             deadline = (
                 event.deadline_us if event is not None else stream.setup_deadline_us
             )
-            if deadline and deadline <= self.radio.now_us:
-                self._expire(stream, deadline)
-                continue
-            if deadline:
+            if deadline is not None:
+                if deadline <= self.radio.now_us:
+                    self._expire(stream, deadline)
+                    continue
                 operations.append(
                     PendingOperation(
                         deadline,

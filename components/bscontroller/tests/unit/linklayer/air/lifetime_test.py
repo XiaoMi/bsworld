@@ -770,8 +770,8 @@ def test_syncinfo_for_already_synchronized_train_is_ignored(link):
         - The pending sync still has no info.
     """
     manager = link.roles.synchronization
-    manager.active[1] = PeriodicSync(PEER, 2, 100_000, 0, established=True, handle=1)
-    sync = PeriodicSync(PEER, 2, 100_000, 0, use_list=True)
+    manager.active[1] = PeriodicSync(PEER, 2, 100_000, established=True, handle=1)
+    sync = PeriodicSync(PEER, 2, 100_000, use_list=True)
     link.periodic_advertiser_list.add((PEER, 2))
     manager.start(sync)
     manager.acquired(SyncInfoReceived(PEER, 2, INFO, Received(b'', -40, 1, 2, True)))

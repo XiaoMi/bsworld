@@ -70,11 +70,11 @@ class ProcedureContext:
         return self.phase != ProcedurePhase.COMPLETE
 
     @property
-    def deadline_us(self) -> int:
+    def deadline_us(self) -> int | None:
         return (
             self.response_timer.deadline_us
             if self.response_timer and self.active
-            else 0
+            else None
         )
 
     def stop_response_timer(self) -> None:
@@ -94,15 +94,15 @@ class LocalProcedure:
         return self.context is not None and self.context.active
 
     @property
-    def deadline_us(self) -> int:
-        return self.context.deadline_us if self.pending else 0
+    def deadline_us(self) -> int | None:
+        return self.context.deadline_us if self.context is not None else None
 
 
 @dataclass
 class ProcedureResponseTimer:
     """Shared ACL deadline, observed by procedures while T_PRT applies (6.B.5.2)."""
 
-    deadline_us: int = 0
+    deadline_us: int | None = None
 
     def restart(self, now_us: int) -> None:
         self.deadline_us = now_us + LL_RESPONSE_TIMEOUT_US

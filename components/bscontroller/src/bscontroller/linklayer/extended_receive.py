@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from bscontroller.capabilities import CONTROLLER_ADV_DATA_SIZE_MAX
@@ -20,6 +21,8 @@ from bscontroller.linklayer.timing import window_widening
 from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Callable
+
     from bscontroller.linklayer.resource import RadioResourceManager
     from bscontroller.radio.base import Radio, Received
 
@@ -62,21 +65,25 @@ async def follow_auxiliary(
     )
 
 
-async def collect_chain(
+@dataclass(frozen=True)
+class ChainFragment:
+    data: bytes
+    status: DataStatus
+    rssi: float
+    tx_power: int | None
+
+
+async def receive_chain(
     radio: Radio,
     resource: RadioResourceManager,
     packet: Received,
     first: ExtendedPdu,
     *,
-    is_current,
-    on_fragment=None,
+    is_current: Callable[[], bool],
     **parameters,
-):
-    """Follow an auxiliary chain, retaining a bounded prefix on failure.
+) -> AsyncIterator[ChainFragment]:
+    """Yield received fragments followed by a complete or truncated report.
 
-    With ``on_fragment``, flush accumulated bytes before following the next
-    PDU and return the unreported tail; otherwise return the assembled bytes.
-    Track cumulative size in both modes and return status and the last TxPower.
     See Bluetooth Core 6.3, Vol 6, Part B, 2.3.1.8 and Vol 4, Part E, 7.7.65.13.
     """
     data = first.data
@@ -88,13 +95,9 @@ async def collect_chain(
     while current.aux_ptr:
         if current.aux_ptr.phy != packet.phy:
             break
-        if on_fragment is not None and data:
-            # Release delivered chunks when streaming, but retain the cumulative
-            # length so callbacks cannot bypass the assembly limit.
-            on_fragment(
-                data,
-                DataStatus.INCOMPLETE,
-                packet,
+        if data:
+            yield ChainFragment(
+                data, DataStatus.INCOMPLETE, packet.rssi, current.tx_power
             )
             data = b''
         if not is_current():
@@ -119,16 +122,29 @@ async def collect_chain(
         if ext.aux_ptr and not ext.data:
             break
         # Core Vol6 PartB Table2.7:chain addresses/SyncInfo/ACAD are ignored.
-        current = ext
         if total + len(ext.data) > CONTROLLER_ADV_DATA_SIZE_MAX:
             break
-        data += ext.data
+        current = ext
+        data = ext.data
         total += len(ext.data)
         packet = received
     else:
         status = DataStatus.COMPLETE
-    return (
-        data,
-        status,
-        (current.tx_power if current.tx_power is not None else None),
-    )
+    yield ChainFragment(data, status, packet.rssi, current.tx_power)
+
+
+async def collect_chain(
+    radio: Radio,
+    resource: RadioResourceManager,
+    packet: Received,
+    first: ExtendedPdu,
+    *,
+    is_current: Callable[[], bool],
+) -> tuple[bytes, DataStatus, int | None]:
+    """Assemble a single extended advertising report from received fragments."""
+    data = []
+    async for fragment in receive_chain(
+        radio, resource, packet, first, is_current=is_current
+    ):
+        data.append(fragment.data)
+    return b''.join(data), fragment.status, fragment.tx_power

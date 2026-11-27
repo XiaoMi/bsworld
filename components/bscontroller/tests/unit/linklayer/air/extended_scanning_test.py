@@ -223,6 +223,25 @@ def test_primary_without_auxptr_is_reported_from_primary(iut):
     iut.ut_rx_report(address=PEER, data=b'', secondary_phy=0, advertising_sid=0xFF)
 
 
+def test_extended_scan_drops_malformed_pdus_and_propagates_listener_errors(
+    iut, monkeypatch
+):
+    """Limit malformed-packet handling to the PDU decoder."""
+    scan(iut)
+    iut.lt_tx(bytes([PduType.ADV_EXT_IND, 1, 0x3F]))
+    iut.run(WINDOW_US)
+    iut.ut_rx_q_is_empty()
+    iut.lt_script_is_consumed()
+
+    def report(*args, **kwargs):
+        raise ValueError('listener failed')
+
+    monkeypatch.setattr(iut.link.listener, 'on_advertisement', report)
+    iut.lt_tx(ExtendedPdu(address=bytes(PEER), random_address=True))
+    with pytest.raises(ValueError, match='listener failed'):
+        iut.run(WINDOW_US)
+
+
 @pytest.mark.parametrize('pieces', [2, 3, 7])
 def test_chain_reassembles_complete_data(iut, pieces):
     """An AUX_CHAIN_IND chain reassembles into fragmented complete reports.

@@ -165,7 +165,7 @@ class LlcpCoordinator:
         assert opcode in (Opcode.LL_MIN_USED_CHANNELS_IND, Opcode.LL_POWER_CHANGE_IND)
 
         def start() -> None:
-            if self.connection.termination_deadline_us:
+            if self.connection.termination_deadline_us is not None:
                 return
             # Power Change Indication completes on first transmission (6.B.5.1.18).
             # Minimum Number Of Used Channels completes on acknowledgment (6.B.5.1.11).
@@ -203,18 +203,20 @@ class LlcpCoordinator:
                 return
 
     @property
-    def response_deadline_us(self) -> int:
-        if any(procedure.deadline_us for procedure in self._procedures):
+    def response_deadline_us(self) -> int | None:
+        if any(procedure.deadline_us is not None for procedure in self._procedures):
             return self._response_timer.deadline_us
-        return 0
+        return None
 
     @property
-    def next_deadline_us(self) -> int:
+    def next_deadline_us(self) -> int | None:
         deadlines = (
             self.encryption.next_deadline_us,
             self.response_deadline_us,
         )
-        return min((deadline for deadline in deadlines if deadline), default=0)
+        return min(
+            (deadline for deadline in deadlines if deadline is not None), default=None
+        )
 
     def packet_limits(self) -> PacketLimits:
         """Publish packet limits without exposing the negotiation machinery."""
@@ -454,10 +456,10 @@ class LlcpCoordinator:
 
     def check_response_timeout(self) -> bool:
         deadline = self.response_deadline_us
-        if not deadline or self.connection.radio.now_us < deadline:
+        if deadline is None or self.connection.radio.now_us < deadline:
             return False
         reason = ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR
-        if self.controls.version_deadline_us:
+        if self.controls.version_deadline_us is not None:
             self.controls.finish_version(reason)
         self.connection.complete(reason)
         return True

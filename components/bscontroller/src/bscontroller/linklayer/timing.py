@@ -54,6 +54,21 @@ LL_INSTANT_PAST_THRESHOLD = 0x7FFF
 LL_AUTHENTICATED_PAYLOAD_TIMEOUT_DEFAULT_US = 30_000_000
 
 
+def fixed_time(time_us: int, phase: int = 0) -> int:
+    """Convert to millionths of a microsecond, preserving the fractional phase."""
+    return time_us * PHY_TIME_UNITS_PER_SECOND + phase
+
+
+def split_fixed_time(time: int) -> tuple[int, int]:
+    """Round down to a PHY timestamp and retain the fractional remainder."""
+    return divmod(time, PHY_TIME_UNITS_PER_SECOND)
+
+
+def project_anchor(anchor: int, interval: int, events: int) -> tuple[int, int]:
+    """Project a fixed-point anchor by a signed number of event intervals."""
+    return split_fixed_time(anchor + events * interval)
+
+
 def auxiliary_window_delay_us(phy: Phy) -> int:
     return (
         LL_CONN_AUX_WINDOW_DELAY_CODED_US
