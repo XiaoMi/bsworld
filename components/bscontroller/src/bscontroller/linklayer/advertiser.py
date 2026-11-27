@@ -318,7 +318,11 @@ class AdvertisingManager:
             self._end_event(item)
             # A new enable takes the configured public address. Re-enabling
             # during an exchange leaves the active advertising identity intact.
-            if item.use_public_address and self.link.public_address is not None:
+            if (
+                item.handle != LEGACY_ADVERTISING_HANDLE
+                and not OwnAddressType(item.own_address_type).uses_random_fallback
+                and self.link.public_address is not None
+            ):
                 item.address = item.identity_address = self.link.public_address
         if interval_unit_us is not None:
             airtime = advertising_time_us(item)

@@ -373,17 +373,14 @@ class LeAdvertisingCommands(LeControllerContext):
         high_duty = bool(
             properties & Properties.HIGH_DUTY_CYCLE_DIRECTED_CONNECTABLE_ADVERTISING
         )
-        use_public_address = not hci.OwnAddressType(
-            command.own_address_type
-        ).uses_random_fallback
+        own_address_type = hci.OwnAddressType(command.own_address_type)
         return AdvertisingConfig(
             # Extended sets have independent random fallbacks (7.8.52/53).
             # The LL service substitutes an address assigned to this handle;
             # the global LE Set Random Address value belongs to other roles.
-            address=self.controller.public_address
-            if use_public_address
-            else hci.Address.ANY_RANDOM,
-            use_public_address=use_public_address,
+            address=hci.Address.ANY_RANDOM
+            if own_address_type.uses_random_fallback
+            else self.controller.public_address,
             interval_us=LL_DIRECT_ADV_INTERVAL_US
             if high_duty
             else (
@@ -420,7 +417,7 @@ class LeAdvertisingCommands(LeControllerContext):
             tx_power_dbm=tx_power_dbm,
             include_tx_power=bool(properties & Properties.INCLUDE_TX_POWER),
             sid=command.advertising_sid,
-            own_address_type=command.own_address_type,
+            own_address_type=own_address_type,
             privacy_peer=command.peer_address,
             decision=bool(properties & Properties.USE_DECISION_PDUS),
             decision_address=bool(
