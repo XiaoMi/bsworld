@@ -35,10 +35,7 @@ from bscontroller.linklayer import (
     ControlOpcode,
 )
 from bscontroller.linklayer.clock_accuracy import ClockAccuracyProcedure
-from bscontroller.linklayer.connection_parameters import (
-    ConnectionParametersProcedure,
-    anchor_offset,
-)
+from bscontroller.linklayer.connection_parameters import ConnectionParametersProcedure
 from bscontroller.linklayer.connection_rate import (
     ConnectionRateProcedure,
 )
@@ -46,7 +43,7 @@ from bscontroller.linklayer.data_length import DataLengthProcedure
 from bscontroller.linklayer.feature_exchange import FeatureExchangeProcedure
 from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.frame_space import FrameSpaceProcedure
-from bscontroller.linklayer.instant import CHANNEL_MAP, InstantUpdate
+from bscontroller.linklayer.instant import CHANNEL_MAP, InstantUpdate, anchor_offset
 from bscontroller.linklayer.packet_control import TransmissionConstraints
 from bscontroller.linklayer.parameters import valid_channel_map
 from bscontroller.linklayer.phy import PhyProcedure
@@ -59,7 +56,7 @@ from bscontroller.linklayer.procedure import (
 )
 from bscontroller.linklayer.state import Role
 from bscontroller.linklayer.subrating import Subrating
-from bscontroller.linklayer.timing import LL_INSTANT_PAST_THRESHOLD
+from bscontroller.linklayer.timing import LL_INSTANT_PAST_THRESHOLD, counter_distance
 from bscontroller.linklayer.transfer import (
     PeriodicSyncIndication,
     TrainSource,
@@ -88,9 +85,9 @@ class ControlProcedures:
         self.connection = connection
         self.phy = PhyProcedure(self)
         self.connection_parameters = ConnectionParametersProcedure(self)
-        self.pending: InstantUpdate | None = None
-        self.transmitted = False
-        self.acknowledged = False
+        self._pending: InstantUpdate | None = None
+        self._instant_transmitted = False
+        self._instant_acknowledged = False
         self._awaiting_instant_ack_confirmation = False
         self.frame_space = FrameSpaceProcedure(self)
         self.data_length = DataLengthProcedure(connection, self.frame_space)
@@ -202,7 +199,7 @@ class ControlProcedures:
                 interval_us = min(interval_us, update.interval_us)
             tx, rx = self._instant_phys(update)
             # PHY packet-time restrictions start at the local control transmission.
-            if update.local and not controls.transmitted:
+            if update.local and not self._instant_transmitted:
                 tx = rx = 0
             if tx:
                 tx_phys.add(Phy(tx))
@@ -237,14 +234,27 @@ class ControlProcedures:
             * (self.connection.parameters.latency + 1)
         ) & LL_EVENT_COUNTER_MASK
 
+    @property
+    def pending(self) -> InstantUpdate | None:
+        return self._pending
+
+    def schedule_instant(self, update: InstantUpdate) -> None:
+        """Stage an update and initialize its transmission and acknowledgment state."""
+        self._pending = update
+        self._instant_transmitted = self._instant_acknowledged = False
+        self._awaiting_instant_ack_confirmation = False
+
+    def clear_instant(self) -> None:
+        """Release a committed or rejected update and its receive hold."""
+        self._pending = None
+        self._awaiting_instant_ack_confirmation = False
+
     def next_instant_event(self) -> int | None:
         """Next checkpoint for an Instant or its required radio events."""
         update = self.pending
-        if update is None or (update.local and not self.transmitted):
+        if update is None or (update.local and not self._instant_transmitted):
             return None
-        distance = (
-            update.instant - self.connection.event_counter
-        ) & LL_EVENT_COUNTER_MASK
+        distance = counter_distance(update.instant, self.connection.event_counter)
         if distance >= LL_INSTANT_PAST_THRESHOLD:
             return None
         # Vol 6, Part B, 5.5.1: listen at every event until the peer confirms
@@ -273,15 +283,13 @@ class ControlProcedures:
         """Peripheral acceptance of an Instant; a past Instant loses the connection
         (Core Vol 6, Part B, 5.5.1).
         """
-        distance = (
-            update.instant - self.connection.event_counter
-        ) & LL_EVENT_COUNTER_MASK
+        distance = counter_distance(update.instant, self.connection.event_counter)
         if distance >= LL_INSTANT_PAST_THRESHOLD:
             self.connection.complete(ErrorCode.INSTANT_PASSED_ERROR)
         elif self.pending is not None:
             self.connection.complete(ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR)
         else:
-            self.pending = update
+            self.schedule_instant(update)
             self._awaiting_instant_ack_confirmation = bool(distance)
             if distance == 0 and not self.connection.llcp.check_response_timeout():
                 self.apply(received_at_instant=True)
@@ -314,10 +322,9 @@ class ControlProcedures:
         channel_map = self.selected_channel_map()
         if channel_map == connection.parameters.channel_map:
             return
-        instant = self.instant()
-        self.pending = InstantUpdate(instant, channel_map=channel_map, local=True)
-        self.transmitted = self.acknowledged = False
-        connection.llcp.respond(self.pending.encode())
+        update = InstantUpdate(self.instant(), channel_map=channel_map, local=True)
+        self.schedule_instant(update)
+        connection.llcp.respond(update.encode())
 
     def request_minimum_channels(self, phys: int, minimum: int) -> None:
         """Queue a Peripheral indication after Feature Exchange, on its radio thread."""
@@ -388,7 +395,7 @@ class ControlProcedures:
         if (
             update is None
             or not update.local
-            or self.transmitted
+            or self._instant_transmitted
             or payload[0] != update.opcode
         ):
             return payload
@@ -408,8 +415,8 @@ class ControlProcedures:
                 update = replace(
                     update, parameters=replace(update.parameters, window_offset=offset)
                 )
-        self.pending = update
-        self.transmitted = True
+        self._pending = update
+        self._instant_transmitted = True
         return update.encode()
 
     def acknowledge(self, payload: bytes) -> None:
@@ -419,11 +426,11 @@ class ControlProcedures:
         if (
             update is not None
             and update.local
-            and self.transmitted
+            and self._instant_transmitted
             and payload[0] == update.opcode
             and payload == update.encode()
         ):
-            self.acknowledged = True
+            self._instant_acknowledged = True
 
     def sent(self, payload: bytes) -> None:
         self.subrating.sent(payload)
@@ -581,15 +588,14 @@ class ControlProcedures:
             return
         # Wait until the local update has been sent. Close on an unacknowledged
         # update at the Instant rather than applying a schedule the peer may not know.
-        if update.local and not self.transmitted:
+        if update.local and not self._instant_transmitted:
             return
-        if update.local and not self.acknowledged:
+        if update.local and not self._instant_acknowledged:
             connection.complete(ErrorCode.INSTANT_PASSED_ERROR)
             return
         # Release the procedure slot before callbacks can start another procedure
         # against the newly committed parameters.
-        self.pending = None
-        self._awaiting_instant_ack_confirmation = False
+        self.clear_instant()
         if update.central_tx_phy or update.peripheral_tx_phy:
             if self.phy.context is not None:
                 self.phy.context.stop_response_timer()

@@ -44,10 +44,13 @@ from bscontroller.linklayer.scheduler import (
     RadioReservation,
 )
 from bscontroller.linklayer.state import DataStatus
-from bscontroller.linklayer.timing import window_widening
+from bscontroller.linklayer.timing import (
+    counter_distance,
+    signed_counter_distance,
+    window_widening,
+)
 from bscontroller.linklayer.transfer import (
     indication_valid,
-    signed_counter,
     transfer_timing,
 )
 from bscontroller.radio.base import RADIO_SWITCH_TIME_US
@@ -207,7 +210,7 @@ class SynchronizationManager:
         assert sync.info is not None
         return (
             link.now_us >= sync.deadline_us
-            or (sync.counter - sync.info.event_counter) & LL_EVENT_COUNTER_MASK
+            or counter_distance(sync.counter, sync.info.event_counter)
             >= LL_PERIODIC_SYNC_ESTABLISHMENT_EVENTS
         )
 
@@ -593,7 +596,7 @@ class SynchronizationManager:
             response_pdu(data, None, tx_power), sync.phy, response_limit_us(timing)
         ):
             return ErrorCode.PACKET_TOO_LONG_ERROR
-        event = pawr.event + signed_counter(request_counter - sync.counter)
+        event = pawr.event + signed_counter_distance(request_counter, sync.counter)
         if response_subevent < request_subevent:
             event += 1
         start = (

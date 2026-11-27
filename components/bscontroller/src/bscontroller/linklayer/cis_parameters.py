@@ -11,12 +11,12 @@ from math import ceil, lcm
 from typing import TYPE_CHECKING
 
 from bscontroller.linklayer import (
-    LL_EVENT_COUNTER_MASK,
     LL_SUPERVISION_TIMEOUT_UNIT_US,
     ControlOpcode,
 )
 from bscontroller.linklayer.cis import CisDirection, CisEventParameters
 from bscontroller.linklayer.isoal import IsoalParameters
+from bscontroller.linklayer.timing import signed_counter_distance
 from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
@@ -153,8 +153,7 @@ class CisWindow:
 
 
 def event_distance(connection: Connection, counter: int) -> int:
-    difference = (counter - connection.event_counter + 0x8000) & LL_EVENT_COUNTER_MASK
-    difference -= 0x8000
+    difference = signed_counter_distance(counter, connection.event_counter)
     if not -0x4000 < difference < 0x4000:
         raise ValueError('invalid CIS connection event count')
     return difference

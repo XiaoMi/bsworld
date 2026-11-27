@@ -126,6 +126,38 @@ def test_peer_rate_request_waits_for_local_version(central, peer_features_known)
     central.lt_rx(Opcode.LL_CONNECTION_RATE_IND)
 
 
+def test_rate_update_recalculates_offset_at_first_transmission_across_wrap(central):
+    """Rebase the peer's preferred anchor after a delayed first transmission."""
+    enable_rate(central)
+    central.set_parameters(interval=8)
+    central.connection.event_counter = 0xFFFC
+    central.lt_tx(
+        struct.pack(
+            '<B13H',
+            Opcode.LL_CONNECTION_RATE_REQ,
+            61,
+            61,
+            1,
+            1,
+            0,
+            0,
+            100,
+            0,
+            0xFFFC,
+            7,
+            0xFFFF,
+            0xFFFF,
+            0xFFFF,
+        )
+    )
+    assert central.controls.pending.instant == 2
+
+    central.connection.step_event(3)
+    payload = central.lt_rx(Opcode.LL_CONNECTION_RATE_IND)
+    # Nine old intervals of 80 ticks separate the reference and Instant.
+    assert struct.unpack_from('<3H', payload, 1) == (19, 61, 5)
+
+
 def test_rate_offset_and_legacy_instant_use_the_correct_time_units(peripheral):
     peripheral.link.features |= HOST_BIT
     connection = peripheral.connection

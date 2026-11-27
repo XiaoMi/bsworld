@@ -12,14 +12,13 @@ from typing import TYPE_CHECKING
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
     LL_CONN_LATENCY_MAX,
-    LL_EVENT_COUNTER_MASK,
     LL_SUPERVISION_TIMEOUT_MAX,
     LL_SUPERVISION_TIMEOUT_MIN,
     ControlOpcode,
 )
 from bscontroller.linklayer.connection_parameters import preferred_interval
 from bscontroller.linklayer.features import LeFeature, LeFeatureMask
-from bscontroller.linklayer.instant import InstantUpdate
+from bscontroller.linklayer.instant import InstantUpdate, anchor_offset
 from bscontroller.linklayer.procedure import (
     DIFFERENT_TRANSACTION_COLLISION,
     DeferredProcedure,
@@ -334,8 +333,7 @@ class ConnectionRateProcedure(LocalProcedure):
                 request.supervision_timeout,
             ),
         )
-        self.owner.pending = update
-        self.owner.transmitted = self.owner.acknowledged = False
+        self.owner.schedule_instant(update)
         self.instant_context = (
             ProcedureContext(Opcode.LL_CONNECTION_RATE_IND, frozenset(), None)
             if peer
@@ -346,12 +344,11 @@ class ConnectionRateProcedure(LocalProcedure):
     def prepare(self, update: InstantUpdate, instant: int) -> InstantUpdate:
         rate = update.rate
         if update.anchor_reference is not None:
-            reference, offset = update.anchor_reference
-            distance = (instant - reference) & LL_EVENT_COUNTER_MASK
             old_interval = self.connection.parameters.interval_us // RATE_UNIT_US
-            rate = replace(
-                rate, offset=(offset - distance * old_interval) % rate.interval
+            offset = anchor_offset(
+                update.anchor_reference, instant, old_interval, rate.interval
             )
+            rate = replace(rate, offset=offset)
         if self.pending and self.context.request == Opcode.LL_CONNECTION_RATE_IND:
             self.context.phase = ProcedurePhase.WAIT_INSTANT
         return replace(update, instant=instant, rate=rate)
@@ -541,7 +538,7 @@ class ConnectionRateProcedure(LocalProcedure):
         if payload == bytes([Opcode.LL_UNKNOWN_RSP, Opcode.LL_CONNECTION_RATE_IND]):
             update = self.owner.pending
             if update is not None and update.local and update.rate is not None:
-                self.owner.pending = None
+                self.owner.clear_instant()
                 self.close(UNSUPPORTED)
                 self._finish_instant()
                 return True

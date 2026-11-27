@@ -625,7 +625,7 @@ def test_min_used_rechecked_after_phy_update(narrow):
     """
     narrow.lt_tx(min_used(PHY_2M, 4))
     assert narrow.controls.pending is None
-    narrow.controls.pending = InstantUpdate(6, peripheral_tx_phy=Phy.LE_2M)
+    narrow.controls.schedule_instant(InstantUpdate(6, peripheral_tx_phy=Phy.LE_2M))
     narrow.connection.event_counter = 6
     narrow.event_prepare()
     assert narrow.connection.rx_phy == Phy.LE_2M
