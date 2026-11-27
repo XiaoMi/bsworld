@@ -192,6 +192,7 @@ def test_event_budget_covers_primary_packets_and_chain(phy):
     """
     item = Advertising(
         hci.Address('F0:F1:F2:F3:F4:01'),
+        handle=0,
         extended=True,
         primary_phy=phy if phy != Phy.LE_2M else Phy.LE_1M,
         secondary_phy=phy,
@@ -202,4 +203,4 @@ def test_event_budget_covers_primary_packets_and_chain(phy):
     assert full >= advertising_time_us(item)
     item.data = b''
     assert full > advertising_time_us(item)
-    assert advertising_time_us(Advertising(item.address)) == 0
+    assert advertising_time_us(Advertising(item.address, handle=0)) == 0

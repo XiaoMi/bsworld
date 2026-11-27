@@ -575,6 +575,10 @@ def test_released_train_cannot_commit_delayed_connection(iut, source, replacemen
         contexts = iut.link.syncs
         handle = 1
         result = dict(pawr_sync=train)
+        if replacement:
+            contexts[handle] = replace(train)
+        else:
+            del contexts[handle]
     else:
         configure_extended(iut)
         iut.ut(
@@ -587,10 +591,10 @@ def test_released_train_cannot_commit_delayed_connection(iut, source, replacemen
         handle = 0
         train = contexts[handle]
         result = dict(pawr_advertiser=train)
-    if replacement:
-        contexts[handle] = replace(train)
-    else:
-        del contexts[handle]
+        advertising = iut.link.roles.advertising
+        advertising.remove(handle)
+        if replacement:
+            advertising.publish(replace(train))
     result = ConnectionAccepted(
         CONNECT_PARAMETERS, PEER, hci.Role.PERIPHERAL, 0, IUT_ADDRESS, True, **result
     )

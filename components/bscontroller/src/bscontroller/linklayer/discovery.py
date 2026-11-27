@@ -4,8 +4,7 @@
 
 """Connectionless LE contexts, scan windows/backoff and periodic channel maps.
 
-The Controller configures these records; RadioLink owns and executes active
-contexts. No context performs RF I/O or owns an event loop.
+Role managers own the live records and execute their radio work.
 """
 
 from __future__ import annotations
@@ -56,6 +55,7 @@ AD_TYPE_CHANNEL_MAP_UPDATE_INDICATION = 0x28
 @dataclass
 class Advertising:
     address: Address
+    handle: int = field(kw_only=True)
     random_address: Address | None = None
     interval_us: int = LL_DEFAULT_ADV_INTERVAL_US
     interval_max_us: int = LL_DEFAULT_ADV_INTERVAL_US
@@ -123,7 +123,7 @@ class Advertising:
     use_public_address: bool = False
 
     def __post_init__(self) -> None:
-        # Public HCI records and RF procedures share mutable advertising buffers.
+        # Live advertising payloads use mutable buffers.
         if not isinstance(self.data, bytearray):
             self.data = bytearray(self.data)
         if not isinstance(self.scan_response, bytearray):

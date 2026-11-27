@@ -255,7 +255,6 @@ class RadioBackend:
             seed=int.from_bytes(bytes(address), 'little'),
             config=controller.config,
         )
-        notifications.bind_advertising(link.roles.advertising.handle_of)
         procedures.ll = LinkLayerService(
             link,
             address,

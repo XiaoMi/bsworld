@@ -8,13 +8,11 @@ from __future__ import annotations
 from dataclasses import fields, replace
 from typing import TYPE_CHECKING
 
-from bscontroller.address import OwnAddressType
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
     LL_ADV_DIRECT_HIGH_DUTY_TIMEOUT_US,
     LL_MAFS_US,
     LL_PERIODIC_INTERVAL_UNIT_US,
-    PDU_ADV_ADI_DID_MASK,
     PDU_ADV_DECISION_DATA_SIZE_MAX,
     PDU_ADV_DECISION_RESOLVABLE_TAG_MASK,
     PDU_ADV_DECISION_RESOLVABLE_TAG_SIZE,
@@ -22,7 +20,6 @@ from bscontroller.linklayer import (
     AdvertisingMode,
 )
 from bscontroller.linklayer.api import (
-    AddressSnapshot,
     AdvertisingConfig,
     AdvertisingSnapshot,
     advertising_snapshot,
@@ -55,23 +52,22 @@ TOO_LONG = ErrorCode.PACKET_TOO_LONG_ERROR
 
 
 class AdvertisingService:
-    """Configure and publish advertisers; HCI fragment staging remains above this
-    API.
-    """
+    """Validate Host advertising requests before committing them to the set owner."""
 
     def __init__(self, link: RadioLink):
         self.link = link
+        self._advertising = link.roles.advertising
 
     def snapshot(self, handle: int) -> AdvertisingSnapshot | None:
-        item = self.link.advertisers.get(handle)
-        return advertising_snapshot(handle, item) if item is not None else None
+        item = self._advertising.contexts.get(handle)
+        return advertising_snapshot(item) if item is not None else None
 
     def any_enabled(self) -> bool:
-        return any(item.enabled for item in self.link.advertisers.values())
+        return any(item.enabled for item in self._advertising.contexts.values())
 
     def set_decision_data(self, handle: int, flags: int, data: bytes) -> int:
         """Commit decision bytes independently of AdvData (Vol 4, Part E, 7.8.144)."""
-        item = self.link.advertisers.get(handle)
+        item = self._advertising.contexts.get(handle)
         if item is None:
             return UNKNOWN_ADV
         if len(data) > PDU_ADV_DECISION_DATA_SIZE_MAX or (
@@ -79,20 +75,23 @@ class AdvertisingService:
             and len(data) < PDU_ADV_DECISION_RESOLVABLE_TAG_SIZE
         ):
             return INVALID
-        item.decision_flags, item.decision_data = flags, bytes(data)
+        self._advertising.set_decision_data(item, flags, data)
         return SUCCESS
 
     def has_extended_sets(self) -> bool:
-        return any(handle != -1 for handle in self.link.advertisers)
+        return any(handle != -1 for handle in self._advertising.contexts)
 
     def _candidate(self, handle: int, config: AdvertisingConfig) -> Advertising:
         if not isinstance(config, AdvertisingConfig):
             raise TypeError('advertising configuration must not contain live state')
-        original = self.link.advertisers.get(handle)
+        original = self._advertising.contexts.get(handle)
         values = {field.name: getattr(config, field.name) for field in fields(config)}
         if original is None:
             return Advertising(
-                **values, identity_address=config.address, identity_target=config.target
+                **values,
+                handle=handle,
+                identity_address=config.address,
+                identity_target=config.target,
             )
         if original.random_address is not None and config.address.is_random:
             values['address'] = original.random_address
@@ -109,27 +108,15 @@ class AdvertisingService:
         )
 
     def configure_legacy(self, config: AdvertisingConfig) -> None:
-        current = self.link.advertisers.get(-1)
+        current = self._advertising.contexts.get(-1)
         if current is not None and current.enabled:
             return
-        candidate = self._candidate(-1, config)
-        if current is None:
-            self.link.roles.advertising.publish(-1, candidate)
-        else:
-            self._apply_configuration(current, candidate)
-
-    @staticmethod
-    def _apply_configuration(current: Advertising, candidate: Advertising) -> None:
-        # A radio operation may still hold the live context when HCI updates it.
-        for field in fields(AdvertisingConfig):
-            setattr(current, field.name, getattr(candidate, field.name))
-        current.identity_address = candidate.identity_address
-        current.identity_target = candidate.identity_target
+        self._advertising.configure(self._candidate(-1, config))
 
     def configuration_status(
         self, handle: int, secondary_phy: int, *, incompatible_periodic: bool
     ) -> int:
-        item = self.link.advertisers.get(handle)
+        item = self._advertising.contexts.get(handle)
         if item and item.periodic_enabled and incompatible_periodic:
             return INVALID
         if item and (
@@ -139,7 +126,8 @@ class AdvertisingService:
             return DISALLOWED
         if (
             item is None
-            and len(self.link.advertisers) >= self.link.config.advertising_set_count
+            and len(self._advertising.contexts)
+            >= self.link.config.advertising_set_count
         ):
             return ErrorCode.MEMORY_CAPACITY_EXCEEDED_ERROR
         return SUCCESS
@@ -158,17 +146,13 @@ class AdvertisingService:
         if status != SUCCESS:
             return status
         if item.periodic_enabled:
-            current = self.link.advertisers[handle]
+            current = self._advertising.contexts[handle]
             if (
                 item.secondary_coding != current.secondary_coding
                 and not self._active_train_fits(item)
             ):
                 return DISALLOWED
-            self._apply_configuration(current, item)
-        else:
-            if handle not in self.link.advertisers:
-                item.did = self.link.random.randrange(PDU_ADV_ADI_DID_MASK + 1)
-            self.link.roles.advertising.publish(handle, item)
+        self._advertising.configure(item)
         return SUCCESS
 
     @staticmethod
@@ -219,45 +203,27 @@ class AdvertisingService:
         return SUCCESS
 
     def set_random_address(self, handle: int, address: Address) -> int:
-        item = self.link.advertisers.get(handle)
+        item = self._advertising.contexts.get(handle)
         if item is None:
             return UNKNOWN_ADV
         if item.enabled and item.mode & AdvertisingMode.CONNECTABLE:
             return DISALLOWED
-        address = AddressSnapshot(address)
-        item.random_address = address
-        if OwnAddressType(item.own_address_type).uses_random_fallback:
-            item.identity_address = address
-            # Keep the address already sent in the current event through its
-            # response. AdvertisingManager.run selects the next event's address.
-            if not item.enabled:
-                item.address = address
+        self._advertising.set_random_address(item, address)
         return SUCCESS
 
     def store_data(
         self, handle: int, field: str, data: bytes, *, renew: bool = False
     ) -> None:
-        """Commit only the selected payload; a completed HCI sequence renews its
-        identity once.
-        """
-        if field not in ('data', 'scan_response', 'periodic_data'):
-            raise ValueError('unknown advertising payload')
-        item = self.link.advertisers[handle]
-        setattr(item, field, bytearray(data))
-        if renew:
-            self.renew_data_identity(handle, field)
+        """Commit the selected payload and optionally renew its data identity."""
+        self._advertising.store_data(
+            self._advertising.contexts[handle], field, data, renew=renew
+        )
 
     def renew_data_identity(self, handle: int, field: str) -> None:
-        """Choose a new DID for the set or train (Vol 6, Part B, 4.4.2.11)."""
-        item = self.link.advertisers[handle]
-        value = self.link.random.randrange(PDU_ADV_ADI_DID_MASK)
-        if field == 'periodic_data':
-            item.periodic_did = value + (value >= item.periodic_did)
-        else:
-            item.did = value + (value >= item.did)
+        self._advertising.renew_data_identity(self._advertising.contexts[handle], field)
 
     def validate_data(self, handle: int, field: str, value: bytes) -> int:
-        item = self.link.advertisers[handle]
+        item = self._advertising.contexts[handle]
         updated = replace(item, **{field: value})
         if (
             (
@@ -278,7 +244,7 @@ class AdvertisingService:
         return SUCCESS
 
     def publication_status(self, handle: int, field: str, value: bytes) -> int:
-        item = self.link.advertisers[handle]
+        item = self._advertising.contexts[handle]
         candidate = replace(item, **{field: value})
         if (
             item.periodic_enabled
@@ -291,15 +257,15 @@ class AdvertisingService:
         return SUCCESS
 
     def enable_legacy(self, enable: bool) -> int:
-        item = self.link.advertisers[-1]
+        item = self._advertising.contexts[-1]
         if enable:
             if not self._address_available(item):
                 return INVALID
-            self.link.roles.advertising.start(
+            self._advertising.start(
                 item, LL_ADV_DIRECT_HIGH_DUTY_TIMEOUT_US if item.high_duty else 0
             )
         else:
-            self.link.roles.advertising.stop(item)
+            self._advertising.stop(item)
         return SUCCESS
 
     def _address_available(self, item: Advertising) -> bool:
@@ -322,11 +288,11 @@ class AdvertisingService:
         7.8.56).
         """
         handles = [handle for handle, _, _ in sets]
-        if any(handle not in self.link.advertisers for handle in handles):
+        if any(handle not in self._advertising.contexts for handle in handles):
             return UNKNOWN_ADV
         if enable:
             for handle, duration, _ in sets:
-                item = self.link.advertisers[handle]
+                item = self._advertising.contexts[handle]
                 if (
                     item.high_duty
                     and not 0 < duration <= LL_ADV_DIRECT_HIGH_DUTY_TIMEOUT_US
@@ -345,19 +311,21 @@ class AdvertisingService:
                     > item.interval_max_us
                 ):
                     return TOO_LONG
-        selected = sets or tuple((handle, 0, 0) for handle in self.link.advertisers)
+        selected = sets or tuple(
+            (handle, 0, 0) for handle in self._advertising.contexts
+        )
         for handle, duration, max_events in selected:
-            item = self.link.advertisers[handle]
+            item = self._advertising.contexts[handle]
             if enable:
-                self.link.roles.advertising.start(
+                self._advertising.start(
                     item, duration, max_events, interval_unit_us=interval_unit_us
                 )
             else:
-                self.link.roles.advertising.stop(item)
+                self._advertising.stop(item)
         return SUCCESS
 
     def remove(self, handle: int) -> int:
-        item = self.link.advertisers.get(handle)
+        item = self._advertising.contexts.get(handle)
         if item is None:
             return UNKNOWN_ADV
         if (
@@ -366,7 +334,7 @@ class AdvertisingService:
             or self.link.roles.broadcast.associated_group(handle) is not None
         ):
             return DISALLOWED
-        self.link.roles.advertising.remove(handle)
+        self._advertising.remove(handle)
         return SUCCESS
 
     def clear(self) -> int:
@@ -374,10 +342,10 @@ class AdvertisingService:
             item.enabled
             or item.periodic_enabled
             or self.link.roles.broadcast.associated_group(handle) is not None
-            for handle, item in self.link.advertisers.items()
+            for handle, item in self._advertising.contexts.items()
         ):
             return DISALLOWED
-        self.link.roles.advertising.clear()
+        self._advertising.clear()
         return SUCCESS
 
     def set_periodic_interval(
@@ -397,7 +365,7 @@ class AdvertisingService:
         holds them; the timing information then carries that interval, up to its
         318.75 ms maximum (Core Vol 6, Part B, 4.4.2.2.4).
         """
-        item = self.link.advertisers[handle]
+        item = self._advertising.contexts[handle]
         if item.periodic_enabled:
             return DISALLOWED
         if (
@@ -425,20 +393,16 @@ class AdvertisingService:
         interval = max(interval, required_periodic_interval(candidate))
         if interval > maximum:
             return TOO_LONG
-        if not item.periodic_interval:
-            # The first periodic configuration seeds a random DID (4.4.2.11).
-            item.periodic_did = self.link.random.randrange(PDU_ADV_ADI_DID_MASK + 1)
-        item.periodic_interval = interval
-        item.periodic_interval_max = maximum
-        item.pawr = pawr
-        item.pawr_response_slots = response_slots if pawr is not None else 0
+        self._advertising.configure_periodic(
+            item, interval, maximum, pawr, response_slots
+        )
         return SUCCESS
 
     def pawr_status(self, handle: int) -> int:
         """Whether Host subevent data can be accepted at all (Vol 4, Part E,
         7.8.125): the set exists, has responses and asked for data.
         """
-        item = self.link.advertisers.get(handle)
+        item = self._advertising.contexts.get(handle)
         if item is None:
             return UNKNOWN_ADV
         if item.pawr is None or item.pawr_state is None or not item.pawr_state.window:
@@ -458,7 +422,7 @@ class AdvertisingService:
         status = self.pawr_status(handle)
         if status != SUCCESS:
             return status
-        item = self.link.advertisers[handle]
+        item = self._advertising.contexts[handle]
         timing, state = item.pawr, item.pawr_state
         assert timing is not None and state is not None
         if any(
@@ -484,7 +448,7 @@ class AdvertisingService:
             ):
                 return TOO_LONG
             instances.append((instance, entry))
-        state.data.update(instances)
+        self._advertising.store_subevent_data(item, instances)
         return SUCCESS
 
     def enable_periodic(
@@ -496,7 +460,7 @@ class AdvertisingService:
         the interval checks use the train as it would be transmitted. Disabling
         ignores ``include_adi`` (Core Vol 4, Part E, 7.8.63).
         """
-        item = self.link.advertisers[handle]
+        item = self._advertising.contexts[handle]
         if (
             not item.extended
             or not item.periodic_interval
@@ -505,6 +469,7 @@ class AdvertisingService:
         ):
             return DISALLOWED
         candidate = replace(item, periodic_adi=enable and include_adi)
+        interval = None
         if enable:
             interval = max(
                 item.periodic_interval, required_periodic_interval(candidate)
@@ -520,8 +485,7 @@ class AdvertisingService:
                 interval = max(interval, combined // LL_PERIODIC_INTERVAL_UNIT_US + 1)
                 if interval > item.periodic_interval_limit:
                     return DISALLOWED
-            item.periodic_interval = interval
-        # Re-enabling a running train only changes whether it carries the ADI.
-        item.periodic_adi = candidate.periodic_adi
-        self.link.roles.advertising.set_periodic_enabled(item, enable)
+        self._advertising.set_periodic_enabled(
+            item, enable, interval=interval, include_adi=include_adi
+        )
         return SUCCESS

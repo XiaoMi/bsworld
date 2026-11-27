@@ -1933,8 +1933,7 @@ def test_scan_request_received_event(host):
           address.
     """
     host.cmd(extended_parameters(advertising_handle=2))
-    item = host.link.advertisers[2]
-    host.notify('on_scan_request', item, PEERS[1])
+    host.notify('on_scan_request', host.ll.advertising.snapshot(2), PEERS[1])
     host.ut_rx(
         hci.HCI_LE_Scan_Request_Received_Event,
         advertising_handle=2,
@@ -1973,7 +1972,11 @@ def test_advertising_ended_event_format(host, legacy):
         host.cmd(extended_parameters(advertising_handle=4))
         item = host.link.advertisers[4]
         item.events = 300
-    host.notify('on_advertising_ended', item, ErrorCode.ADVERTISING_TIMEOUT_ERROR)
+    host.notify(
+        'on_advertising_ended',
+        host.ll.advertising.snapshot(item.handle),
+        ErrorCode.ADVERTISING_TIMEOUT_ERROR,
+    )
     if legacy:
         host.ut_rx(
             hci.HCI_LE_Enhanced_Connection_Complete_Event,

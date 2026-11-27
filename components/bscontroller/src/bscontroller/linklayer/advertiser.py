@@ -8,10 +8,12 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import fields, replace
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
+from bscontroller.address import OwnAddressType
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
     LL_ADV_DELAY_MAX_US,
@@ -28,6 +30,11 @@ from bscontroller.linklayer import (
     PDU_CRC_SIZE,
 )
 from bscontroller.linklayer.advertising_pdu import ExtendedPdu
+from bscontroller.linklayer.api import (
+    AddressSnapshot,
+    AdvertisingConfig,
+    advertising_snapshot,
+)
 from bscontroller.linklayer.channel_selection import channel_selection_2
 from bscontroller.linklayer.discovery import Advertising
 from bscontroller.linklayer.extended import (
@@ -40,6 +47,7 @@ from bscontroller.linklayer.pawr import (
     PawrAdvertiser,
     SlotResponse,
     Subevent,
+    SubeventData,
     SubeventResponses,
     fits,
     indication_limit_us,
@@ -64,8 +72,10 @@ from bscontroller.radio.base import PHY_OCTET_BITS, RADIO_SWITCH_TIME_US, Phy
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from bscontroller.address import Address
     from bscontroller.linklayer.discovery import Initiating
     from bscontroller.linklayer.link import RadioLink
+    from bscontroller.linklayer.pawr import PawrTiming
 
 # A Channel Map Update Indication goes out in at least six events before its
 # Instant; one more covers a PAwR event already under way (LL.TS 4.2.3.13).
@@ -170,29 +180,96 @@ class AdvertisingManager:
         self._connect = connect
         self._channel_map = channel_map
         self._big_info = big_info
-        self.contexts: dict[int, Advertising] = {}
+        self._contexts: dict[int, Advertising] = {}
+        self.contexts = MappingProxyType(self._contexts)
         self._current_event: Advertising | None = None
         self._periodic_event = False
 
-    def publish(self, handle: int, item: Advertising) -> None:
-        self.contexts[handle] = item
+    def publish(self, item: Advertising) -> None:
+        self._contexts[item.handle] = item
+
+    def configure(self, candidate: Advertising) -> None:
+        current = self._contexts.get(candidate.handle)
+        if current is not None and (current.periodic_enabled or candidate.handle == -1):
+            # A periodic exchange may still hold this context while the Host
+            # configures the primary advertising set.
+            for field in fields(AdvertisingConfig):
+                setattr(current, field.name, getattr(candidate, field.name))
+            current.identity_address = candidate.identity_address
+            current.identity_target = candidate.identity_target
+        else:
+            if current is None and candidate.handle != -1:
+                candidate.did = self.link.random.randrange(PDU_ADV_ADI_DID_MASK + 1)
+            self.publish(candidate)
+
+    def set_decision_data(self, item: Advertising, flags: int, data: bytes) -> None:
+        item.decision_flags, item.decision_data = flags, bytes(data)
+
+    def set_random_address(self, item: Advertising, address: Address) -> None:
+        address = AddressSnapshot(address)
+        item.random_address = address
+        if OwnAddressType(item.own_address_type).uses_random_fallback:
+            item.identity_address = address
+            # Keep the address already sent through the response to this event.
+            if not item.enabled:
+                item.address = address
+
+    def store_data(
+        self, item: Advertising, field: str, data: bytes, *, renew: bool = False
+    ) -> None:
+        if field not in ('data', 'scan_response', 'periodic_data'):
+            raise ValueError('unknown advertising payload')
+        setattr(item, field, bytearray(data))
+        if renew:
+            self.renew_data_identity(item, field)
+
+    def renew_data_identity(self, item: Advertising, field: str) -> None:
+        """Choose a different DID for the set or train (Vol 6, Part B, 4.4.2.11)."""
+        value = self.link.random.randrange(PDU_ADV_ADI_DID_MASK)
+        if field == 'periodic_data':
+            item.periodic_did = value + (value >= item.periodic_did)
+        else:
+            item.did = value + (value >= item.did)
+
+    def configure_periodic(
+        self,
+        item: Advertising,
+        interval: int,
+        maximum: int,
+        pawr: PawrTiming | None,
+        response_slots: int,
+    ) -> None:
+        if not item.periodic_interval:
+            # The first periodic configuration seeds a random DID (4.4.2.11).
+            item.periodic_did = self.link.random.randrange(PDU_ADV_ADI_DID_MASK + 1)
+        item.periodic_interval = interval
+        item.periodic_interval_max = maximum
+        item.pawr = pawr
+        item.pawr_response_slots = response_slots if pawr is not None else 0
+
+    def store_subevent_data(
+        self, item: Advertising, entries: list[tuple[int, SubeventData]]
+    ) -> None:
+        assert item.pawr_state is not None
+        item.pawr_state.data.update(entries)
+
+    def set_big_info(
+        self, item: Advertising, info: bytes, interval: int | None = None
+    ) -> None:
+        if interval is not None:
+            item.periodic_interval = interval
+        item.big_info = info
 
     def remove(self, handle: int) -> None:
-        if self.contexts.pop(handle) is self._current_event:
+        if self._contexts.pop(handle) is self._current_event:
             self._current_event = None
 
     def clear(self) -> None:
-        self.contexts.clear()
+        self._contexts.clear()
         self._current_event = None
 
-    def handle_of(self, item: Advertising) -> int | None:
-        return next(
-            (handle for handle, current in self.contexts.items() if current is item),
-            None,
-        )
-
     def owns(self, item: Advertising) -> bool:
-        return self.handle_of(item) is not None
+        return self._contexts.get(item.handle) is item
 
     @contextmanager
     def transmitting(
@@ -251,13 +328,17 @@ class AdvertisingManager:
     def expire(self, item: Advertising, reason: int) -> None:
         if item.enabled and self.owns(item):
             self.stop(item)
-            self.link.listener.on_advertising_ended(item, reason)
+            self.link.listener.on_advertising_ended(advertising_snapshot(item), reason)
+
+    def report_scan_request(self, item: Advertising, peer: Address) -> None:
+        if self.owns(item):
+            self.link.listener.on_scan_request(advertising_snapshot(item), peer)
 
     async def expire_deadline(self, item: Advertising) -> None:
         self.expire(item, ErrorCode.ADVERTISING_TIMEOUT_ERROR)
 
     def reservations(self, exclude: object) -> Iterator[RadioReservation]:
-        for item in self.contexts.values():
+        for item in self._contexts.values():
             if not item.periodic_enabled:
                 continue
             state = item.pawr_state
@@ -275,7 +356,7 @@ class AdvertisingManager:
     def prepare(self) -> list[PendingOperation]:
         link = self.link
         operations = []
-        for handle, item in tuple(self.contexts.items()):
+        for item in tuple(self._contexts.values()):
             if not self.owns(item):
                 continue
             if item.enabled and (
@@ -319,7 +400,7 @@ class AdvertisingManager:
                         periodic_transmit_start_us(item),
                         RadioPriority.PERIODIC_TX,
                         item,
-                        partial(self.run_periodic, item, handle),
+                        partial(self.run_periodic, item),
                     )
                 )
         return operations
@@ -358,8 +439,12 @@ class AdvertisingManager:
             ),
         ]
 
-    async def run_periodic(self, item: Advertising, handle: int) -> None:
-        await periodic_transmit(self, item, handle, self._big_info)
+    async def run_periodic(self, item: Advertising) -> None:
+        if not self.owns(item) or not item.periodic_enabled:
+            return
+        self.apply_periodic_channel_map(item)
+        item.big_info = self._big_info(item.handle, item.periodic_next_us)
+        await periodic_transmit(self, item)
 
     async def _run_subevent(self, item: Advertising) -> None:
         self.skip_missed_subevents(item)
@@ -390,11 +475,15 @@ class AdvertisingManager:
         """Ask for the next window of instances; it overrides the outstanding one
         (Vol 4, Part E, 7.7.65.36).
         """
+        if not self.owns(item):
+            return
         timing, state = item.pawr, item.pawr_state
         assert timing is not None and state is not None
         state.window = state.next_window(current, timing.num_subevents)
         self.link.listener.on_subevent_data_request(
-            item, state.window.start % timing.num_subevents, len(state.window)
+            advertising_snapshot(item),
+            state.window.start % timing.num_subevents,
+            len(state.window),
         )
 
     def skip_missed_subevents(self, item: Advertising) -> None:
@@ -506,7 +595,7 @@ class AdvertisingManager:
                 )
             else:
                 self.link.listener.on_response_report(
-                    item,
+                    advertising_snapshot(item),
                     current.subevent,
                     False,
                     [SlotResponse(slot, None) for slot in slots],
@@ -516,12 +605,10 @@ class AdvertisingManager:
         state.transmitted |= transmitted or sent
         state.subevent += 1
         if state.subevent == timing.num_subevents:
-            if state.transmitted:
-                item.periodic_last_counter = item.periodic_counter
+            self.periodic_completed(item, transmitted=state.transmitted)
             state.subevent = 0
             state.transmitted = False
             state.event += 1
-            self.periodic_completed(item)
 
     def slot_completed(
         self, item: Advertising, responses: SubeventResponses, result: SlotResponse
@@ -539,7 +626,10 @@ class AdvertisingManager:
         if not responses.slots:
             state.listening.remove(responses)
             self.link.listener.on_response_report(
-                item, responses.subevent, True, responses.responses
+                advertising_snapshot(item),
+                responses.subevent,
+                True,
+                responses.responses,
             )
 
     def update_periodic_channel_maps(self, channels: int) -> None:
@@ -548,7 +638,7 @@ class AdvertisingManager:
         The Channel Map Update Indication goes out in at least six events before
         its Instant (Core Vol 6, Part B, 4.4.2.12.1; LL.TS 4.2.3.13).
         """
-        for item in self.contexts.values():
+        for item in self._contexts.values():
             if item.periodic_enabled and (
                 item.periodic_channel_update is not None
                 or channels != item.periodic_channel_map
@@ -572,6 +662,8 @@ class AdvertisingManager:
 
     async def run(self, item: Advertising) -> None:
         """Prepare a complete event and commit its next advertising anchor."""
+        if not self.owns(item) or not item.enabled:
+            return
         link = self.link
         item.address, generated = link.privacy.select_local_address(
             item.own_address_type,
@@ -627,7 +719,18 @@ class AdvertisingManager:
             link.now_us + 1,
         )
 
-    def set_periodic_enabled(self, item: Advertising, enable: bool) -> None:
+    def set_periodic_enabled(
+        self,
+        item: Advertising,
+        enable: bool,
+        *,
+        interval: int | None = None,
+        include_adi: bool = False,
+    ) -> None:
+        if interval is not None:
+            item.periodic_interval = interval
+        # Re-enabling a running train can still change whether it carries ADI.
+        item.periodic_adi = enable and include_adi
         link = self.link
         if item.periodic_enabled == enable:
             return
@@ -659,12 +762,16 @@ class AdvertisingManager:
         item.periodic_counter = 0
         item.periodic_last_counter = None
 
-    def periodic_completed(self, item: Advertising, *, missed: bool = False) -> None:
+    def periodic_completed(
+        self, item: Advertising, *, missed: bool = False, transmitted: bool = False
+    ) -> None:
         """Advance anchor and counter together, including radio-conflicted events.
 
         CSA #2 must see the counter of the next actual train event (Core Vol 6,
         Part B, 4.4.2.12); missing an event never refreshes another role's lifetime.
         """
+        if transmitted:
+            item.periodic_last_counter = item.periodic_counter
         interval_us = item.periodic_interval * LL_PERIODIC_INTERVAL_UNIT_US
         count = (
             max(0, (self.link.now_us - item.periodic_next_us) // interval_us) + 1

@@ -3,9 +3,8 @@
 
 """Copy internal LL notifications into detached upper-layer reports.
 
-The LL-facing listener receives committed contexts. Only this adapter reads
-their internals; the HCI-facing sink receives frozen values, never ownership of
-a connection, advertiser, or synchronization context (Core Vol 1, Part A, 2.1.2).
+The HCI-facing sink receives frozen values (Core Vol 1, Part A, 2.1.2).
+Advertising reports already carry snapshots from the set owner.
 """
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ from bscontroller.linklayer.api import (
     ConnectionSnapshot,
     PeriodicSyncSnapshot,
     address_snapshot,
-    advertising_snapshot,
     connection_snapshot,
     synchronization_snapshot,
 )
@@ -34,7 +32,7 @@ if TYPE_CHECKING:
     from bscontroller.address import Address
     from bscontroller.linklayer.api import CisEstablished
     from bscontroller.linklayer.connection import Connection
-    from bscontroller.linklayer.discovery import Advertising, PeriodicSync
+    from bscontroller.linklayer.discovery import PeriodicSync
     from bscontroller.linklayer.pawr import SlotResponse
 
 
@@ -193,10 +191,6 @@ class NotificationSink(IsoListener, Protocol):
 class NotificationAdapter:
     def __init__(self, sink: NotificationSink):
         self.sink = sink
-        self._advertiser_handle: Callable[[Advertising], int | None] | None = None
-
-    def bind_advertising(self, handle_of: Callable[[Advertising], int | None]) -> None:
-        self._advertiser_handle = handle_of
 
     @property
     def local_version(self) -> tuple[int, int, int]:
@@ -354,37 +348,28 @@ class NotificationAdapter:
     def on_authenticated_payload_timeout(self, connection: Connection) -> None:
         self.sink.on_authenticated_payload_timeout(connection_snapshot(connection))
 
-    def _advertiser(self, item: Advertising) -> AdvertisingSnapshot | None:
-        assert self._advertiser_handle is not None
-        handle = self._advertiser_handle(item)
-        return advertising_snapshot(handle, item) if handle is not None else None
-
-    def on_advertising_ended(self, item: Advertising, status: int) -> None:
-        if (advertiser := self._advertiser(item)) is not None:
-            self.sink.on_advertising_ended(advertiser, status)
+    def on_advertising_ended(self, item: AdvertisingSnapshot, status: int) -> None:
+        self.sink.on_advertising_ended(item, status)
 
     def on_monitored_advertiser(self, address: Address, condition: int) -> None:
         self.sink.on_monitored_advertiser(AddressSnapshot(address), condition)
 
-    def on_scan_request(self, item: Advertising, peer: Address) -> None:
-        if (advertiser := self._advertiser(item)) is not None:
-            self.sink.on_scan_request(advertiser, AddressSnapshot(peer))
+    def on_scan_request(self, item: AdvertisingSnapshot, peer: Address) -> None:
+        self.sink.on_scan_request(item, AddressSnapshot(peer))
 
-    def on_subevent_data_request(self, item: Advertising, start: int, count: int):
-        if (advertiser := self._advertiser(item)) is not None:
-            self.sink.on_subevent_data_request(advertiser, start, count)
+    def on_subevent_data_request(
+        self, item: AdvertisingSnapshot, start: int, count: int
+    ) -> None:
+        self.sink.on_subevent_data_request(item, start, count)
 
     def on_response_report(
         self,
-        item: Advertising,
+        item: AdvertisingSnapshot,
         subevent: int,
         transmitted: bool,
         responses: list[SlotResponse],
     ) -> None:
-        if (advertiser := self._advertiser(item)) is not None:
-            self.sink.on_response_report(
-                advertiser, subevent, transmitted, tuple(responses)
-            )
+        self.sink.on_response_report(item, subevent, transmitted, tuple(responses))
 
     def on_connect_failed(self, peer: Address, status: int) -> None:
         self.sink.on_connect_failed(AddressSnapshot(peer), status)

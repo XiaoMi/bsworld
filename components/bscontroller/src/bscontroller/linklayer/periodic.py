@@ -40,16 +40,12 @@ if TYPE_CHECKING:
 async def periodic_transmit(
     advertising: AdvertisingManager,
     item: Advertising,
-    handle: int,
-    big_info: Callable[[int, int], bytes],
 ) -> None:
     # A single radio cannot replay a train anchor that another event occupied.
     """Transmit one AUX_SYNC_IND train on its CSA #2 channel (Core Vol 6, Part B,
     4.4.2.12, 4.5.8.3).
     """
     link = advertising.link
-    advertising.apply_periodic_channel_map(item)
-    item.big_info = big_info(handle, item.periodic_next_us)
     channel = channel_selection_2(
         item.periodic_counter, item.periodic_aa, item.periodic_channel_map
     )
@@ -81,8 +77,7 @@ async def periodic_transmit(
             power_dbm=item.tx_power_dbm,
         )
         if advertising.event_is_current(item):
-            item.periodic_last_counter = item.periodic_counter
-            advertising.periodic_completed(item)
+            advertising.periodic_completed(item, transmitted=True)
 
 
 async def periodic_receive(

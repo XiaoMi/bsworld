@@ -160,6 +160,7 @@ class BroadcastManager:
         available_handles: Callable[[], Iterator[int]],
         free_handle_count: Callable[[], int],
         find_advertiser: Callable[[int], Advertising | None],
+        set_big_info: Callable[[Advertising, bytes, int | None], None],
         find_sync: Callable[[int], PeriodicSync | None],
         channel_map: Callable[[], int],
     ):
@@ -169,6 +170,7 @@ class BroadcastManager:
         self._available_handles = available_handles
         self._free_handle_count = free_handle_count
         self._find_advertiser = find_advertiser
+        self._set_big_info = set_big_info
         self._find_sync = find_sync
         self._channel_map = channel_map
 
@@ -334,8 +336,7 @@ class BroadcastManager:
             self.iso.add(handle, True, isoal_parameters(info))
         self._ciphers(group, config.broadcast_code)
         self.groups[group.handle] = group
-        item.periodic_interval = periodic_interval
-        item.big_info = placeholder
+        self._set_big_info(item, placeholder, periodic_interval)
         return SUCCESS
 
     def _parameters(self, config: BigConfig) -> BigInfo:
@@ -764,7 +765,7 @@ class BroadcastManager:
         if group.advertising_handle is not None:
             item = self._find_advertiser(group.advertising_handle)
             if item is not None:
-                item.big_info = b''
+                self._set_big_info(item, b'', None)
 
     def _close(self, group: Big, reason: int) -> None:
         snapshot = group.snapshot()

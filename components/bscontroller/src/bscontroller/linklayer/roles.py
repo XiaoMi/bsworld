@@ -366,6 +366,7 @@ class LinkRoles:
             available_handles=self.available_connection_handles,
             free_handle_count=self.free_connection_handle_count,
             find_advertiser=self.advertising.contexts.get,
+            set_big_info=self.advertising.set_big_info,
             find_sync=self.synchronization.active.get,
             channel_map=lambda: self.host_channel_map,
         )
@@ -406,8 +407,8 @@ class LinkRoles:
     def sending_connect_response(self, result: ConnectionAccepted) -> Iterator[None]:
         """TX completion creates the Peripheral even if the Host has stopped the set."""
         assert result.advertiser is not None
-        handle = self.advertising.handle_of(result.advertiser)
-        assert handle is not None
+        assert self.advertising.owns(result.advertiser)
+        handle = result.advertiser.handle
         self._pending_response = result
         try:
             yield
@@ -438,9 +439,9 @@ class LinkRoles:
             return None
         if item is not None:
             if response_handle is None:
-                advertising_handle = self.advertising.handle_of(item)
-                if advertising_handle is None or not item.enabled:
+                if not self.advertising.owns(item) or not item.enabled:
                     return None
+                advertising_handle = item.handle
                 completed_events = item.events
             elif self.advertising.event_is_current(item):
                 # Only the original event can terminate its advertising set
@@ -458,7 +459,7 @@ class LinkRoles:
             advertising_handle=advertising_handle,
             completed_events=completed_events,
             pawr_handle=(
-                self.advertising.handle_of(result.pawr_advertiser)
+                result.pawr_advertiser.handle
                 if result.pawr_advertiser is not None
                 else None
             ),

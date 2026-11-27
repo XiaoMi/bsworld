@@ -20,10 +20,14 @@ from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
     from bscontroller.address import Address
-    from bscontroller.linklayer.api import BigSnapshot, CisEstablished
+    from bscontroller.linklayer.api import (
+        AdvertisingSnapshot,
+        BigSnapshot,
+        CisEstablished,
+    )
     from bscontroller.linklayer.bis import BigInfo
     from bscontroller.linklayer.connection import Connection
-    from bscontroller.linklayer.discovery import Advertising, PeriodicSync
+    from bscontroller.linklayer.discovery import PeriodicSync
     from bscontroller.linklayer.pawr import SlotResponse
 
 
@@ -127,14 +131,14 @@ class EncryptionListener(Protocol):
 class AdvertisingListener(Protocol):
     """Advertising state notifications (Core 6.3, Vol 6, Part B, 4.4.2)."""
 
-    def on_advertising_ended(self, item: Advertising, status: int) -> None: ...
-    def on_scan_request(self, item: Advertising, peer: Address) -> None: ...
+    def on_advertising_ended(self, item: AdvertisingSnapshot, status: int) -> None: ...
+    def on_scan_request(self, item: AdvertisingSnapshot, peer: Address) -> None: ...
     def on_subevent_data_request(
-        self, item: Advertising, start: int, count: int
+        self, item: AdvertisingSnapshot, start: int, count: int
     ) -> None: ...
     def on_response_report(
         self,
-        item: Advertising,
+        item: AdvertisingSnapshot,
         subevent: int,
         transmitted: bool,
         responses: list[SlotResponse],
