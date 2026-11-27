@@ -29,7 +29,20 @@ from bscontroller.linklayer import (
     PDU_ADV_CONNECT_SIZE,
     PDU_CRC_SIZE,
 )
+from bscontroller.linklayer.advertising_event import (
+    advertising_event_time_us,
+    advertising_time_us,
+    periodic_time_us,
+    subevent_pdu,
+)
 from bscontroller.linklayer.advertising_pdu import ExtendedPdu
+from bscontroller.linklayer.advertising_radio import (
+    advertise_extended,
+    advertise_legacy,
+    periodic_transmit,
+    response_receive,
+    subevent_transmit,
+)
 from bscontroller.linklayer.api import (
     AddressSnapshot,
     AdvertisingConfig,
@@ -37,12 +50,6 @@ from bscontroller.linklayer.api import (
 )
 from bscontroller.linklayer.channel_selection import channel_selection_2
 from bscontroller.linklayer.discovery import Advertising
-from bscontroller.linklayer.extended import (
-    advertise_extended,
-    advertising_time_us,
-    periodic_time_us,
-    subevent_pdu,
-)
 from bscontroller.linklayer.pawr import (
     PawrAdvertiser,
     SlotResponse,
@@ -52,9 +59,6 @@ from bscontroller.linklayer.pawr import (
     fits,
     indication_limit_us,
 )
-from bscontroller.linklayer.pawr_radio import response_receive, subevent_transmit
-from bscontroller.linklayer.periodic import periodic_transmit
-from bscontroller.linklayer.primary import advertise_legacy, advertising_event_time_us
 from bscontroller.linklayer.resource import PendingOperation
 from bscontroller.linklayer.scheduler import (
     ONE_SHOT_INTERVAL_US,

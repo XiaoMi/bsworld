@@ -32,16 +32,17 @@ from bscontroller.linklayer.discovery import (
     scan_window_at,
 )
 from bscontroller.linklayer.features import LeFeatureMask
+from bscontroller.linklayer.initiating_radio import pawr_connect
 from bscontroller.linklayer.iso import IsoDataPaths
-from bscontroller.linklayer.pawr_connection import pawr_accept, pawr_connect
-from bscontroller.linklayer.primary import receive_scan_event
 from bscontroller.linklayer.resource import PendingOperation
 from bscontroller.linklayer.results import ScanEvent
+from bscontroller.linklayer.scanning_radio import receive_scan_event
 from bscontroller.linklayer.scheduler import RadioPriority, RadioReservation
 from bscontroller.linklayer.state import Role
 from bscontroller.linklayer.synchronization import (
     SynchronizationManager,
 )
+from bscontroller.linklayer.synchronization_radio import pawr_accept
 from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND, RADIO_SWITCH_TIME_US, Phy
 
 if TYPE_CHECKING:

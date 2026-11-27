@@ -18,9 +18,12 @@ from bscontroller import hci
 from bscontroller.config import ControllerConfig
 from bscontroller.hci import HCI_LE_ADV_DATA_SIZE_MAX
 from bscontroller.linklayer import LL_MAFS_US, LL_PERIODIC_INTERVAL_UNIT_US
+from bscontroller.linklayer.advertising_event import (
+    advertising_time_us,
+    periodic_time_us,
+)
 from bscontroller.linklayer.advertising_pdu import ExtendedPdu
 from bscontroller.linklayer.discovery import Advertising, PeriodicSync
-from bscontroller.linklayer.extended import advertising_time_us, periodic_time_us
 from bscontroller.linklayer.state import (
     AdvertisingProperties,
     AdvertisingReport,

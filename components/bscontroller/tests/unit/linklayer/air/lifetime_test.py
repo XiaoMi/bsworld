@@ -53,6 +53,10 @@ from bscontroller.linklayer import (
     advertiser,
 )
 from bscontroller.linklayer.advertising_pdu import ExtendedPdu, SyncInfo
+from bscontroller.linklayer.advertising_radio import (
+    advertising_request,
+    respond_to_aux_request,
+)
 from bscontroller.linklayer.api import advertising_snapshot
 from bscontroller.linklayer.bitstream import generate_access_address
 from bscontroller.linklayer.connection import Connection
@@ -63,10 +67,8 @@ from bscontroller.linklayer.discovery import (
     ScanBackoff,
     Scanning,
 )
-from bscontroller.linklayer.extended import respond_to_aux_request
-from bscontroller.linklayer.extended_scanning import initiate_extended
+from bscontroller.linklayer.initiating_radio import initiate_extended
 from bscontroller.linklayer.link import RadioLink
-from bscontroller.linklayer.primary import advertising_request, receive_scan_event
 from bscontroller.linklayer.resource import RadioResourceManager
 from bscontroller.linklayer.results import (
     ConnectionAccepted,
@@ -74,6 +76,7 @@ from bscontroller.linklayer.results import (
     ScanEvent,
     SyncInfoReceived,
 )
+from bscontroller.linklayer.scanning_radio import receive_scan_event
 from bscontroller.linklayer.scheduler import (
     ONE_SHOT_INTERVAL_US,
     RadioPriority,

@@ -15,8 +15,8 @@ from bscontroller import hci
 from bscontroller.linklayer.advertising_pdu import ExtendedPdu, SyncInfo
 from bscontroller.linklayer.channel_selection import channel_selection_2
 from bscontroller.linklayer.discovery import Initiating, PeriodicSync
+from bscontroller.linklayer.initiating_radio import pawr_connect
 from bscontroller.linklayer.pawr import PawrSync, PawrTiming
-from bscontroller.linklayer.pawr_connection import pawr_connect
 from tests.unit.linklayer.air.advertising import configure_extended, enable_extended
 from tests.unit.linklayer.air.harness import (
     CONNECT_PARAMETERS,
