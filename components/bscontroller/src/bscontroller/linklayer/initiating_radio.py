@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-from enum import Enum, auto
 from typing import TYPE_CHECKING
 
 from bscontroller.address import Address, AddressType, OwnAddressType
@@ -45,13 +44,8 @@ from bscontroller.radio.base import PHY_CODED_S8_FACTOR, RADIO_SWITCH_TIME_US
 if TYPE_CHECKING:
     from bscontroller.linklayer.discovery import Advertising, Initiating
     from bscontroller.linklayer.link import RadioLink
+    from bscontroller.linklayer.parameters import Parameters
     from bscontroller.radio.base import Phy, Received
-
-
-class _AuxiliaryConnectionFailure(Enum):
-    NOT_SENT = auto()
-    NO_RESPONSE = auto()
-    CANCELLED = auto()
 
 
 async def initiate_legacy(
@@ -175,26 +169,57 @@ async def initiate_extended(
     link: RadioLink, item: Initiating, channel: int, packet: Received, address: Address
 ) -> None:
     """Start an AUX_CONNECT exchange and back off on an unanswered request."""
-    if not link.roles.connections.can_accept(address):
+    if link.initiating is not item or not link.roles.connections.can_accept(address):
         return
+    phy = packet.phy
     slot = link.interframe_slot(
         channel,
         packet.end_us,
         PDU_ADV_CONNECT_SIZE,
-        packet.phy,
+        phy,
         response_size=PDU_ADV_AUX_CONNECT_RSP_SIZE,
     )
     # Core Vol 6, Part B, 4.4.4.2 reuses the scanner backoff.
     if slot is None or not item.backoff.permit():
         return
-    result = await _request_auxiliary_connection(
-        link, item, address, channel, slot[0], packet.phy
+    start_us, end_us = slot
+    own, generated = link.privacy.select_local_address(
+        item.own_address_type,
+        item.identity_address or item.address,
+        link.privacy.identity(address),
     )
-    if isinstance(result, ConnectionAccepted):
-        item.backoff.complete(True, link.random)
+    item.address = own
+    parameters = link.connection_parameters(
+        (item.phy_parameters or {}).get(phy, item.parameters),
+        end_us,
+        auxiliary_window_delay_us(phy),
+        phy,
+    )
+    if parameters is None:
+        return
+
+    end_us = await link.transmit(
+        channel,
+        connect_request(own, address, parameters),
+        start_us=start_us,
+        access_address=PDU_ADV_ACCESS_ADDRESS,
+        crc_init=PDU_ADV_CRC_INIT,
+        phy=phy,
+        coding=PHY_CODED_S8_FACTOR,
+    )
+    if link.initiating is not item:
+        return
+    response = await link.receive_response(
+        channel, end_us, phy, deadline_us=link.resource.deadline_us
+    )
+    if link.initiating is not item:
+        return
+    result = _accept_auxiliary_response(
+        link, response, address, own, generated, item, parameters, end_us, phy
+    )
+    item.backoff.complete(result is not None, link.random)
+    if result is not None:
         link.roles.accepted(result)
-    elif result == _AuxiliaryConnectionFailure.NO_RESPONSE:
-        item.backoff.complete(False, link.random)
 
 
 async def pawr_connect(
@@ -210,89 +235,56 @@ async def pawr_connect(
     Without that response the request is discarded, once, and the Host
     learns that the connection failed (Vol 4, Part E, 7.7.65.10).
     """
-    result = await _request_auxiliary_connection(
-        link,
-        initiating,
-        initiating.peer,
-        channel,
-        start_us,
-        item.secondary_phy,
-        pawr_advertiser=item,
-    )
-    if isinstance(result, ConnectionAccepted):
-        link.roles.accepted(result)
-    elif result != _AuxiliaryConnectionFailure.CANCELLED:
-        link.roles.scanning.cancel_initiating()
-        link.listener.on_connect_failed(
-            initiating.peer, ErrorCode.CONNECTION_FAILED_TO_BE_ESTABLISHED_ERROR
-        )
-
-
-async def _request_auxiliary_connection(
-    link: RadioLink,
-    initiating: Initiating,
-    peer: Address,
-    channel: int,
-    start_us: int,
-    phy: Phy,
-    *,
-    pawr_advertiser: Advertising | None = None,
-) -> ConnectionAccepted | _AuxiliaryConnectionFailure:
-    """Run one exchange and return its validated ACL parameters to the caller."""
-    state = pawr_advertiser.pawr_state if pawr_advertiser is not None else None
+    state = item.pawr_state
 
     def current() -> bool:
-        return link.initiating is initiating and (
-            pawr_advertiser is None
-            or (
-                state is not None
-                and pawr_advertiser.pawr_state is state
-                and link.roles.advertising.owns(pawr_advertiser)
-            )
+        return (
+            link.initiating is initiating
+            and state is not None
+            and item.pawr_state is state
+            and link.roles.advertising.owns(item)
         )
 
     if not current():
-        return _AuxiliaryConnectionFailure.CANCELLED
-    if pawr_advertiser is None:
-        access_address, crc_init = PDU_ADV_ACCESS_ADDRESS, PDU_ADV_CRC_INIT
-        coding, power_dbm = PHY_CODED_S8_FACTOR, 0
-    else:
-        access_address, crc_init = (
-            pawr_advertiser.periodic_aa,
-            pawr_advertiser.periodic_crc,
+        return
+    peer = initiating.peer
+
+    def failed() -> None:
+        link.roles.scanning.cancel_initiating()
+        link.listener.on_connect_failed(
+            peer, ErrorCode.CONNECTION_FAILED_TO_BE_ESTABLISHED_ERROR
         )
-        coding = pawr_advertiser.secondary_coding.factor()
-        power_dbm = pawr_advertiser.tx_power_dbm
+
+    phy, coding = item.secondary_phy, item.secondary_coding.factor()
     own, generated = link.privacy.select_local_address(
         initiating.own_address_type,
         initiating.identity_address or initiating.address,
         link.privacy.identity(peer),
     )
     initiating.address = own
-    window_delay = auxiliary_window_delay_us(phy)
-    end_us = start_us + phy.airtime_us(PDU_ADV_CONNECT_SIZE, coding)
+    request_end_us = start_us + phy.airtime_us(PDU_ADV_CONNECT_SIZE, coding)
     # HCI permits a supplied PHY's connection parameters as fallback (4.E.7.8.66).
     parameters = link.connection_parameters(
         (initiating.phy_parameters or {}).get(phy, initiating.parameters),
-        end_us,
-        window_delay,
+        request_end_us,
+        auxiliary_window_delay_us(phy),
         phy,
     )
-    if parameters is None:
-        return _AuxiliaryConnectionFailure.NOT_SENT
-    if pawr_advertiser is not None and (
-        not link.roles.connections.can_accept(peer)
-        or not link.resource.admit(
-            pawr_advertiser,
-            start_us - RADIO_SWITCH_TIME_US,
-            end_us + LL_IFS_US + phy.airtime_us(PDU_ADV_AUX_CONNECT_RSP_SIZE),
-            RadioPriority.PERIODIC_TX,
-            earliest_us=link.radio.earliest_start_us(channel, phy, transmit=True)
-            - RADIO_SWITCH_TIME_US,
-        )
+    if parameters is None or not link.roles.connections.can_accept(peer):
+        failed()
+        return
+    if not link.resource.admit(
+        item,
+        start_us - RADIO_SWITCH_TIME_US,
+        request_end_us + LL_IFS_US + phy.airtime_us(PDU_ADV_AUX_CONNECT_RSP_SIZE),
+        RadioPriority.PERIODIC_TX,
+        earliest_us=link.radio.earliest_start_us(channel, phy, transmit=True)
+        - RADIO_SWITCH_TIME_US,
     ):
-        return _AuxiliaryConnectionFailure.NOT_SENT
+        failed()
+        return
 
+    access_address, crc_init = item.periodic_aa, item.periodic_crc
     end_us = await link.transmit(
         channel,
         connect_request(own, peer, parameters),
@@ -301,25 +293,51 @@ async def _request_auxiliary_connection(
         crc_init=crc_init,
         phy=phy,
         coding=coding,
-        power_dbm=power_dbm,
+        power_dbm=item.tx_power_dbm,
     )
     if not current():
-        return _AuxiliaryConnectionFailure.CANCELLED
+        return
     response = await link.receive_response(
-        channel,
+        channel, end_us, phy, access_address=access_address, crc_init=crc_init
+    )
+    if not current():
+        return
+    result = _accept_auxiliary_response(
+        link,
+        response,
+        peer,
+        own,
+        generated,
+        initiating,
+        parameters,
         end_us,
         phy,
-        access_address=access_address,
-        crc_init=crc_init,
-        deadline_us=link.resource.deadline_us if pawr_advertiser is None else None,
+        pawr_advertiser=item,
     )
-    if not current():
-        return _AuxiliaryConnectionFailure.CANCELLED
+    if result is None:
+        failed()
+    else:
+        link.roles.accepted(result)
+
+
+def _accept_auxiliary_response(
+    link: RadioLink,
+    response: Received | None,
+    peer: Address,
+    own: Address,
+    generated: bool,
+    initiating: Initiating,
+    parameters: Parameters,
+    end_us: int,
+    phy: Phy,
+    *,
+    pawr_advertiser: Advertising | None = None,
+) -> ConnectionAccepted | None:
     address = _response_peer(
         link, response, peer, own, allow_rpa_change=pawr_advertiser is None
     )
     if address is None:
-        return _AuxiliaryConnectionFailure.NO_RESPONSE
+        return None
     return ConnectionAccepted(
         parameters,
         address,
@@ -328,7 +346,7 @@ async def _request_auxiliary_connection(
         self_address=own,
         local_rpa=own if generated else None,
         csa2=True,
-        window_delay_us=window_delay,
+        window_delay_us=auxiliary_window_delay_us(phy),
         phy=phy,
         initiator=initiating,
         pawr_advertiser=pawr_advertiser,
