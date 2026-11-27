@@ -101,46 +101,47 @@ class BabbleSimSession:
             raise
 
     async def __aexit__(self, exc_type, exc, traceback):
-        failures: list[BaseException] = []
-        interrupted = None
-        if self.loop is not None:
-            try:
-                self.loop.unbind_clock()
-            except BaseException as error:
-                failures.append(error)
-            self.loop = None
+        failures: list[Exception] = []
+        primary_error = exc
         try:
+            if self.loop is not None:
+                try:
+                    self.loop.unbind_clock()
+                except Exception as error:
+                    failures.append(error)
+                finally:
+                    self.loop = None
             results = await asyncio.gather(
                 *(worker.close() for _, worker in self.controllers),
                 return_exceptions=True,
             )
             for (dev_id, _), result in zip(self.controllers, results, strict=True):
-                if isinstance(result, BaseException) and result is not exc:
-                    result.add_note(f'while closing Controller {dev_id}')
-                    failures.append(result)
+                if not isinstance(result, BaseException) or result is exc:
+                    continue
+                if not isinstance(result, Exception):
+                    raise result
+                result.add_note(f'while closing Controller {dev_id}')
+                failures.append(result)
         except asyncio.CancelledError as error:
-            interrupted = error
-        except BaseException as error:
+            primary_error = error
+            raise
+        except Exception as error:
             failures.append(error)
         finally:
             # Keep the Host's PHY grant until every radio has stopped submitting work.
             if self.clock is not None:
                 try:
                     self.clock.close()
-                except BaseException as error:
+                except Exception as error:
                     failures.append(error)
-        if exc is not None and interrupted is not None:
-            failures.append(interrupted)
-        original = exc if exc is not None else interrupted
-        if original is not None:
-            for failure in failures:
-                original.add_note(
-                    'Radio session cleanup failed:\n'
-                    + ''.join(format_exception(failure, chain=False)).rstrip()
-                )
-            if exc is None:
-                raise original
-        elif len(failures) == 1:
+            if primary_error is not None:
+                for failure in failures:
+                    primary_error.add_note(
+                        'Radio session cleanup failed:\n'
+                        + ''.join(format_exception(failure, chain=False)).rstrip()
+                    )
+        if exc is not None or not failures:
+            return
+        if len(failures) == 1:
             raise failures[0]
-        elif failures:
-            raise BaseExceptionGroup('errors while closing the radio session', failures)
+        raise ExceptionGroup('errors while closing the radio session', failures)
