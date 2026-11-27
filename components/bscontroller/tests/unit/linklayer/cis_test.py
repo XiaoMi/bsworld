@@ -530,7 +530,9 @@ def test_cis_termination_waits_for_local_procedure(
     if established:
         event.established = True
         manager._report_established(event)
-        llcp.prepare_phy(hci.PhyBit.LE_2M, hci.PhyBit.LE_2M, 0).start()
+        assert (
+            llcp.request_phy(hci.PhyBit.LE_2M, hci.PhyBit.LE_2M, 0) == ErrorCode.SUCCESS
+        )
         assert transmit_control(connection).opcode == ControlOpcode.LL_PHY_REQ
 
     reason = ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR
@@ -561,7 +563,7 @@ def test_cis_termination_waits_for_local_procedure(
     assert termination.payload == bytes(
         (ControlOpcode.LL_CIS_TERMINATE_IND, 1, 1, reason)
     )
-    llcp.prepare_version().start()
+    assert llcp.read_remote_version() == ErrorCode.SUCCESS
     llcp.start_deferred()
     assert list(queue) == [termination] and not controller.events
     queue.popleft()

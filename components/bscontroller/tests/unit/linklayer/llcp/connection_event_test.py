@@ -781,7 +781,7 @@ def test_procedure_timeout_inside_skip_stops_the_loop(central):
         - The connection is closed.
     """
     connection = central.connection
-    central.host_start('prepare_version')
+    central.host_start('read_remote_version')
     central.radio.now_us = connection.llcp.next_deadline_us + 1
     central.connection.last_rx_us = central.radio.now_us
     connection.anchor_us = 0
@@ -804,7 +804,7 @@ def test_closed_during_prepare_ends_event(central):
         - The connection is closed and nothing was transmitted.
     """
     connection = central.connection
-    central.host_start('prepare_version')
+    central.host_start('read_remote_version')
     deadline = connection.llcp.next_deadline_us
     connection.anchor_us = deadline + 10
     connection.last_rx_us = deadline

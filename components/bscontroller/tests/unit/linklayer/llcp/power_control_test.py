@@ -102,7 +102,7 @@ def test_power_change_waits_for_local_procedure_and_completes_on_send(central):
     central.lt_tx(pdu(Opcode.LL_POWER_CONTROL_REQ, 1, 0, 0))
     central.lt_rx(Opcode.LL_POWER_CONTROL_RSP)
     central.tx_ack()
-    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
+    central.host_start('request_phy', PHY_2M, PHY_2M, 0)
     central.lt_rx(Opcode.LL_PHY_REQ)
     central.tx_ack()
     central.hci(hci.HCI_LE_Write_RF_Path_Compensation_Command(50, 0))
@@ -125,7 +125,7 @@ def test_power_change_waits_for_local_procedure_and_completes_on_send(central):
     )
     assert not llcp.local_procedure_busy and llcp.next_deadline_us is None
 
-    central.host_start('prepare_version')
+    central.host_start('read_remote_version')
     central.lt_rx(Opcode.LL_POWER_CHANGE_IND)
     central.tx_ack()
     central.lt_rx(Opcode.LL_VERSION_IND)
@@ -240,7 +240,7 @@ def test_path_loss_recovers_with_a_rate_limited_power_request(central, rssi, del
     sample(0)
     central.ut_rx(loss_event, current_path_loss=50, zone_entered=PathLossZone.MIDDLE)
 
-    central.host_start('prepare_read_remote_transmit_power', 1)
+    central.host_start('read_remote_transmit_power', 1)
     retry_us = central.radio.now_us + POWER_REQUEST_INTERVAL_US
     central.event_prepare()
     central.lt_rx(Opcode.LL_POWER_CONTROL_REQ, request)

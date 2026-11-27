@@ -180,7 +180,7 @@ def test_frame_space_update_cannot_invalidate_an_announced_phy(central):
 def test_frame_space_update_cannot_invalidate_an_announced_interval(central):
     central.set_parameters(interval=24)
     central.set_peer_features(LeFeatureMask.LL_EXTENDED_FEATURE_SET)
-    central.host_start('prepare_parameters', 6, 6, 0, 100)
+    central.host_start('request_connection_update', 6, 6, 0, 100)
     update = central.lt_rx(Opcode.LL_CONNECTION_UPDATE_IND)
     central.tx_ack()
 
@@ -230,7 +230,7 @@ def test_queued_frame_space_reply_revalidates_a_newly_announced_interval(periphe
 )
 def test_frame_space_update_keeps_selected_interval_in_host_range(central, peer_reply):
     central.set_parameters(interval=24)
-    central.host_start('prepare_parameters', 6, 6, 0, 100)
+    central.host_start('request_connection_update', 6, 6, 0, 100)
     central.lt_rx(Opcode.LL_CONNECTION_PARAM_REQ)
 
     central.lt_tx(request(9000, 9000, ONE_MBPS, CP))

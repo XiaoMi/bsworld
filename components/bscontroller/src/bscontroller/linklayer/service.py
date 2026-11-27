@@ -31,7 +31,6 @@ from bscontroller.linklayer.api import (
     InitiatingConfig,
     PeriodicSyncConfig,
     PeriodicSyncSnapshot,
-    PreparedProcedure,
     ScanBackoffSnapshot,
     ScanningSnapshot,
     ScanWindowConfig,
@@ -595,16 +594,17 @@ class LinkLayerService:
         connection = self._connection(handle)
         return connection_snapshot(connection) if connection is not None else None
 
-    def request_peer_sca(self, handle: int) -> PreparedProcedure:
+    def request_peer_sca(self, handle: int) -> int:
         connection = self._connection(handle)
         if connection is None:
-            return PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
+            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
         clock = connection.controls.clock_accuracy
         if not clock.peer_supports_update:
-            return PreparedProcedure(ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
+            return ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
         if clock.pending or connection.llcp.has_pending('clock_accuracy'):
-            return PreparedProcedure(DISALLOWED)
-        return PreparedProcedure(SUCCESS, clock.queue_read)
+            return DISALLOWED
+        clock.queue_read()
+        return SUCCESS
 
     def modify_sleep_clock_accuracy(self, action: int) -> int:
         if action not in (0, 1):
@@ -668,19 +668,14 @@ class LinkLayerService:
             )
         return SUCCESS, *connection.controls.power.read_local(PowerPhy(phy))
 
-    def prepare_read_remote_transmit_power(
-        self, handle: int, phy: int
-    ) -> PreparedProcedure:
+    def read_remote_transmit_power(self, handle: int, phy: int) -> int:
         connection = self._connection(handle)
         if connection is None:
-            return PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
+            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
         if not PowerPhy.LE_1M <= phy <= PowerPhy.LE_CODED_S2:
-            return PreparedProcedure(
-                ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR
-            )
-        return PreparedProcedure(
-            SUCCESS, lambda: connection.controls.power.queue_read(PowerPhy(phy))
-        )
+            return ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR
+        connection.controls.power.queue_read(PowerPhy(phy))
+        return SUCCESS
 
     def set_path_loss_parameters(
         self,
@@ -733,7 +728,7 @@ class LinkLayerService:
         self.link.default_subrate = request
         return SUCCESS
 
-    def prepare_subrate(
+    def request_subrate(
         self,
         handle: int,
         minimum: int,
@@ -741,16 +736,16 @@ class LinkLayerService:
         latency: int,
         continuation: int,
         timeout: int,
-    ) -> PreparedProcedure:
+    ) -> int:
         connection = self._connection(handle)
         if connection is None:
-            return PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
+            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
         request = SubrateRequest(minimum, maximum, latency, continuation, timeout)
         if not request.valid_host_parameters or not request.fits_connection(
             connection.parameters.interval_us
         ):
-            return PreparedProcedure(INVALID)
-        return connection.llcp.prepare_subrate(request)
+            return INVALID
+        return connection.llcp.request_subrate(request)
 
     def set_default_rate(self, parameters: ConnectionRateParameters) -> int:
         if not parameters.valid:
@@ -760,71 +755,65 @@ class LinkLayerService:
         self.link.default_rate = parameters
         return SUCCESS
 
-    def prepare_connection_rate(
+    def request_connection_rate(
         self, handle: int, parameters: ConnectionRateParameters
-    ) -> PreparedProcedure:
+    ) -> int:
         connection = self._connection(handle)
         if connection is None or not connection.established:
-            return PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
-        return connection.llcp.prepare_connection_rate(parameters)
+            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+        return connection.llcp.request_connection_rate(parameters)
 
-    def prepare_frame_space(
+    def request_frame_space(
         self, handle: int, minimum: int, maximum: int, phys: int, spacing: int
-    ) -> PreparedProcedure:
+    ) -> int:
         connection = self._connection(handle)
         if connection is None:
-            return PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
-        return connection.llcp.prepare_frame_space(
+            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+        return connection.llcp.request_frame_space(
             FrameSpaceRequest(minimum, maximum, int(phys), int(spacing))
         )
 
-    def prepare_encryption(
-        self, handle: int, rand: bytes, ediv: int, key: bytes
-    ) -> PreparedProcedure:
+    def enable_encryption(self, handle: int, rand: bytes, ediv: int, key: bytes) -> int:
         connection = self._connection(handle)
         return (
-            connection.llcp.prepare_encryption(rand, ediv, key)
+            connection.llcp.enable_encryption(rand, ediv, key)
             if connection
-            else PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
+            else ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
         )
 
-    def prepare_features(
-        self, handle: int, pages: int | None = None
-    ) -> PreparedProcedure:
+    def read_remote_features(self, handle: int, pages: int | None = None) -> int:
         if pages is not None:
             if not 0 <= pages <= FEATURE_MAX_PAGE or not 0 <= handle <= 0x0EFF:
-                return PreparedProcedure(ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR)
+                return ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
             if any(
                 item.llcp.all_features_pending
                 for item in self.link.connections.values()
             ):
-                return PreparedProcedure(DISALLOWED)
+                return DISALLOWED
         connection = self._connection(handle)
         return (
-            connection.llcp.prepare_features(pages)
+            connection.llcp.read_remote_features(pages)
             if connection
-            else PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
+            else ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
         )
 
-    def prepare_version(self, handle: int) -> PreparedProcedure:
+    def read_remote_version(self, handle: int) -> int:
         connection = self._connection(handle)
         return (
-            connection.llcp.prepare_version()
+            connection.llcp.read_remote_version()
             if connection
-            else PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
+            else ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
         )
 
-    def prepare_phy(
-        self, handle: int, tx: int, rx: int, coding: int
-    ) -> PreparedProcedure:
+    def request_phy(self, handle: int, tx: int, rx: int, coding: int) -> int:
         connection = self._connection(handle)
         return (
-            connection.llcp.prepare_phy(tx, rx, coding)
+            connection.llcp.request_phy(tx, rx, coding)
             if connection
-            else PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
+            else ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
         )
 
-    def prepare_parameters(
+    def request_connection_update(
         self,
         handle: int,
         minimum: int,
@@ -834,15 +823,17 @@ class LinkLayerService:
         *,
         min_ce_length: int = 0,
         max_ce_length: int = 0,
-    ) -> PreparedProcedure:
+    ) -> int:
         connection = self._connection(handle)
         if connection is None:
-            return PreparedProcedure(ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR)
+            return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
         if connection.llcp.parameter_update_pending:
-            return PreparedProcedure(DISALLOWED)
+            return DISALLOWED
         if min_ce_length > max_ce_length:
-            return PreparedProcedure(INVALID)
-        return connection.llcp.prepare_parameters(minimum, maximum, latency, timeout)
+            return INVALID
+        return connection.llcp.request_connection_update(
+            minimum, maximum, latency, timeout
+        )
 
     def supply_key(self, handle: int, key: bytes | None) -> int:
         connection = self._connection(handle)

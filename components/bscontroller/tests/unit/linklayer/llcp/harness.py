@@ -249,12 +249,9 @@ class LlcpHarness:
     def host_start(
         self, method: str, *args, status=ErrorCode.SUCCESS, **kwargs
     ) -> None:
-        """Admit a prepared procedure and start it, as HCI does after Command
-        Status.
-        """
-        prepared = self.host(method, *args, **kwargs)
-        assert prepared.status == status, (prepared.status, status)
-        prepared.start()
+        """Request a procedure through the LL service and check its status."""
+        result = self.host(method, *args, **kwargs)
+        assert result == status, (result, status)
 
     def hci(self, command) -> list:
         """Send a raw HCI command through the Controller; return produced events."""

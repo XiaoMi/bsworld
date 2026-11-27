@@ -612,6 +612,8 @@ def test_rejected_cis_leaves_iso_buffer_available_to_other_streams(configured):
     acl.peer_features = LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_PERIPHERAL
     manager = host.link.roles.cig
     host.cmd_status(hci.HCI_LE_Create_CIS_Command([pending], [acl.handle]))
+    assert acl.llcp.response_deadline_us is None
+    assert not acl.event.queue
     acl.llcp.start_deferred()
     transmit_control(acl)
 

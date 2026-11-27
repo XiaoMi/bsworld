@@ -60,7 +60,7 @@ def mask_remote_request(controller, mask: str) -> None:
 
 def request(iut, minimum, maximum=None, latency=0, timeout=100, *, status=0):
     iut.host_start(
-        'prepare_parameters',
+        'request_connection_update',
         minimum,
         minimum if maximum is None else maximum,
         latency,
@@ -456,15 +456,15 @@ def test_host_admission_rejects_invalid_ce_lengths(central):
     Invalid Command Parameters.
 
     Steps:
-        1. Call prepare_parameters with min_ce_length=1, max_ce_length=0.
+        1. Call request_connection_update with min_ce_length=1, max_ce_length=0.
 
     Expected:
-        - The prepared status is Invalid Command Parameters.
+        - The status is Invalid Command Parameters.
     """
-    prepared = central.host(
-        'prepare_parameters', 24, 24, 0, 100, min_ce_length=1, max_ce_length=0
+    status = central.host(
+        'request_connection_update', 24, 24, 0, 100, min_ce_length=1, max_ce_length=0
     )
-    assert prepared.status == ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
+    assert status == ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
 
 
 def test_host_admission_busy(central):
@@ -487,21 +487,21 @@ def test_host_admission_busy(central):
 
 
 def test_host_admission_unknown_handle(central):
-    """Preparing an update on an unknown handle is refused.
+    """A connection update on an unknown handle is refused.
 
-    Purpose: Verify that preparing a connection update for a non-existent handle
+    Purpose: Verify that requesting a connection update for a non-existent handle
     fails with Unknown Connection Identifier.
 
     Steps:
-        1. Call prepare_parameters with handle 0x0EFF.
+        1. Call request_connection_update with handle 0x0EFF.
 
     Expected:
-        - The prepared status is Unknown Connection Identifier.
+        - The status is Unknown Connection Identifier.
     """
-    prepared = central.controller.le_procedures.ll.prepare_parameters(
+    status = central.controller.le_procedures.ll.request_connection_update(
         0x0EFF, 24, 24, 0, 100
     )
-    assert prepared.status == ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+    assert status == ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
 
 
 def test_periph_loc_rejected_for_known_unsupported_peer(peripheral):
