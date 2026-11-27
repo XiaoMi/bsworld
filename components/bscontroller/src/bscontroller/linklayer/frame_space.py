@@ -16,11 +16,14 @@ from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
     LL_CONN_INTERVAL_UNIT_US,
     LL_IFS_US,
-    LL_RESPONSE_TIMEOUT_US,
     ControlOpcode,
 )
 from bscontroller.linklayer.features import LeFeature, LeFeatureMask
-from bscontroller.linklayer.procedure import LocalProcedure, ProcedureContext
+from bscontroller.linklayer.procedure import (
+    PROCEDURE_COLLISION,
+    LocalProcedure,
+    ProcedureContext,
+)
 from bscontroller.linklayer.state import Role
 from bscontroller.radio.base import RADIO_SWITCH_TIME_US, Phy
 
@@ -34,7 +37,6 @@ MAX_SPACE_US = 10_000
 INVALID = ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
 INVALID_LL = ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR
 UNSUPPORTED = ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
-COLLISION = ErrorCode.LMP_ERROR_TRANSACTION_COLLISION_OR_LL_PROCEDURE_COLLISION_ERROR
 LOCAL_HOST, REMOTE = 0, 2
 
 
@@ -110,10 +112,6 @@ class FrameSpaceProcedure(LocalProcedure):
         self.peer_rejected = False
         self.peer_rejected_pairs: set[tuple[int, int]] = set()
         self.collision = False
-
-    @property
-    def busy(self) -> bool:
-        return self.pending or self.response is not None
 
     @property
     def tx_direction(self) -> Spacing:
@@ -300,10 +298,10 @@ class FrameSpaceProcedure(LocalProcedure):
             frozenset((Opcode.LL_FRAME_SPACE_RSP,)),
             self,
             host_initiated=True,
-            deadline_us=self.connection.radio.now_us + LL_RESPONSE_TIMEOUT_US,
+            response_timer=self.owner.response_timer,
         )
         self.collision = False
-        self.owner.enqueue(
+        self.connection.enqueue_control(
             bytes([Opcode.LL_FRAME_SPACE_REQ]) + self.local_request.pack()
         )
 
@@ -385,11 +383,11 @@ class FrameSpaceProcedure(LocalProcedure):
             reject(INVALID_LL)
             return
         if self.response is not None:
-            reject(COLLISION)
+            reject(PROCEDURE_COLLISION)
             return
         if self.pending and not local_queued:
             if self.connection.role == Role.CENTRAL:
-                reject(COLLISION)
+                reject(PROCEDURE_COLLISION)
                 return
             self.collision = True
         space = max(request.minimum, RADIO_SWITCH_TIME_US)
@@ -409,7 +407,7 @@ class FrameSpaceProcedure(LocalProcedure):
                 changed_phys |= phy_bit(phy)
                 changed_spacings |= direction
         self.response = FrameSpaceChange(space, changed_phys, changed_spacings)
-        self.owner.enqueue(
+        self.connection.enqueue_control(
             bytes([Opcode.LL_FRAME_SPACE_RSP]) + self.response.pack(),
             priority=reply_first,
         )

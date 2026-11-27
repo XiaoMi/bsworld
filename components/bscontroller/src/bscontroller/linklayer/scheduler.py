@@ -9,6 +9,9 @@ from enum import IntEnum
 
 from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND
 
+# A one-shot reservation's next occurrence lies beyond any simulated horizon.
+ONE_SHOT_INTERVAL_US = 1 << 48
+
 
 class RadioPriority(IntEnum):
     """Fixed arbitration order for equal starts and overlapping radio windows."""

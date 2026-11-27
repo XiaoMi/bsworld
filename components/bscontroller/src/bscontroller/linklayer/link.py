@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import random
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import replace
 
 from bscontroller.address import Address
@@ -24,7 +24,7 @@ from bscontroller.linklayer import (
     PDU_DATA_PAYLOAD_TIME_MIN_US,
     PDU_HEADER_SIZE,
 )
-from bscontroller.linklayer.advertising import ExtendedPdu
+from bscontroller.linklayer.advertising_pdu import ExtendedPdu
 from bscontroller.linklayer.api import SyncTransferConfig
 from bscontroller.linklayer.bitstream import generate_access_address
 from bscontroller.linklayer.connection import Connection
@@ -36,7 +36,6 @@ from bscontroller.linklayer.discovery import (
     PeriodicSync,
     Scanning,
 )
-from bscontroller.linklayer.extended import ExtendedProcedures
 from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.listener import Listener
 from bscontroller.linklayer.monitoring import AdvertiserMonitoring
@@ -79,9 +78,13 @@ class RadioLink:
         self.random = random.Random(seed)
         self.privacy = Privacy(self)
         self.decision = DecisionProgram(self)
-        self.monitoring = AdvertiserMonitoring(self)
+        self.monitoring = AdvertiserMonitoring(
+            radio,
+            lambda address, condition: listener.on_monitored_advertiser(
+                address, condition
+            ),
+        )
         self.roles = LinkRoles(self)
-        self.extended = ExtendedProcedures(self)
         self.resource = RadioResourceManager(
             lambda: self.now_us, self.roles.reservations
         )
@@ -126,7 +129,7 @@ class RadioLink:
     def syncs(self) -> dict[int, PeriodicSync]:
         return self.roles.synchronization.active
 
-    def trace(self, message: str) -> None:
+    def trace(self, message: str | Callable[[], str]) -> None:
         self.listener.trace(message)
 
     def reset(self) -> None:
@@ -224,8 +227,9 @@ class RadioLink:
             sca=self.sleep_clock_accuracy,
         )
 
-    async def _transmit(self, channel: int, pdu: bytes, **kwargs) -> int:
-        self.trace(f'RADIO TX ch={channel} pdu={pdu.hex()}')
+    async def transmit(self, channel: int, pdu: bytes, **kwargs) -> int:
+        """Transmit a Link Layer PDU with the configured RF path compensation."""
+        self.trace(lambda: f'RADIO TX ch={channel} pdu={pdu.hex()}')
         if self.rf_tx_path_compensation:
             kwargs['power_dbm'] = self.radiative_transmit_power(
                 kwargs.get('power_dbm', 0)

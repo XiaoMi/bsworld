@@ -16,7 +16,7 @@ Tests manipulate the environment and a temporary filesystem via monkeypatch and
 
 import pytest
 
-from bscontroller.runtime.phy import find_phy
+from bscontroller.runtime import find_phy, phy_command
 
 
 def test_find_phy_uses_babblesim_output_path(monkeypatch, tmp_path):
@@ -115,3 +115,19 @@ def test_find_phy_rejects_missing_or_nonexecutable_binary(monkeypatch, tmp_path,
 
     with pytest.raises(ValueError, match='PHY executable missing'):
         find_phy()
+
+
+def test_phy_command_selects_channel_arguments_without_overriding_defaults(tmp_path):
+    """A propagation matrix can select multiatt without a default attenuation."""
+    binary, matrix = tmp_path / 'phy', tmp_path / 'matrix'
+    basic = [binary, '-s=sim', '-D=2', '-defmodem=BLE_simple']
+    assert phy_command(binary, 'sim', 2) == [*basic, '-nodump']
+    assert phy_command(binary, 'sim', 2, matrix_file=matrix, dump=True) == [
+        *basic,
+        '-channel=multiatt',
+        '-argschannel',
+        f'-file={matrix}',
+        '-argsmain',
+        '-dump',
+        '-dump_imm',
+    ]

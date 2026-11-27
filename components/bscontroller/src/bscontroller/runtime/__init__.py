@@ -3,6 +3,17 @@
 
 """Controller execution, simulation time, and PHY process ownership."""
 
-from .phy import PhyProcess, find_phy
+from bscontroller.radio.babblesim import simulation_root
 
-__all__ = ['PhyProcess', 'find_phy']
+from .event_loop import RadioClock
+from .phy import PhyProcess, find_phy, phy_command
+from .session import BabbleSimClock
+
+__all__ = [
+    'BabbleSimClock',
+    'PhyProcess',
+    'RadioClock',
+    'find_phy',
+    'phy_command',
+    'simulation_root',
+]

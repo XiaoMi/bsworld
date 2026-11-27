@@ -25,12 +25,13 @@ from bscontroller.linklayer import (
     ControlOpcode,
     LlId,
 )
+from bscontroller.linklayer.api import PreparedProcedure
 from bscontroller.linklayer.control import ControlProcedures
 from bscontroller.linklayer.data_length import valid_data_length
-from bscontroller.linklayer.data_path import PacketLimits, ReceiveContext
 from bscontroller.linklayer.encryption import KEY_MISSING_REJECTIONS, Encryption, State
 from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.frame_space import FrameSpaceRequest
+from bscontroller.linklayer.packet_control import PacketLimits, ReceiveContext
 from bscontroller.linklayer.parameters import valid_timing
 from bscontroller.linklayer.procedure import (
     ProcedureContext,
@@ -41,6 +42,7 @@ from bscontroller.linklayer.state import Role
 from bscontroller.radio.base import Received
 
 if TYPE_CHECKING:
+    from bscontroller.linklayer.cig import CigManager
     from bscontroller.linklayer.connection import Connection
     from bscontroller.linklayer.connection_rate import ConnectionRateParameters
     from bscontroller.linklayer.subrating import SubrateRequest
@@ -49,24 +51,6 @@ if TYPE_CHECKING:
 SUCCESS = ErrorCode.SUCCESS
 DISALLOWED = ErrorCode.COMMAND_DISALLOWED_ERROR
 INVALID = ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR
-
-
-@dataclass
-class PreparedProcedure:
-    """An admitted operation started after HCI has published Command Status.
-
-    Some procedures complete immediately from cached peer information. Keeping
-    admission separate from execution preserves Command Status before completion;
-    start consumes the action so a caller cannot accidentally initiate it twice.
-    """
-
-    status: int
-    action: Callable[[], None] | None = None
-
-    def start(self) -> None:
-        action, self.action = self.action, None
-        if action is not None:
-            action()
 
 
 @dataclass(frozen=True)
@@ -102,8 +86,9 @@ LL_CONTROL_PDU_SENDER_ROLES: dict[int, Role] = {
 
 
 class LlcpCoordinator:
-    def __init__(self, connection: Connection):
+    def __init__(self, connection: Connection, cig: CigManager):
         self.connection = connection
+        self.cig = cig
         self.response_timer = ProcedureResponseTimer()
         self.controls = ControlProcedures(connection, self.response_timer)
         self.encryption = Encryption(connection)
@@ -118,18 +103,28 @@ class LlcpCoordinator:
             self.controls.busy
             or self.encryption.busy
             or self.encryption.ping_pending
-            or self.connection.link.roles.cig.busy(self.connection)
+            or self.cig.busy(self.connection)
         )
 
     def _admit(self, procedure: DeferredProcedure) -> int:
         """Start now, queue behind another procedure, or refuse a duplicate."""
         if self._duplicate(procedure.kind):
             return DISALLOWED
+        self._schedule(procedure)
+        return SUCCESS
+
+    def _schedule(self, procedure: DeferredProcedure) -> None:
         if self.local_procedure_busy or self.deferred:
             self.deferred.append(procedure)
         else:
             procedure.start()
-        return SUCCESS
+
+    def schedule_channel_map(self) -> None:
+        """Use the latest classification when this ACL's turn arrives (6.B.5.1.2)."""
+        if not any(procedure.kind == 'channel_map' for procedure in self.deferred):
+            self._schedule(
+                DeferredProcedure('channel_map', self.controls.update_channel_map)
+            )
 
     def _prepare(self, procedure: DeferredProcedure) -> PreparedProcedure:
         if self._duplicate(procedure.kind):
@@ -162,7 +157,9 @@ class LlcpCoordinator:
             return controls.rate.in_progress
         if kind == 'frame_space':
             return controls.frame_space.pending
-        return bool(controls.data_length.pending)
+        if kind == 'data_length':
+            return controls.data_length.pending
+        raise ValueError(f'unknown local LL procedure: {kind}')
 
     @property
     def all_features_pending(self) -> bool:
@@ -272,7 +269,7 @@ class LlcpCoordinator:
                     self.local_exchanges[context.request] = context
                     break
             self.controls.sent(payload)
-            self.connection.link.roles.cig.sent(self.connection, payload)
+            self.cig.sent(self.connection, payload)
         self.encryption.sent(payload)
 
     def sent(self, payload: bytes | None, *, length: int, first: bool) -> None:
@@ -285,7 +282,7 @@ class LlcpCoordinator:
     def acknowledged(self, payload: bytes) -> int | None:
         self.controls.acknowledge(payload)
         self.encryption.acknowledged(payload)
-        self.connection.link.roles.cig.acknowledged(self.connection, payload)
+        self.cig.acknowledged(self.connection, payload)
         if payload[0] == Opcode.LL_TERMINATE_IND:
             return self.connection.termination_status
         return None
@@ -388,7 +385,7 @@ class LlcpCoordinator:
             return False
         self.controls.release_transfers()
         self.start_deferred()
-        self.connection.link.roles.cig.start_pending(self.connection)
+        self.cig.start_pending(self.connection)
         self.controls.subrating.start_peer_request()
         self.controls.power.update_transmitter()
         self.controls.clock_accuracy.start_if_needed()
@@ -398,7 +395,7 @@ class LlcpCoordinator:
         return force_exchange or self.controls.subrating.next_event(index) == index
 
     def close(self, reason: int) -> None:
-        self.connection.link.roles.cig.close_acl(self.connection, reason)
+        self.cig.close_acl(self.connection, reason)
         while self.deferred:
             procedure = self.deferred.popleft()
             if procedure.cancel is not None:
@@ -411,7 +408,7 @@ class LlcpCoordinator:
         self.controls.power.close(reason)
         self.controls.clock_accuracy.close(reason)
         self.local_exchanges.clear()
-        self.response_timer.stop()
+        self.controls.stop_instant_timer()
 
     def check_timeout(self) -> bool:
         return self.controls.check_timeout() or self.encryption.check_timeout()
@@ -452,7 +449,7 @@ class LlcpCoordinator:
             return
         if self.encryption.control(payload):
             return
-        if connection.link.roles.cig.control(connection, payload):
+        if self.cig.control(connection, payload):
             return
         if self.controls.control(payload):
             self._prune_exchanges()
@@ -515,7 +512,7 @@ class LlcpCoordinator:
         if (
             connection.role != Role.CENTRAL
             or self.encryption.busy
-            or connection.link.roles.cig.has_created_cis(connection)
+            or self.cig.has_created_cis(connection)
         ):
             return PreparedProcedure(DISALLOWED)
         return self._prepare(
@@ -553,17 +550,16 @@ class LlcpCoordinator:
             DeferredProcedure('version', self.controls.request_version)
         )
 
-    def prepare_phy(
-        self, tx: int, rx: int, coding: int, parameter_status: int
-    ) -> PreparedProcedure:
-        if parameter_status:
-            return PreparedProcedure(parameter_status)
-
+    def prepare_phy(self, tx: int, rx: int, coding: int) -> PreparedProcedure:
         def request():
             self.connection.tx_coding = coding
             self.controls.phy.request_phy(tx, rx)
 
         return self._prepare(DeferredProcedure('phy', request))
+
+    @property
+    def parameter_update_pending(self) -> bool:
+        return self._duplicate('parameters') or self._duplicate('connection_rate')
 
     def prepare_parameters(
         self,
@@ -571,12 +567,7 @@ class LlcpCoordinator:
         maximum: int,
         latency: int,
         timeout: int,
-        *,
-        valid_ce_lengths: bool,
     ) -> PreparedProcedure:
-        if self._duplicate('parameters') or self._duplicate('connection_rate'):
-            return PreparedProcedure(DISALLOWED)
-
         def valid_request() -> bool:
             return (
                 self.connection.fits_cis_supervision_timeout(timeout)
@@ -590,7 +581,7 @@ class LlcpCoordinator:
                 )
             )
 
-        if not valid_request() or not valid_ce_lengths:
+        if not valid_request():
             return PreparedProcedure(INVALID)
         if (
             self.connection.role == Role.PERIPHERAL

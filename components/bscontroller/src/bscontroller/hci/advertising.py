@@ -37,7 +37,7 @@ from bscontroller.linklayer import (
     AdvertisingMode,
     AdvertisingPduType,
 )
-from bscontroller.linklayer.advertising import AdvertisingCoding
+from bscontroller.linklayer.advertising_pdu import AdvertisingCoding
 from bscontroller.linklayer.api import AdvertisingConfig
 from bscontroller.linklayer.pawr import (
     LL_PAWR_RESPONSE_SLOT_DELAY_MAX,
@@ -364,13 +364,17 @@ class LeAdvertisingCommands(LeControllerContext):
         high_duty = bool(
             properties & Properties.HIGH_DUTY_CYCLE_DIRECTED_CONNECTABLE_ADVERTISING
         )
+        use_public_address = not hci.OwnAddressType(
+            command.own_address_type
+        ).uses_random_fallback
         return AdvertisingConfig(
             # Extended sets have independent random fallbacks (7.8.52/53).
             # The LL service substitutes an address assigned to this handle;
             # the global LE Set Random Address value belongs to other roles.
-            address=hci.Address.ANY_RANDOM
-            if hci.OwnAddressType(command.own_address_type).uses_random_fallback
-            else self.controller.public_address,
+            address=self.controller.public_address
+            if use_public_address
+            else hci.Address.ANY_RANDOM,
+            use_public_address=use_public_address,
             interval_us=LL_DIRECT_ADV_INTERVAL_US
             if high_duty
             else (
@@ -527,7 +531,9 @@ class LeAdvertisingCommands(LeControllerContext):
         if item.target is not None and not item.extended and data:
             # A legacy directed PDU contains the two addresses, with no data field.
             return hci.HCI_StatusReturnParameters(INVALID)
-        if operation not in tuple(DataOperation):
+        if operation not in tuple(DataOperation) or (
+            field == 'scan_response' and operation == DataOperation.UNCHANGED_DATA
+        ):
             return hci.HCI_StatusReturnParameters(INVALID)
         if (
             field != 'periodic_data'
@@ -556,7 +562,6 @@ class LeAdvertisingCommands(LeControllerContext):
             # partially assembled data out of the running train.
             return hci.HCI_StatusReturnParameters(DISALLOWED)
         if operation == DataOperation.UNCHANGED_DATA:
-            # TODO: reject this operation for scan-response data (7.8.55).
             # Periodic data requires its own train to be enabled (7.8.62).
             enabled = (
                 item.periodic_enabled if field == 'periodic_data' else item.enabled

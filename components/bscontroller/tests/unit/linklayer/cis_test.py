@@ -9,24 +9,32 @@ import pytest
 
 from bscontroller import hci
 from bscontroller.errors import ErrorCode
-from bscontroller.linklayer import ControlOpcode
+from bscontroller.linklayer import (
+    LL_RESPONSE_TIMEOUT_US,
+    LL_SCA_50_PPM,
+    LL_SCA_500_PPM,
+    ControlOpcode,
+)
 from bscontroller.linklayer.api import CigConfig, CisConfig
+from bscontroller.linklayer.cig_schedule import available_cig_offsets
 from bscontroller.linklayer.cis import (
     CIS_NESN,
+    CIS_NPI,
     CIS_SN,
     CisDirection,
     CisEvent,
     CisEventParameters,
 )
-from bscontroller.linklayer.cis_parameters import CisRequest, plan_cig
-from bscontroller.linklayer.data_path import PacketSecurity
+from bscontroller.linklayer.cis_parameters import CisRequest, CisWindow, plan_cig
 from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.frame_space import FrameSpaceRequest
 from bscontroller.linklayer.iso import IsoDataPaths
-from bscontroller.linklayer.isoal import IsoStatus
+from bscontroller.linklayer.isoal import IsoSdu, IsoStatus
+from bscontroller.linklayer.packet_security import PacketSecurity
 from bscontroller.linklayer.resource import RadioResourceManager
+from bscontroller.linklayer.scheduler import RadioReservation
 from bscontroller.linklayer.state import Role
-from bscontroller.radio.base import Phy, Received
+from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND, Phy, Received
 
 HANDLE = 1
 INTERVAL_US = 10_000
@@ -61,10 +69,11 @@ def make_event(outbound, inbound, responses, *, framed=False, cig_delay_us=1000)
     )
     connection = SimpleNamespace(
         role=Role.CENTRAL,
+        clock_rate=PHY_TIME_UNITS_PER_SECOND,
         link=link,
         radio=radio,
         closed=False,
-        last_rx_us=0,
+        last_anchor_rx_us=0,
         parameters=SimpleNamespace(channel_map=(1 << 37) - 1),
         controls=SimpleNamespace(
             power=SimpleNamespace(
@@ -93,6 +102,36 @@ def test_central_cis_supervision_waits_for_acl_ack():
     assert event.deadline_us == ANCHOR_US + (3 + 6) * INTERVAL_US
 
 
+def test_central_acl_and_cis_keep_fractional_phase_when_clock_accuracy_changes(
+    connection,
+):
+    """A 7.5-ms interval adds 1.875 us of drift per event in loose-clock mode."""
+    connection.role = Role.CENTRAL
+    connection.parameters = replace(connection.parameters, interval=6)
+    direction = CisDirection(Phy.LE_1M, 0, 0, 1, 7500, 0)
+    parameters = CisEventParameters(direction, direction, 7500, 0, 1, False, 400, 400)
+    offset = 2000
+    event = CisEvent(
+        connection,
+        HANDLE,
+        0x9A328370,
+        0x123456,
+        connection.anchor_us + offset,
+        parameters,
+        iso=connection.link.roles.iso,
+    )
+    for accuracy, elapsed in ((LL_SCA_500_PPM, 60_015), (LL_SCA_50_PPM, 60_000)):
+        connection.link.sleep_clock_accuracy = accuracy
+        start = connection.anchor_us
+        reservation = event.reservation()
+        for _ in range(8):
+            connection.step_event()
+            event._close_subevent()
+            assert event.anchor_us == connection.anchor_us + offset
+            assert reservation.window_after(event.next_us)[0] == event.next_us
+        assert connection.anchor_us - start == elapsed
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('ft', [1, 2])
 async def test_retry_stops_at_flush_point(ft):
@@ -109,10 +148,10 @@ async def test_retry_stops_at_flush_point(ft):
         outbound, inbound, [None, Received(bytes([ack, 0]), -40, 12270, 12350, True)]
     )
     stream = event.iso.get_stream(HANDLE, True)
-    stream.accept(b'first', 2, 1, 5, 0)
-    stream.accept(b'next', 2, 2, 4, ANCHOR_US + 1)
-    await event.advance()
-    await event.advance()
+    stream.enqueue_sdu(IsoSdu(1, b'first', 0))
+    stream.enqueue_sdu(IsoSdu(2, b'next', ANCHOR_US + 1))
+    await event.advance(is_current=lambda: True)
+    await event.advance(is_current=lambda: True)
 
     expected = bytes([CIS_SN, 4]) + b'next' if ft == 1 else b'\x00\x05first'
     assert [call.args[1] for call in radio.transmit.await_args_list] == [
@@ -134,8 +173,8 @@ async def test_cis_transmit_sync_uses_group_reference():
         outbound, inbound, [None], framed=True, cig_delay_us=1500
     )
     stream = event.iso.get_stream(HANDLE, True)
-    stream.accept(b'test', 2, 1, 4, 300)
-    await event.advance()
+    stream.enqueue_sdu(IsoSdu(1, b'test', 300))
+    await event.advance(is_current=lambda: True)
 
     timestamp = ANCHOR_US - 500
     assert stream.tx_sync.timestamp_us == timestamp
@@ -152,13 +191,30 @@ async def test_null_pdu_does_not_deliver_an_empty_sdu():
     event, radio, listener = make_event(
         outbound, inbound, [Received(b'\x40\x00', -40, 2270, 2350, True)]
     )
-    await event.advance()
+    await event.advance(is_current=lambda: True)
     event.iso.flush(2350)
 
     assert radio.transmit.await_args.args[1] == b'\x40\x00'
     assert event.link_quality() == (0, 0, 0, 0, 0, 1, 0)
     handle, sdu = listener.on_iso_received.call_args.args
     assert (handle, sdu.status) == (HANDLE, IsoStatus.LOST)
+
+
+def test_cig_offset_window_stays_clear_through_fractional_clock_cycle():
+    """Either edge offered to the peer must fit for every rounding of a 7.5-ms event."""
+    direction = CisDirection(Phy.LE_1M, 20, 1, 1, 7500, 20)
+    parameters = CisEventParameters(direction, direction, 7500, 0, 1, False, 1000, 1000)
+    reserved = RadioReservation(
+        1030, 3000, 7501, interval_fraction=875_000, start_fraction=750_000
+    )
+    period = 7500 * (PHY_TIME_UNITS_PER_SECOND + 250)
+    window = available_cig_offsets(parameters, period, [reserved], 0, 100, 7420)
+    assert window is not None
+    for offset in window:
+        for event in range(8):
+            start = offset + event * period // PHY_TIME_UNITS_PER_SECOND
+            busy, free = reserved.window_after(start)
+            assert free <= start or start + parameters.cig_sync_delay_us <= busy
 
 
 def test_framed_cig_checks_actual_transport_latency():
@@ -249,6 +305,77 @@ def pending_cis(connection):
     assert manager.create_cis(pair) == ErrorCode.SUCCESS
     manager.start_pending(connection)
     return manager, handle
+
+
+def check_queued_setup_timeout(connection, manager):
+    deadline = connection.radio.now_us + LL_RESPONSE_TIMEOUT_US
+    connection.radio.now_us += 2000
+    manager.sent(connection, connection.event.queue.popleft().payload)
+    connection.radio.now_us = deadline - 1
+    manager.prepare()
+    assert not connection.closed
+    connection.radio.now_us = deadline
+    manager.prepare()
+    assert connection.closed
+
+
+def test_cis_request_timeout_starts_in_the_acl_queue(connection, pending_cis):
+    """Run T_PRT from enqueue through a delayed first LL_CIS_REQ (Core 6.B.5.2)."""
+    manager, _ = pending_cis
+    check_queued_setup_timeout(connection, manager)
+
+
+def test_cis_response_timeout_starts_at_host_acceptance(connection, controller):
+    """Accepting the request starts a fresh 40 s before LL_CIS_RSP transmission."""
+    manager = connection.link.roles.cig
+    connection.link.features |= LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM
+    direction = CisDirection(Phy.LE_1M, 32, 1, 1, 20_000, 32)
+    params = CisEventParameters(direction, direction, 20_000, 0, 1, False, 0, 0)
+    connection.control(CisRequest(1, 1, params, CisWindow(2000, 2000, 6)).encode())
+    (event,) = controller.events
+    assert isinstance(event, hci.HCI_LE_CIS_Request_Event)
+    connection.radio.now_us += 1000
+    assert manager.accept_cis(event.cis_connection_handle) == ErrorCode.SUCCESS
+    check_queued_setup_timeout(connection, manager)
+
+
+@pytest.mark.asyncio
+async def test_central_waits_for_first_cis_pdu_before_channel_map_update(
+    connection, controller, pending_cis
+):
+    """An ACL ACK for LL_CIS_IND starts supervision. The first received CIS PDU
+    completes CIS Creation and releases the next local procedure (Core 6.B.5.1.15).
+    """
+    manager, handle = pending_cis
+    queue = connection.event.queue
+    request = queue.popleft().payload
+    manager.sent(connection, request)
+    connection.controls.request_channel_map(0x1F)
+    connection.control(
+        bytes([ControlOpcode.LL_CIS_RSP]) + CisRequest.decode(request).window.encode()
+    )
+    indication = queue.popleft().payload
+    assert indication[0] == ControlOpcode.LL_CIS_IND
+    manager.sent(connection, indication)
+    manager.acknowledged(connection, indication)
+    connection.llcp.start_deferred()
+    assert not queue
+
+    event = manager.streams[handle].event
+    airtime_us = Phy.LE_1M.airtime_us(2)
+    start_us = event.anchor_us + airtime_us + event.spacing_us
+    connection.radio.incoming.append(
+        Received(bytes([CIS_NPI, 0]), -40, start_us, start_us + airtime_us, True)
+    )
+    await manager.run(event)
+    (established,) = controller.events
+    assert (established.connection_handle, established.status) == (
+        handle,
+        ErrorCode.SUCCESS,
+    )
+    connection.llcp.start_deferred()
+    (update,) = queue
+    assert update.payload[0] == ControlOpcode.LL_CHANNEL_MAP_IND
 
 
 def test_iso_test_commands_require_an_established_cis(controller, pending_cis):

@@ -9,6 +9,7 @@ from dataclasses import replace
 import pytest
 
 from bscontroller.linklayer import LL_CONN_INTERVAL_UNIT_US, LL_SCA_500_PPM
+from bscontroller.linklayer.cis_parameters import event_anchor
 from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.roles import connection_window
 from tests.unit.linklayer.llcp.harness import (
@@ -174,7 +175,10 @@ def test_reservation_skips_idle_anchors_and_carries_fraction_across_wrap(central
     next_window = connection_window(connection)
     interval = 7 * 6 * LL_CONN_INTERVAL_UNIT_US
     expected_offset = interval + (interval * 250 + 625_000) // 1_000_000
+    # LL_CIS_REQ names ACL anchors by their wrapped 16-bit event counter.
+    assert event_anchor(connection, 5) == anchor + expected_offset
     connection.skip_missed_events()
+    assert event_anchor(connection, 0xFFFE) == anchor
     assert connection.event_counter == 5
     assert connection.anchor_us == anchor + expected_offset
     assert next_window == connection_window(connection)

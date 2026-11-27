@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from bscontroller.runtime.event_loop import RadioEventLoop
+from bscontroller import RadioEventLoop
 
 from .env import Env, resolve_run_identity
 from .topology import BluetoothTopology

@@ -107,9 +107,13 @@ Choose the Host connection when creating the Controller.
 - **Unix socket** with `hci_socket`. The worker opens the socket on startup and begins processing HCI commands once the Controller has synchronized with the PHY.
 - **In-process H4** with `hci_socket` omitted. Before starting the Controller, register a sink with `controller.set_packet_sink(sink)`. The sink receives H4 packets through its `on_packet(packet: bytes)` method. To send an H4 packet to the Controller, call `controller.on_packet(packet)`.
 
+For a byte-stream transport, create a `bscontroller.hci.H4Parser(sink)` and call `feed_data(chunk)` as bytes arrive. The sink receives complete H4 packets.
+
 Pass `hci_snoop_file=Path(...)` to record a BTSnoop capture, timestamped with simulation time.
 
 Pass `rf_pcap_file=Path(...)` to write the Controller's radio traffic to PCAPNG. To merge transmissions from multiple Controllers, create one `EllisysCapture(Path(...))` and pass it as `ellisys_capture` to each Controller. Close it after the `RadioSession` exits to save the trace.
+
+For a test that changes an outgoing PDU, pass a callable as `tx_filter` to that Controller. Its return value is used for the PHY transmission, CRC and radio capture.
 
 The package also exposes `Radio`, `Phy`, `Received` and the HCI packet classes in `hci`. Controller settings are described under [Configuration](#configuration).
 
@@ -119,11 +123,18 @@ When managing the simulation from Python, keep the PHY running for the lifetime 
 - To run the Host on simulation time, use a `RadioEventLoop` and give its clock a `clock_dev_id` distinct from the Controller device IDs.
 - Exiting `RadioSession` stops the Controllers before closing its Host clock connection. Exit `PhyProcess` after the session ends.
 
+For a topology that also starts external firmware, register the radio devices first.
+Create the clock with `BabbleSimClock.for_device(phy.state_dir, clock_id)`, await
+`clock.connect()`, then call `clock.bind(loop)` to wait for the first PHY grant.
+Unbind the clock from the loop before stopping the devices and closing the clock.
+`bscontroller.radio.PHY_TIME_UNITS_PER_SECOND` converts the clock’s microsecond timestamps to and from seconds.
+`BabbleSimClock` and `phy_command` are available from `bscontroller.runtime`.
+
 For runnable examples of LE advertising, connection management, ISO data and concurrent roles, see the [Bumble Host samples](samples/README.md).
 
 ## Configuration
 
-`ControllerConfig` defines the values the Bluetooth specification leaves to the Controller. Fields you omit retain their defaults.
+`ControllerConfig` defines Controller parameters and resource limits. Fields you omit retain their defaults.
 
 | JSON key | Default | Range | Spec (Vol 4, Part E) |
 |---|---|---|---|
@@ -149,8 +160,11 @@ For runnable examples of LE advertising, connection management, ISO data and con
 | `isoPacketLength` | `251` | `5`–`16383` | 7.8.2 |
 | `maxBigs` | `4` | `1`–`240` | 7.8.103, 7.8.106 |
 | `maxBis` | `16` | `1`–`3839` | 5.3.1, 7.8.103, 7.8.106 |
+| `maxScanDuplicateEntries` | `1024` | `1`–`65535` | Implementation limit |
 
 All ACL connections share the ACL buffers, and all ISO streams share a separate ISO pool. If the Host exceeds the advertised packet length or sends while the corresponding pool is full, the Controller drops that packet and logs the handle and limit.
+
+When scan duplicate filtering is enabled, the limit counts advertising and scan-response records separately. At capacity, a new record evicts the least recently seen entry.
 
 Use `defaults` for settings shared by all Controllers and `controllers` for overrides by name.
 
@@ -232,6 +246,8 @@ The table groups Link Layer features by the Bluetooth Core version that introduc
 | 6.2 | Channel Sounding Amplitude-based Attack Resilience |  |
 | 6.3 | Channel Sounding Inline Phase Correction Term Transfer |  |
 
+Each active CIS direction supports a burst number (BN) of 1 and a flush timeout (FT) of one ISO interval. A CIS may use multiple subevents to retransmit that payload.
+
 ## How it works
 
 The HCI layer exchanges packets with the Host. The Link Layer implements the controller procedures, and the radio adapter passes packets to and from the BabbleSim PHY. Protocol behavior follows [Bluetooth Core 6.3](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core_v6.3/out/en/architecture,-change-history,-and-conventions/architecture.html#UUID-37039e1f-e0cd-37ce-2cf0-15dd6e6cff2e).
@@ -240,7 +256,9 @@ The HCI layer exchanges packets with the Host. The Link Layer implements the con
 
 The Link Layer has separate managers for advertising, scanning, initiating connections, synchronization, ACL connections, and isochronous groups. Each ACL connection keeps its own control-procedure state, encryption state and event executor. A single scheduler coordinates radio use across the roles.
 
-Each Controller thread has its own event loop and PHY connection. The Host and Controller exchange complete H4 packets. The PHY advances simulation time in integer microseconds as the Controllers and any Host clock synchronize with it.
+Each Controller thread has its own event loop and PHY connection. The Host and Controller exchange complete H4 packets.
+
+The PHY grants one device at a time and waits for its next request. For events at the same simulated microsecond, it orders grants by PHY operation priority, then by device ID. For a given topology and PHY configuration, the same device IDs, seeds and timed Host inputs reproduce the air trace.
 
 | Object | Owns |
 | --- | --- |

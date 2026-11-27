@@ -24,8 +24,8 @@ from bscontroller.linklayer import (
     ControlOpcode,
 )
 from bscontroller.linklayer.connection_event import ConnectionEvent
-from bscontroller.linklayer.data_path import PacketSecurity
 from bscontroller.linklayer.llcp import LlcpCoordinator
+from bscontroller.linklayer.packet_security import PacketSecurity
 from bscontroller.linklayer.parameters import Parameters
 from bscontroller.linklayer.state import Role
 from bscontroller.linklayer.timing import (
@@ -43,6 +43,7 @@ from bscontroller.radio.base import (
 
 if TYPE_CHECKING:
     from bscontroller.address import Address
+    from bscontroller.linklayer.connection_event import Outbound
     from bscontroller.linklayer.link import RadioLink
     from bscontroller.linklayer.listener import ConnectionListener
 
@@ -81,6 +82,7 @@ class Connection:
         self.event_counter: int = 0
         self.event_epoch = 0
         self.clock_remainder = 0
+        self.last_anchor_rx_us = connect_end_us
         # The latest event with a received packet and the one before it, for
         # syncConnEventCount; None until there is one.
         self.rx_event_counters: tuple[int | None, int | None] = (None, None)
@@ -112,7 +114,7 @@ class Connection:
         self.tx_coding: int = PHY_CODED_S8_FACTOR
         self.update_window: bool = False
         self.packet_security = PacketSecurity()
-        self.llcp = LlcpCoordinator(self)
+        self.llcp = LlcpCoordinator(self, link.roles.cig)
         self.event = ConnectionEvent(self, self.llcp, self.packet_security)
         self.link.trace(
             f"LL CREATED role={role} aa={parameters.access_address:08x} "
@@ -160,7 +162,9 @@ class Connection:
             )
         self.enqueue_control(bytes([Opcode.LL_TERMINATE_IND, reason]), priority=True)
 
-    def enqueue_control(self, payload: bytes, *, priority: bool = False) -> None:
+    def enqueue_control(self, payload: bytes, *, priority: bool = False) -> Outbound:
+        # All new LL Control PDUs reset T_PRT. ARQ retries reuse the pending PDU.
+        self.llcp.response_timer.restart(self.radio.now_us)
         return self.event.enqueue_control(payload, priority=priority)
 
     def complete(self, reason: int) -> None:
@@ -260,31 +264,45 @@ class Connection:
 
     def receive_widening_at(self, anchor_us: int) -> int:
         return window_widening(
-            anchor_us - self.last_rx_us,
+            anchor_us - self.last_anchor_rx_us,
             self.controls.clock_accuracy.peer_accuracy,
             local_sca=self.link.sleep_clock_accuracy,
         )
 
     @property
-    def event_interval_fixed_us(self) -> int:
-        """Return the event period in millionths of a microsecond."""
-        interval = self.parameters.interval_us
-        rate = PHY_TIME_UNITS_PER_SECOND
+    def clock_rate(self) -> int:
+        """PHY microseconds per second of this ACL and its CISes."""
         if (
             self.role == Role.CENTRAL
             and self.link.sleep_clock_accuracy == LL_SCA_500_PPM
         ):
             # Model 250 ppm of drift in the loose mode.
-            rate += 250
-        return interval * rate
+            return PHY_TIME_UNITS_PER_SECOND + 250
+        return PHY_TIME_UNITS_PER_SECOND
+
+    @property
+    def event_interval_fixed_us(self) -> int:
+        return self.parameters.interval_us * self.clock_rate
+
+    def project_anchor(self, events: int) -> tuple[int, int]:
+        """Project the anchor and its fractional phase by a signed event count."""
+        elapsed, phase = divmod(
+            self.event_interval_fixed_us * events + self.clock_remainder,
+            PHY_TIME_UNITS_PER_SECOND,
+        )
+        return self.anchor_us + elapsed, phase
 
     @property
     def next_anchor_us(self) -> int:
-        return (
-            self.anchor_us
-            + (self.event_interval_fixed_us + self.clock_remainder)
-            // PHY_TIME_UNITS_PER_SECOND
-        )
+        return self.project_anchor(1)[0]
+
+    def synchronize_clock(self, observed_us: int, expected_us: int) -> None:
+        """Apply a measured Peripheral clock correction to its ACL and CIS anchors."""
+        self.last_anchor_rx_us = max(self.last_anchor_rx_us, observed_us)
+        correction = observed_us - expected_us
+        if correction:
+            self.anchor_us += correction
+            self.link.roles.cig.shift_anchors(self, correction)
 
     @property
     def event_guard_us(self) -> int:
@@ -324,11 +342,7 @@ class Connection:
     def step_event(self, count: int = 1) -> None:
         # Carry the fraction across events so the integer PHY timestamps do
         # not accumulate rounding error.
-        interval, self.clock_remainder = divmod(
-            self.event_interval_fixed_us * count + self.clock_remainder,
-            PHY_TIME_UNITS_PER_SECOND,
-        )
-        self.anchor_us += interval
+        self.anchor_us, self.clock_remainder = self.project_anchor(count)
         index = self.event_index + count
         self.event_counter = index & LL_EVENT_COUNTER_MASK
         self.event_epoch = index - self.event_counter
@@ -347,6 +361,9 @@ class Connection:
                 latest += self.receive_window_us + self.receive_widening_us
             if latest > self.radio.now_us:
                 break
+            # Service an expired timer before a missed event can start new LLCP work.
+            if self.radio.now_us >= self.next_deadline_us and self.check_timeout():
+                return
             update = self.controls.pending
             self.llcp.event_prepare()
             if self.closed:

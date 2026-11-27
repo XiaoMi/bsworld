@@ -119,3 +119,51 @@ def split_primary_auxiliary(packets):
     primary = [packet for packet in packets if packet.channel in (37, 38, 39)]
     auxiliary = [packet for packet in packets if packet.channel not in (37, 38, 39)]
     return primary, auxiliary
+
+
+def create_connection(iut, peer=PEER, *, policy=0, status=ErrorCode.SUCCESS, **changes):
+    values = dict(
+        le_scan_interval=SCAN_WINDOW,
+        le_scan_window=SCAN_WINDOW,
+        initiator_filter_policy=policy,
+        peer_address_type=peer.address_type,
+        peer_address=peer,
+        own_address_type=hci.OwnAddressType.PUBLIC,
+        connection_interval_min=24,
+        connection_interval_max=40,
+        max_latency=0,
+        supervision_timeout=100,
+        min_ce_length=0,
+        max_ce_length=0,
+    )
+    iut.ut(hci.HCI_LE_Create_Connection_Command(**(values | changes)), status)
+
+
+def create_extended_connection(
+    iut,
+    peer=PEER,
+    *,
+    phys=hci.PhyBit.LE_1M,
+    policy=0,
+    window=160,
+    status=ErrorCode.SUCCESS,
+):
+    count = bin(phys).count('1')
+    iut.ut(
+        hci.HCI_LE_Extended_Create_Connection_Command(
+            initiator_filter_policy=policy,
+            own_address_type=hci.OwnAddressType.PUBLIC,
+            peer_address_type=peer.address_type,
+            peer_address=peer,
+            initiating_phys=phys,
+            scan_intervals=[window] * count,
+            scan_windows=[window] * count,
+            connection_interval_mins=[24 + index * 8 for index in range(count)],
+            connection_interval_maxs=[40 + index * 8 for index in range(count)],
+            max_latencies=[0] * count,
+            supervision_timeouts=[100] * count,
+            min_ce_lengths=[0] * count,
+            max_ce_lengths=[0] * count,
+        ),
+        status,
+    )

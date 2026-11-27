@@ -4,7 +4,6 @@
 
 """Scanning, filtering and periodic synchronization HCI commands."""
 
-import asyncio
 import enum
 
 from bscontroller import hci
@@ -239,7 +238,6 @@ class LeScanningCommands(LeControllerContext):
             period_us=period_us,
         )
         if status == SUCCESS:
-            self.extended_scan = extended
             reset_each_period = duplicates == HCI_LE_SCAN_DUPLICATES_RESET_EACH_PERIOD
             if not enable or not duplicates:
                 self.duplicate_filter = None
@@ -248,7 +246,8 @@ class LeScanningCommands(LeControllerContext):
                 or self.duplicate_filter.reset_each_period != reset_each_period
             ):
                 self.duplicate_filter = ScanDuplicateFilter(
-                    reset_each_period=reset_each_period
+                    capacity=self.controller.config.max_scan_duplicate_entries,
+                    reset_each_period=reset_each_period,
                 )
             else:
                 self.duplicate_filter.on_scan_period()
@@ -393,11 +392,9 @@ class LeScanningCommands(LeControllerContext):
             use_list,
         )
         if status != SUCCESS:
-            self.controller._send_hci_command_status(status, command.op_code)
-            return
+            return status
         if command.options & ~int(SYNC_OPTION_BITS) or command.sync_cte_type:
-            self.controller._send_hci_command_status(UNSUPPORTED, command.op_code)
-            return
+            return UNSUPPORTED
         if (
             not HCI_LE_PERIODIC_SYNC_TIMEOUT_MIN
             <= command.sync_timeout
@@ -415,8 +412,7 @@ class LeScanningCommands(LeControllerContext):
                 )
             )
         ):
-            self.controller._send_hci_command_status(INVALID, command.op_code)
-            return
+            return INVALID
         # Reserve a free handle for acquisition; publish it as an established
         # sync only after receiving the periodic train.
         reports_enabled = not command.options & SyncOptions.REPORTING_INITIALLY_DISABLED
@@ -435,7 +431,7 @@ class LeScanningCommands(LeControllerContext):
                 ),
             )
         )
-        self.controller._send_hci_command_status(status, command.op_code)
+        return status
 
     def on_hci_le_read_periodic_advertiser_list_size_command(self, command):
         '''
@@ -497,8 +493,7 @@ class LeScanningCommands(LeControllerContext):
         sync = self.ll.cancel_synchronizing()
         if sync is None:
             return hci.HCI_StatusReturnParameters(DISALLOWED)
-        asyncio.get_running_loop().call_soon(
-            self.on_sync_established,
+        self.on_sync_established(
             sync,
             hci.HCI_ErrorCode.OPERATION_CANCELLED_BY_HOST_ERROR,
         )

@@ -43,7 +43,9 @@ from bscontroller.linklayer.timing import window_widening
 from bscontroller.radio.base import RADIO_SWITCH_TIME_US, Phy
 
 if TYPE_CHECKING:
-    from bscontroller.linklayer.discovery import PeriodicSync
+    from collections.abc import Callable, Iterator
+
+    from bscontroller.linklayer.discovery import Advertising, PeriodicSync
     from bscontroller.linklayer.link import RadioLink
 
 SUCCESS = ErrorCode.SUCCESS
@@ -146,10 +148,25 @@ def isoal_parameters(info: BigInfo) -> IsoalParameters:
 
 
 class BroadcastManager:
-    def __init__(self, link: RadioLink, iso: IsoDataPaths):
+    def __init__(
+        self,
+        link: RadioLink,
+        iso: IsoDataPaths,
+        *,
+        available_handles: Callable[[], Iterator[int]],
+        free_handle_count: Callable[[], int],
+        find_advertiser: Callable[[int], Advertising | None],
+        find_sync: Callable[[int], PeriodicSync | None],
+        channel_map: Callable[[], int],
+    ):
         self.link = link
         self.groups: dict[int, Big] = {}
         self.iso = iso
+        self._available_handles = available_handles
+        self._free_handle_count = free_handle_count
+        self._find_advertiser = find_advertiser
+        self._find_sync = find_sync
+        self._channel_map = channel_map
 
     def reset(self) -> None:
         self.groups.clear()
@@ -158,7 +175,7 @@ class BroadcastManager:
         return (
             len(self.groups) < self.link.config.max_bigs
             and len(self.connection_handles()) + count <= self.link.config.max_bis
-            and count <= self.link.roles.free_connection_handle_count()
+            and count <= self._free_handle_count()
         )
 
     def connection_handles(self) -> frozenset[int]:
@@ -189,7 +206,7 @@ class BroadcastManager:
         return UNKNOWN, (0,) * 7
 
     def _handles(self, count: int) -> tuple[int, ...]:
-        return tuple(islice(self.link.roles.available_connection_handles(), count))
+        return tuple(islice(self._available_handles(), count))
 
     def associated_group(self, advertising_handle: int) -> Big | None:
         return next(
@@ -210,7 +227,7 @@ class BroadcastManager:
             return UNSUPPORTED
         if config.handle in self.groups:
             return DISALLOWED
-        item = self.link.advertisers.get(config.advertising_handle)
+        item = self._find_advertiser(config.advertising_handle)
         if (
             item is None
             or not item.periodic_interval
@@ -396,7 +413,7 @@ class BroadcastManager:
             sdu_interval_us=config.sdu_interval_us,
             max_sdu=config.max_sdu,
             base_crc_init=self.link.random.getrandbits(16),
-            channel_map=self.link.roles.host_channel_map,
+            channel_map=self._channel_map(),
             phy=phy,
             framed=framed,
             giv=self.link.random.randbytes(8) if config.encryption else b'',
@@ -464,7 +481,7 @@ class BroadcastManager:
     def synchronize(self, config: BigSyncConfig) -> int:
         if config.handle in self.groups:
             return DISALLOWED
-        sync = self.link.syncs.get(config.sync_handle)
+        sync = self._find_sync(config.sync_handle)
         if sync is None:
             return UNKNOWN_ADV
         if any(
@@ -507,7 +524,7 @@ class BroadcastManager:
     def observed_info(
         self, sync: PeriodicSync, acad: bytes, packet_start_us: int
     ) -> None:
-        if self.link.syncs.get(sync.handle) is not sync:
+        if self._find_sync(sync.handle) is not sync:
             return
         sync.big_info = None
         try:
@@ -528,7 +545,7 @@ class BroadcastManager:
         config = group.sync_config
         sync = group.sync
         assert config is not None and sync is not None
-        if self.link.syncs.get(sync.handle) is not sync:
+        if self._find_sync(sync.handle) is not sync:
             self._close(group, ErrorCode.CONNECTION_FAILED_TO_BE_ESTABLISHED_ERROR)
             return
         if sync.big_info is None:
@@ -738,8 +755,8 @@ class BroadcastManager:
         for handle in group.stream_handles:
             if self.iso.contains(handle):
                 self.iso.release(handle)
-        if group.transmit:
-            item = self.link.advertisers.get(group.advertising_handle)
+        if group.advertising_handle is not None:
+            item = self._find_advertiser(group.advertising_handle)
             if item is not None:
                 item.big_info = b''
 
@@ -759,7 +776,7 @@ class BroadcastManager:
         self.expire()
         # A second classification may arrive while the first control procedure
         # is pending. Apply the latest Host map once that procedure completes.
-        self.update_channel_map(self.link.roles.host_channel_map)
+        self.update_channel_map(self._channel_map())
         operations = []
         for group in tuple(self.groups.values()):
             if not group.transmit and group.info is None:

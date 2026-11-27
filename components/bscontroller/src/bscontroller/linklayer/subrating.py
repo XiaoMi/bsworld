@@ -13,7 +13,6 @@ from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
     LL_CONN_LATENCY_MAX,
     LL_EVENT_COUNTER_MASK,
-    LL_RESPONSE_TIMEOUT_US,
     LL_SUPERVISION_TIMEOUT_INTERVAL_FACTOR,
     LL_SUPERVISION_TIMEOUT_MAX,
     LL_SUPERVISION_TIMEOUT_MIN,
@@ -21,7 +20,12 @@ from bscontroller.linklayer import (
     ControlOpcode,
 )
 from bscontroller.linklayer.features import LeFeatureMask
-from bscontroller.linklayer.procedure import LocalProcedure, ProcedureContext
+from bscontroller.linklayer.procedure import (
+    DIFFERENT_TRANSACTION_COLLISION,
+    PROCEDURE_COLLISION,
+    LocalProcedure,
+    ProcedureContext,
+)
 from bscontroller.linklayer.state import Role
 
 if TYPE_CHECKING:
@@ -226,8 +230,8 @@ class Subrating(LocalProcedure):
         )
 
     def _enqueue(self, opcode: int, body: bytes) -> None:
-        self.context.deadline_us = self.connection.radio.now_us + LL_RESPONSE_TIMEOUT_US
-        self.owner.enqueue(bytes([opcode]) + body)
+        self.context.response_timer = self.owner.response_timer
+        self.connection.enqueue_control(bytes([opcode]) + body)
 
     def request(self, request: SubrateRequest) -> None:
         connection = self.connection
@@ -428,13 +432,11 @@ class Subrating(LocalProcedure):
                         opcode, ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
                     )
                 elif self.owner.rate.instant_pending:
-                    self.owner.reject(
-                        opcode, ErrorCode.DIFFERENT_TRANSACTION_COLLISION_ERROR
-                    )
+                    self.owner.reject(opcode, DIFFERENT_TRANSACTION_COLLISION)
                 elif self.peer_request is not None:
                     self.owner.reject(
                         opcode,
-                        ErrorCode.LMP_ERROR_TRANSACTION_COLLISION_OR_LL_PROCEDURE_COLLISION_ERROR,
+                        PROCEDURE_COLLISION,
                     )
                 else:
                     self.peer_request = SubrateRequest(

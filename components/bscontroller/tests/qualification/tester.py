@@ -62,6 +62,7 @@ from bscontroller.linklayer import (
     AdvertisingPduType,
 )
 from bscontroller.radio.babblesim import (
+    BSIM_IO_TIMEOUT_SECONDS,
     HEADER,
     NEVER,
     TIME,
@@ -227,7 +228,7 @@ class AirTester(HciProbe):
     async def wait(self, duration_us):
         target = self.radio.now_us + duration_us
         # Equal-time WAIT is a real PHY barrier; Radio.advance_to_us would skip it.
-        self.radio.connection.wait_sync(target, 5)
+        self.radio.connection.wait_sync(target, BSIM_IO_TIMEOUT_SECONDS)
         self.radio.now_us = target
         # Dispatch HCI already queued by the completed device grant before advancing
         # again.
@@ -236,7 +237,7 @@ class AirTester(HciProbe):
     async def receive(self, channel, *, duration_us=100_000, **parameters):
         packet = await asyncio.wait_for(
             self.radio.receive(channel, self.radio.now_us + duration_us, **parameters),
-            5,
+            BSIM_IO_TIMEOUT_SECONDS,
         )
         await self.wait(0)
         if packet is not None:
@@ -286,7 +287,7 @@ class AirTester(HciProbe):
                     coding=coding,
                     power_dbm=power_dbm,
                 ),
-                5,
+                BSIM_IO_TIMEOUT_SECONDS,
             )
             await self.wait(0)
             return end
@@ -320,7 +321,7 @@ class AirTester(HciProbe):
                 len(packet),
             )
             await connection.send(HEADER.pack(TX_REQUEST) + request + packet)
-            await asyncio.wait_for(connection.response(TX_END), 5)
+            await asyncio.wait_for(connection.response(TX_END), BSIM_IO_TIMEOUT_SECONDS)
             self.radio.now_us = TIME.unpack(await connection.receive(TIME.size))[0]
         finally:
             connection.end_request()
@@ -338,7 +339,7 @@ class MultiAirTester(AirTester):
     async def wait(self, duration_us):
         target = self.radio.now_us + duration_us
         self.radio.now_us = await asyncio.wait_for(
-            self.radio.connection.wait(target), 5
+            self.radio.connection.wait(target), BSIM_IO_TIMEOUT_SECONDS
         )
         await asyncio.sleep(0)
 

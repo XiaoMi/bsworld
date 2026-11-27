@@ -100,7 +100,7 @@ async def test_standalone_session_binds_clock_after_startup_barrier(monkeypatch)
     )
     session = BabbleSimSession('test', [(0, worker)], clock_dev_id=1)
     session.clock.connection.connect = AsyncMock(
-        side_effect=lambda: events.append('connect')
+        side_effect=lambda timeout: events.append('connect')
     )
     session.clock.connection.wait_sync = lambda *args: events.append('barrier')
     session.clock.connection.close = lambda: events.append('disconnect')
@@ -175,7 +175,7 @@ async def test_session_stops_all_workers_before_releasing_host_grant():
 
     Purpose: Verify that on exit the session unbinds the clock, closes all
     workers even when one close raises, and only then releases the clock
-    connection, re-raising the first close failure.
+    connection, propagating the worker failure.
 
     Steps:
         1. Build a session with a clock device and two workers whose ``close``
@@ -205,6 +205,45 @@ async def test_session_stops_all_workers_before_releasing_host_grant():
     with pytest.raises(RuntimeError, match='broken worker'):
         await session.__aexit__(None, None, None)
     assert events == ['unbind', 'first', 'second', 'release']
+
+
+@pytest.mark.asyncio
+async def test_session_preserves_body_and_worker_failures():
+    """Shutdown preserves the scenario exception and identifies both failed workers."""
+    body = ValueError('scenario failed')
+    first, second = RuntimeError('radio failed'), OSError('socket failed')
+    workers = [
+        (dev_id, SimpleNamespace(start=AsyncMock(), close=AsyncMock(side_effect=error)))
+        for dev_id, error in ((3, first), (7, second))
+    ]
+    with pytest.raises(ValueError) as failure:
+        async with BabbleSimSession('cleanup', workers):
+            raise body
+    assert failure.value is body
+    assert all(text in body.__notes__[0] for text in ('Controller 3', 'radio failed'))
+    assert all(text in body.__notes__[1] for text in ('Controller 7', 'socket failed'))
+
+
+@pytest.mark.asyncio
+async def test_session_worker_failure_preserves_task_cancellation():
+    """A cleanup failure remains visible while the caller receives CancelledError."""
+    worker = SimpleNamespace(
+        start=AsyncMock(), close=AsyncMock(side_effect=RuntimeError('radio failed'))
+    )
+    entered = asyncio.Event()
+
+    async def scenario():
+        async with BabbleSimSession('cancel', [(3, worker)]):
+            entered.set()
+            await asyncio.Future()
+
+    task = asyncio.create_task(scenario())
+    await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError) as cancelled:
+        await task
+    assert task.cancelled()
+    assert 'radio failed' in cancelled.value.__notes__[0]
 
 
 @pytest.mark.asyncio

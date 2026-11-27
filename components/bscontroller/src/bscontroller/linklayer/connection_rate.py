@@ -13,7 +13,6 @@ from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
     LL_CONN_LATENCY_MAX,
     LL_EVENT_COUNTER_MASK,
-    LL_RESPONSE_TIMEOUT_US,
     LL_SUPERVISION_TIMEOUT_MAX,
     LL_SUPERVISION_TIMEOUT_MIN,
     ControlOpcode,
@@ -22,6 +21,7 @@ from bscontroller.linklayer.connection_parameters import preferred_interval
 from bscontroller.linklayer.features import LeFeature, LeFeatureMask
 from bscontroller.linklayer.instant import InstantUpdate
 from bscontroller.linklayer.procedure import (
+    DIFFERENT_TRANSACTION_COLLISION,
     LocalProcedure,
     ProcedureContext,
     ProcedurePhase,
@@ -53,7 +53,6 @@ DISALLOWED = ErrorCode.COMMAND_DISALLOWED_ERROR
 UNSUPPORTED = ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR
 UNSUPPORTED_INTERVAL = ErrorCode.UNSUPPORTED_LMP_OR_LL_PARAMETER_VALUE_ERROR
 UNSUPPORTED_TIMING = ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR
-COLLISION = ErrorCode.DIFFERENT_TRANSACTION_COLLISION_ERROR
 
 
 @dataclass(frozen=True)
@@ -190,6 +189,13 @@ class ConnectionRateProcedure(LocalProcedure):
         return self.pending or self.instant_pending
 
     @property
+    def deadline_us(self) -> int:
+        # The Connection Rate Update completes when its parameters apply (6.B.5.1.32).
+        if self.instant_pending:
+            return self.owner.response_timer.deadline_us
+        return super().deadline_us
+
+    @property
     def can_send_request(self) -> bool:
         """An unsent Peripheral request waits behind a peer timing change."""
         return not (
@@ -272,7 +278,10 @@ class ConnectionRateProcedure(LocalProcedure):
                 self.limits = parameters
                 self._select_update(parameters)
             else:
-                self.owner.enqueue(parameters.request(self.connection.event_counter))
+                self.context.response_timer = self.owner.response_timer
+                self.connection.enqueue_control(
+                    parameters.request(self.connection.event_counter)
+                )
 
         if self.peer_supported is None:
             self.owner.features.discover(begin, pages=1)
@@ -332,7 +341,7 @@ class ConnectionRateProcedure(LocalProcedure):
         )
         self.owner.pending = update
         self.owner.transmitted = self.owner.acknowledged = False
-        self.owner.enqueue(update.rate.encode(update.instant))
+        self.connection.enqueue_control(update.encode())
 
     def prepare(self, update: InstantUpdate, instant: int) -> InstantUpdate:
         rate = update.rate
@@ -345,15 +354,7 @@ class ConnectionRateProcedure(LocalProcedure):
             )
         if self.pending and self.context.request == Opcode.LL_CONNECTION_RATE_IND:
             self.context.phase = ProcedurePhase.WAIT_INSTANT
-            self.context.deadline_us = 0
         return replace(update, instant=instant, rate=rate)
-
-    def sent(self, payload: bytes) -> None:
-        if payload[0] == Opcode.LL_CONNECTION_RATE_REQ and self.pending:
-            # A queued request may wait for a peer Instant before going on air.
-            self.context.deadline_us = (
-                self.connection.radio.now_us + LL_RESPONSE_TIMEOUT_US
-            )
 
     def acknowledge(self, payload: bytes) -> None:
         if (
@@ -445,7 +446,7 @@ class ConnectionRateProcedure(LocalProcedure):
             or self.owner.subrating.pending
             or self.pending
         ):
-            self.owner.reject(opcode, COLLISION)
+            self.owner.reject(opcode, DIFFERENT_TRANSACTION_COLLISION)
             return
         required_us, _ = self._spacing_us()
         if request.connection_interval_max * RATE_UNIT_US < required_us:
@@ -456,7 +457,7 @@ class ConnectionRateProcedure(LocalProcedure):
             if status or not self.peer_supported:
                 self.owner.reject(opcode, status or UNSUPPORTED)
             elif self.owner.pending or self.pending:
-                self.owner.reject(opcode, COLLISION)
+                self.owner.reject(opcode, DIFFERENT_TRANSACTION_COLLISION)
             else:
                 self._select_update(
                     request,
@@ -488,7 +489,7 @@ class ConnectionRateProcedure(LocalProcedure):
             or rate.interval_us < minimum_us
             or not self.connection.fits_cis_supervision_timeout(rate.timeout)
         ):
-            self.owner.enqueue(
+            self.connection.enqueue_control(
                 bytes([Opcode.LL_UNKNOWN_RSP, Opcode.LL_CONNECTION_RATE_IND])
             )
             if responds_to_local:
@@ -496,7 +497,8 @@ class ConnectionRateProcedure(LocalProcedure):
             return
         if responds_to_local and request.parameters.accepts(rate):
             request.phase = ProcedurePhase.WAIT_INSTANT
-            request.deadline_us = 0
+        elif not responds_to_local:
+            self.owner.response_timer.restart(self.connection.radio.now_us)
         self.owner.accept_instant(InstantUpdate(instant, rate=rate))
 
     def control(self, payload: bytes) -> bool:

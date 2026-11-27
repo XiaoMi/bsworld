@@ -16,7 +16,6 @@ from bscontroller import hci
 from bscontroller.config import ControllerConfig
 from bscontroller.hci.capabilities import HCI_RSSI_NOT_AVAILABLE
 from bscontroller.linklayer import LL_RESPONSE_TIMEOUT_US, ControlOpcode, LlId
-from bscontroller.linklayer.instant import InstantUpdate
 from bscontroller.radio.base import Phy
 from tests.unit.hci.harness import IUT_ADDRESS, PEERS, UNKNOWN_HANDLE, ErrorCode
 from tests.unit.helpers import create_connection
@@ -693,41 +692,39 @@ def test_set_data_length_admission(host):
 # ---------------------------------------------------------------------------
 # Host channel classification (7.8.19)
 # ---------------------------------------------------------------------------
-def test_channel_classification_targets_only_centrals_and_is_atomic(host):
-    """Host channel classification applies atomically to Central connections.
-
-    Purpose: Verify Set Host Channel Classification is refused while any Central
-    has a pending channel-map update (atomicity), applies to all Centrals once
-    clear, and never touches Peripheral connections (Vol 4, Part E, 7.8.19).
+def test_channel_classification_updates_each_central_when_ready(host):
+    """Save the Host classification and publish it separately on each Central ACL.
 
     Steps:
-        1. Establish two Central connections and one Peripheral.
-        2. With a pending update on one Central, send the command; then clear it
-           and resend.
+        1. Create two Central ACLs and a Peripheral ACL. Start a map update on
+           the second Central, then send a new Host classification.
+        2. Acknowledge the outstanding map and reach its Instant.
 
     Expected:
-        - With a pending update the command is COMMAND_DISALLOWED and no Central
-          gains the pending map; once clear both Centrals get the map and the
-          Peripheral stays unaffected.
+        - Command Complete reports Success. The idle Central starts immediately.
+        - The busy Central finishes its old map before publishing the new one.
+        - The Peripheral retains its peer-selected map (Vol 4, Part E, 7.8.19).
     """
     first = host.connection(hci.Role.CENTRAL)
     second = host.connection(hci.Role.CENTRAL)
     peripheral = host.connection(hci.Role.PERIPHERAL)
+    second.controls.request_channel_map(0x07)
+    previous = second.controls.prepare(second.event.queue.popleft().payload)
     channel_map = (1 << 2) | (1 << 8)
-    command = hci.HCI_LE_Set_Host_Channel_Classification_Command(
-        channel_map.to_bytes(5, 'little')
+    host.cmd(
+        hci.HCI_LE_Set_Host_Channel_Classification_Command(
+            channel_map.to_bytes(5, 'little')
+        )
     )
-    second.controls.pending = InstantUpdate(6, channel_map=channel_map)
-    host.cmd(command, ErrorCode.COMMAND_DISALLOWED_ERROR)
-    assert first.controls.pending is None
-    second.controls.pending = None
-    host.cmd(command)
-    assert (
-        first.controls.pending.channel_map
-        == second.controls.pending.channel_map
-        == channel_map
-    )
+    assert first.controls.pending.channel_map == channel_map
+    assert second.controls.pending.channel_map == 0x07
     assert peripheral.controls.pending is None
+
+    second.controls.acknowledge(previous)
+    second.event_counter = second.controls.pending.instant
+    second.llcp.event_prepare()
+    assert second.parameters.channel_map == 0x07
+    assert second.controls.pending.channel_map == channel_map
 
 
 @pytest.mark.parametrize('channel_map', [0, 1, 1 << 37], ids=['none', 'one', 'rfu'])
@@ -898,6 +895,29 @@ def test_acl_buffers_are_shared_across_connections(configured, caplog, release):
     host.acl(second.handle, FIRST, b'next')
     assert [fragment.payload for fragment in second.event.queue] == [b'next']
     host.ut_rx_q_is_empty()
+
+
+def test_acl_flush_returns_one_completed_packets_event(configured):
+    """All ACL fragments flushed together share one per-handle credit report."""
+    host = configured(ControllerConfig(acl_packet_count=3))
+    connection = host.connection()
+    handle = connection.handle
+    host.cmd(hci.HCI_Write_Automatic_Flush_Timeout_Command(handle, 1))
+    host.acl(handle, hci.HCI_ACL_PB_FIRST_FLUSHABLE, b'start')
+    host.acl(handle, hci.HCI_ACL_PB_CONTINUATION, b'middle')
+    host.acl(handle, hci.HCI_ACL_PB_CONTINUATION, b'end')
+    host.ut_rx_q_is_empty()
+
+    host.radio.now_us = connection.next_acl_flush_us
+    host.in_loop(connection.expire_acl)
+    host.ut_rx(
+        hci.HCI_Number_Of_Completed_Packets_Event,
+        connection_handles=[handle],
+        num_completed_packets=[3],
+    )
+    host.ut_rx_q_is_empty()
+    host.acl(handle, hci.HCI_ACL_PB_FIRST_NON_FLUSHABLE, b'next')
+    assert connection.event.queue[0].payload == b'next'
 
 
 def test_empty_host_acl_returns_its_credit_at_once(configured):
@@ -1298,6 +1318,19 @@ def test_create_connection_cancel_reports_unknown_connection(host):
         hci.HCI_LE_Create_Connection_Cancel_Command(),
         ErrorCode.COMMAND_DISALLOWED_ERROR,
     )
+
+
+def test_connection_update_error_order_at_hci(host):
+    """Preserve unknown-handle and pending-procedure precedence over CE hints."""
+    handle = host.connection().handle
+    bad_update = hci.HCI_LE_Connection_Update_Command(handle, 24, 24, 0, 100, 9, 0)
+    host.cmd_status(
+        hci.HCI_LE_Connection_Update_Command(0x0FFF, 24, 24, 0, 100, 9, 0),
+        ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR,
+    )
+    host.cmd_status(bad_update, ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR)
+    host.cmd_status(hci.HCI_LE_Connection_Update_Command(handle, 24, 24, 0, 100, 0, 0))
+    host.cmd_status(bad_update, ErrorCode.COMMAND_DISALLOWED_ERROR)
 
 
 # ---------------------------------------------------------------------------

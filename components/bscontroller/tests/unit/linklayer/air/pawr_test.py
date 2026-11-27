@@ -12,7 +12,7 @@ from dataclasses import replace
 import pytest
 
 from bscontroller import hci
-from bscontroller.linklayer.advertising import ExtendedPdu, SyncInfo
+from bscontroller.linklayer.advertising_pdu import ExtendedPdu, SyncInfo
 from bscontroller.linklayer.channel_selection import channel_selection_2
 from bscontroller.linklayer.discovery import PeriodicSync
 from bscontroller.linklayer.pawr import PawrSync, PawrTiming
@@ -541,11 +541,9 @@ def test_radio_conflict_reports_failed_subevent(iut, monkeypatch):
         - Report v2 names the selected subevent with Data_Status 0xFF.
         - No packet is transmitted and the periodic event counter advances.
     """
-    from bscontroller.linklayer.periodic import subevent_receive
-
     sync = sync_setup(iut)
     monkeypatch.setattr(iut.link.resource, 'admit', lambda *args, **kwargs: False)
-    iut.call(subevent_receive(iut.link, sync))
+    iut.call(iut.link.roles.synchronization.run_subevent(sync))
     iut.ut_rx(REPORT, periodic_event_counter=0, subevent=0, data_status=255)
     assert sync.counter == 1
     iut.lt_rx_q_is_empty()
@@ -596,6 +594,6 @@ def test_released_train_cannot_commit_delayed_connection(iut, source, replacemen
     result = ConnectionAccepted(
         CONNECT_PARAMETERS, PEER, hci.Role.PERIPHERAL, 0, IUT_ADDRESS, True, **result
     )
-    assert iut.link.roles.connections.accepted(result) is None
+    assert iut.link.roles.accepted(result) is None
     assert not iut.link.connections
     assert (handle in contexts) == replacement

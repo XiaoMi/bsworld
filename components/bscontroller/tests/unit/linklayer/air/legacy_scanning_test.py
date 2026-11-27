@@ -26,9 +26,7 @@ from bscontroller.linklayer.parameters import Parameters
 from bscontroller.linklayer.state import Role
 from tests.unit.linklayer.air.advertising import (
     SCAN_WINDOW,
-    AdvType,
-    configure_legacy,
-    enable_legacy,
+    create_connection,
     scan_legacy,
 )
 from tests.unit.linklayer.air.harness import (
@@ -64,43 +62,6 @@ def accept(iut, address):
             address.address_type, address
         )
     )
-
-
-@pytest.mark.parametrize('active,state_bit', [(False, 8), (True, 12)])
-def test_nonconnectable_advertising_and_scanning_share_the_radio(
-    iut, active, state_bit
-):
-    """Exercise the advertised legacy state combination (Vol 4, Part E, 7.8.27).
-
-    Steps:
-        1. Read LE Supported States and enable non-connectable advertising on
-           channel 37 together with passive or active scanning.
-        2. Transmit a scannable advertisement while both roles are enabled.
-           In the active case, answer the scan request.
-
-    Expected:
-        - The matching state bit is set. The IUT sends its own advertising data
-          and reports the peer. Active scanning also produces SCAN_REQ and a
-          scan response report for that peer.
-    """
-    states = iut.ut(hci.HCI_LE_Read_Supported_States_Command()).le_states
-    assert int.from_bytes(states, 'little') & (1 << state_bit)
-    configure_legacy(iut, AdvType.ADV_NONCONN_IND, data=b'local', channel_map=1)
-    enable_legacy(iut)
-    scan_legacy(iut, active=active)
-    iut.lt_tx(adv_scan_ind(data=b'peer'), channel=37, at=3000)
-    if active:
-        iut.lt_tx(scan_rsp(data=b'response'), channel=37)
-    iut.run(WINDOW_US)
-    advertisement = iut.lt_rx(PduType.ADV_NONCONN_IND)
-    assert advertisement.channel == 37 and advertisement.pdu[8:] == b'local'
-    iut.ut_rx_report(event_type=ReportType.ADV_SCAN_IND, address=PEER, data=b'peer')
-    if active:
-        request = iut.lt_rx(PduType.SCAN_REQ)
-        assert address_of(request.pdu, 8, rx=True) == PEER
-        iut.ut_rx_report(event_type=ReportType.SCAN_RSP, address=PEER, data=b'response')
-    iut.ut_rx_q_is_empty()
-    iut.lt_rx_q_is_empty()
 
 
 # ---------------------------------------------------------------------------
@@ -341,11 +302,10 @@ def test_filter_matches_address_type(iut):
 
 @pytest.mark.parametrize('duplicates', [0, 1])
 def test_duplicate_filtering(iut, duplicates):
-    """Duplicate filtering suppresses repeats of identical advertisements.
+    """Duplicate filtering suppresses repeats from the same address.
 
-    Purpose: Verify that with duplicate filtering enabled the scanner reports an
-    identical advertisement once and still reports changed data, while with
-    filtering disabled every advertisement is reported (Vol 4, Part E, 7.8.11).
+    Purpose: Verify that changing data leaves the duplicate key unchanged in
+    legacy scanning (Core Vol 6, Part B, 4.4.3.5).
 
     Steps:
         1. Upper Tester enables scanning with the parametrized duplicate setting.
@@ -354,7 +314,7 @@ def test_duplicate_filtering(iut, duplicates):
         3. Run four scan windows.
 
     Expected:
-        - Filtered: data is ["same", "changed"].
+        - Filtered: data is ["same"].
         - Unfiltered: data is ["same", "same", "same", "changed"].
 
     Parameters range over filtering disabled and enabled.
@@ -365,9 +325,7 @@ def test_duplicate_filtering(iut, duplicates):
     iut.lt_tx(adv_ind(data=b'changed'))
     iut.run(4 * WINDOW_US)
     data = [report.data for report in iut.reports()]
-    assert data == (
-        [b'same', b'changed'] if duplicates else [b'same'] * 3 + [b'changed']
-    )
+    assert data == ([b'same'] if duplicates else [b'same'] * 3 + [b'changed'])
 
 
 def test_duplicate_filter_resets_on_reenable(iut):
@@ -921,24 +879,6 @@ def test_anonymous_filter_entry_ignores_address_bytes(iut):
 # ---------------------------------------------------------------------------
 # Initiating (4.4.4)
 # ---------------------------------------------------------------------------
-def create_connection(iut, peer=PEER, *, policy=0, status=ErrorCode.SUCCESS, **changes):
-    values = dict(
-        le_scan_interval=SCAN_WINDOW,
-        le_scan_window=SCAN_WINDOW,
-        initiator_filter_policy=policy,
-        peer_address_type=peer.address_type,
-        peer_address=peer,
-        own_address_type=hci.OwnAddressType.PUBLIC,
-        connection_interval_min=24,
-        connection_interval_max=40,
-        max_latency=0,
-        supervision_timeout=100,
-        min_ce_length=0,
-        max_ce_length=0,
-    )
-    iut.ut(hci.HCI_LE_Create_Connection_Command(**(values | changes)), status)
-
-
 @pytest.mark.parametrize(
     'pdu', [adv_ind(), adv_direct_ind()], ids=['undirected', 'directed']
 )

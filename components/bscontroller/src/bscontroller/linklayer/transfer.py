@@ -31,7 +31,7 @@ from bscontroller.linklayer import (
     PDU_CONTROL_PERIODIC_SYNC_WR_SIZE,
     ControlOpcode,
 )
-from bscontroller.linklayer.advertising import SyncInfo
+from bscontroller.linklayer.advertising_pdu import SyncInfo
 from bscontroller.linklayer.pawr import PawrTiming
 from bscontroller.linklayer.timing import LL_CLOCK_JITTER_US, window_widening
 from bscontroller.radio.base import Phy

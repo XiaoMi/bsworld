@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from bscontroller.runtime.event_loop import RadioEventLoop
+from bscontroller import RadioEventLoop
 
 from .backends.babblesim import BabbleSimBackend
 from .devices.bscontroller import BSController
@@ -245,10 +245,8 @@ class BluetoothTopology:
                         raise RuntimeError(
                             "the active asyncio event loop is not BSIM-aware"
                         )
-                    # Registration alone does not mean every device has yielded to PHY.
-                    self.bsim.clock.advance_to_us(0)
+                    self.bsim.clock.bind(loop)
                     self._event_loop = loop
-                    self._event_loop.bind_clock(self.bsim.clock)
             except BaseException as exc:
                 try:
                     await self._shutdown()

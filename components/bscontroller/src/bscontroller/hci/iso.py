@@ -4,6 +4,7 @@
 """CIG, BIG and ISO commands and Host data input (Core Vol 4, Part E)."""
 
 import logging
+from dataclasses import dataclass, field
 
 from bscontroller import hci
 from bscontroller.hci.context import SUCCESS, LeControllerContext
@@ -14,8 +15,17 @@ from bscontroller.linklayer.api import (
     CigConfig,
     CisConfig,
 )
+from bscontroller.linklayer.isoal import IsoSdu
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class IsoAssembly:
+    sequence_number: int
+    length: int
+    reference_us: int
+    data: bytearray = field(default_factory=bytearray)
 
 
 class LeIsoCommands(LeControllerContext):
@@ -141,7 +151,7 @@ class LeIsoCommands(LeControllerContext):
         if status == SUCCESS:
             for handle in command.cis_connection_handle:
                 self.cis_established[handle] = False
-        self.controller._send_hci_command_status(status, command.op_code)
+        return status
 
     def on_hci_le_remove_cig_command(self, command):
         status = self.ll.cig.remove_cig(command.cig_id)
@@ -153,7 +163,7 @@ class LeIsoCommands(LeControllerContext):
 
     def on_hci_le_accept_cis_request_command(self, command):
         status = self.ll.cig.accept_cis(command.connection_handle)
-        self.controller._send_hci_command_status(status, command.op_code)
+        return status
 
     def on_hci_le_reject_cis_request_command(self, command):
         status = self.ll.cig.reject_cis(command.connection_handle, command.reason)
@@ -183,13 +193,13 @@ class LeIsoCommands(LeControllerContext):
                 test=test,
             )
         )
-        self.controller._send_hci_command_status(status, command.op_code)
+        return status
 
     def on_hci_le_create_big_command(self, command):
-        self._create_big(command)
+        return self._create_big(command)
 
     def on_hci_le_create_big_test_command(self, command):
-        self._create_big(
+        return self._create_big(
             command,
             BigTestParameters(
                 command.iso_interval,
@@ -203,7 +213,7 @@ class LeIsoCommands(LeControllerContext):
 
     def on_hci_le_terminate_big_command(self, command):
         status = self.ll.big.terminate(command.big_handle, command.reason)
-        self.controller._send_hci_command_status(status, command.op_code)
+        return status
 
     def on_hci_le_big_create_sync_command(self, command):
         status = self.ll.big.synchronize(
@@ -217,7 +227,7 @@ class LeIsoCommands(LeControllerContext):
                 tuple(command.bis),
             )
         )
-        self.controller._send_hci_command_status(status, command.op_code)
+        return status
 
     def on_hci_le_big_terminate_sync_command(self, command):
         status = self.ll.big.terminate_sync(command.big_handle)
@@ -305,15 +315,45 @@ class LeIsoCommands(LeControllerContext):
             return
         if not self.iso_buffers.acquire(handle, packet.data_total_length):
             return
-        # The packet is flushed; its credit follows the events visible to the Host.
-        if not active:
+        limits = self.ll.iso.tx_limits(handle) if active else None
+        if (
+            limits is not None
+            and (sdu := self._assemble_iso(packet, *limits)) is not None
+        ):
+            self.ll.iso.enqueue_sdu(handle, sdu)
+        else:
+            # Copied fragments return credit immediately so a one-buffer Host
+            # can send the rest. A queued SDU retains the last fragment's credit.
             self.on_iso_completed(handle, 1)
-            return
-        self.ll.iso.input(
-            handle,
-            packet.iso_sdu_fragment,
-            packet.pb_flag,
-            packet.packet_sequence_number,
-            packet.iso_sdu_length,
-            packet.time_stamp,
-        )
+
+    def _assemble_iso(
+        self, packet: hci.HCI_IsoDataPacket, max_sdu: int, controller_delay_us: int
+    ) -> IsoSdu | None:
+        handle = packet.connection_handle
+        assemblies = self.iso_assemblies
+        if packet.pb_flag in (0, 2):  # First fragment or complete SDU (4.E.5.4.5).
+            assemblies.pop(handle, None)
+            length, sequence = packet.iso_sdu_length, packet.packet_sequence_number
+            if sequence is None or length is None or not 0 <= length <= max_sdu:
+                return None
+            now = self.now_us
+            timestamp = packet.time_stamp
+            reference_us = (
+                now - controller_delay_us
+                if timestamp is None
+                else now + ((timestamp - now + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)
+            )
+            assemblies[handle] = IsoAssembly(sequence, length, reference_us)
+        assembly = assemblies.get(handle)
+        if assembly is None:
+            return None
+        assembly.data.extend(packet.iso_sdu_fragment)
+        last = packet.pb_flag in (2, 3)
+        size = len(assembly.data)
+        if last or size > assembly.length:
+            del assemblies[handle]
+        if last and size == assembly.length:
+            return IsoSdu(
+                assembly.sequence_number, bytes(assembly.data), assembly.reference_us
+            )
+        return None

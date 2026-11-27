@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from bscontroller import hci
@@ -41,6 +42,7 @@ from bscontroller.radio.base import PHY_CODED_S2_FACTOR, Phy
 if TYPE_CHECKING:
     from bscontroller.hci.buffers import DataBuffers
     from bscontroller.hci.controller import Controller
+    from bscontroller.hci.iso import IsoAssembly
     from bscontroller.hci.records import ScanDuplicateFilter
     from bscontroller.linklayer.bis import BigInfo
     from bscontroller.linklayer.isoal import IsoSdu
@@ -60,14 +62,17 @@ class LeControllerEvents:
     ll: LinkLayerService
     acl_buffers: DataBuffers
     iso_buffers: DataBuffers
+    iso_assemblies: dict[int, IsoAssembly]
     cis_established: dict[int, bool]
-    extended_scan: bool
+    deferred_cis_credits: dict[int, int]
     duplicate_filter: ScanDuplicateFilter | None
 
-    def trace(self, message: str) -> None:
+    def trace(self, message: str | Callable[[], str]) -> None:
         self.controller.trace(message)
 
-    def _emit_hci_packet(self, packet) -> bool:
+    def _emit_hci_packet(self, packet: hci.HCI_Event | None) -> bool:
+        if packet is None:
+            return False
         # Vol 4, Part E, 7.3.1, 7.3.69 and 7.8.1: masked events are not sent to the
         # Host.
         if isinstance(packet, hci.HCI_LE_Meta_Event):
@@ -89,7 +94,7 @@ class LeControllerEvents:
                 1 << (packet.event_code - hci.HCI_EVENT_MASK_PAGE_2_CODE_BASE)
             ):
                 return False
-        self.controller.send_hci_packet(packet)
+        self.controller.send_event(packet)
         return True
 
     def on_scan_timeout(self):
@@ -309,7 +314,7 @@ class LeControllerEvents:
         4, Part E, 7.7.65.1, 7.7.65.10, 7.7.65.20).
         """
         parameters = connection.parameters
-        self.controller.le_connections[connection.peer] = ConnectionRecord(
+        self.controller.le_connections[connection.handle] = ConnectionRecord(
             self.controller, connection
         )
         self._emit_hci_packet(
@@ -356,7 +361,7 @@ class LeControllerEvents:
     def on_disconnected(self, connection: ConnectionSnapshot, reason):
         """Disconnection Complete (Vol 4, Part E, 7.7.5)."""
         self.acl_buffers.release(connection.handle)
-        record = self.controller.le_connections.pop(connection.peer, None)
+        record = self.controller.le_connections.pop(connection.handle, None)
         if record is not None:
             record.disconnected(connection)
         if connection.reported:
@@ -404,8 +409,15 @@ class LeControllerEvents:
         peer_rpa = parameters.pop('peer_resolvable_private_address', hci.Address.ANY)
         advertising_handle = parameters.pop('advertising_handle', None)
         sync_handle = parameters.pop('sync_handle', None)
-        if self._le_event_unmasked(hci.HCI_LE_ENHANCED_CONNECTION_COMPLETE_V2_EVENT):
-            return hci.HCI_LE_Enhanced_Connection_Complete_V2_Event(
+        event_type = self._le_event_version(
+            hci.HCI_LE_Enhanced_Connection_Complete_V2_Event,
+            hci.HCI_LE_Enhanced_Connection_Complete_Event,
+            hci.HCI_LE_Connection_Complete_Event,
+        )
+        if event_type is None:
+            return None
+        if event_type is hci.HCI_LE_Enhanced_Connection_Complete_V2_Event:
+            return event_type(
                 **parameters,
                 local_resolvable_private_address=local_rpa,
                 peer_resolvable_private_address=peer_rpa,
@@ -418,8 +430,8 @@ class LeControllerEvents:
                 if sync_handle is None
                 else sync_handle,
             )
-        if self._le_event_unmasked(hci.HCI_LE_ENHANCED_CONNECTION_COMPLETE_EVENT):
-            return hci.HCI_LE_Enhanced_Connection_Complete_Event(
+        if event_type is hci.HCI_LE_Enhanced_Connection_Complete_Event:
+            return event_type(
                 **parameters,
                 local_resolvable_private_address=local_rpa,
                 peer_resolvable_private_address=peer_rpa,
@@ -430,16 +442,27 @@ class LeControllerEvents:
             in (hci.AddressType.PUBLIC_DEVICE, hci.AddressType.PUBLIC_IDENTITY)
             else hci.AddressType.RANDOM_DEVICE
         )
-        return hci.HCI_LE_Connection_Complete_Event(**parameters)
-
-    def _le_event_unmasked(self, subevent_code: int) -> bool:
-        return bool(self.controller.le_event_mask & (1 << (subevent_code - 1)))
+        return event_type(**parameters)
 
     def _host_receives_le_event(self, subevent_code: int) -> bool:
         """Both the LE Meta event and its subevent must be enabled."""
         return bool(
             self.controller.event_mask & (1 << (hci.HCI_LE_META_EVENT - 1))
-        ) and self._le_event_unmasked(subevent_code)
+            and self.controller.le_event_mask & (1 << (subevent_code - 1))
+        )
+
+    def _le_event_version(
+        self, *versions: type[hci.HCI_LE_Meta_Event]
+    ) -> type[hci.HCI_LE_Meta_Event] | None:
+        """Select the latest enabled version (Core Vol 4, Part E, 4.8)."""
+        return next(
+            (
+                event
+                for event in versions
+                if self._host_receives_le_event(event.subevent_code)
+            ),
+            None,
+        )
 
     def on_connect_failed(self, peer, status):
         """An initiation the Link Layer gave up on, such as an unanswered PAwR
@@ -459,12 +482,12 @@ class LeControllerEvents:
             )
         )
 
-    def on_acl_completed(self, handle: int):
+    def on_acl_completed(self, handle: int, count: int):
         """Number Of Completed Packets (Vol 4, Part E, 7.7.19)."""
-        self.acl_buffers.complete(handle, 1)
+        self.acl_buffers.complete(handle, count)
         self._emit_hci_packet(
             hci.HCI_Number_Of_Completed_Packets_Event(
-                connection_handles=[handle], num_completed_packets=[1]
+                connection_handles=[handle], num_completed_packets=[count]
             )
         )
 
@@ -493,10 +516,11 @@ class LeControllerEvents:
 
         See Bluetooth Core 6.3, Vol 4, Part E, 7.7.65.2 and 7.7.65.13.
         """
-        if not self.ll.scanning_enabled:
+        extended = self.ll.active_scan_extended
+        if extended is None:
             return
         properties = report.properties
-        if self.extended_scan:
+        if extended:
             report_code = hci.HCI_LE_EXTENDED_ADVERTISING_REPORT_EVENT
         elif not properties & AdvertisingProperties.LEGACY_ADVERTISING_PDU_USED:
             return
@@ -713,15 +737,14 @@ class LeControllerEvents:
             periodic_advertising_interval=sync.interval,
             advertiser_clock_accuracy=sync.sca,
         )
-        self._emit_hci_packet(
-            hci.HCI_LE_Periodic_Advertising_Sync_Established_V2_Event(
-                **parameters, **self._pawr_timing(sync)
-            )
-            if self._le_event_unmasked(
-                hci.HCI_LE_PERIODIC_ADVERTISING_SYNC_ESTABLISHED_V2_EVENT
-            )
-            else hci.HCI_LE_Periodic_Advertising_Sync_Established_Event(**parameters)
+        event_type = self._le_event_version(
+            hci.HCI_LE_Periodic_Advertising_Sync_Established_V2_Event,
+            hci.HCI_LE_Periodic_Advertising_Sync_Established_Event,
         )
+        if event_type is not None:
+            if event_type is hci.HCI_LE_Periodic_Advertising_Sync_Established_V2_Event:
+                parameters.update(self._pawr_timing(sync))
+            self._emit_hci_packet(event_type(**parameters))
 
     @staticmethod
     def _pawr_timing(sync: PeriodicSyncSnapshot) -> dict[str, int]:
@@ -751,17 +774,17 @@ class LeControllerEvents:
             periodic_advertising_interval=sync.interval,
             advertiser_clock_accuracy=sync.sca,
         )
-        self._emit_hci_packet(
-            hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_V2_Event(
-                **parameters, **self._pawr_timing(sync)
-            )
-            if self._le_event_unmasked(
-                hci.HCI_LE_PERIODIC_ADVERTISING_SYNC_TRANSFER_RECEIVED_V2_EVENT
-            )
-            else hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_Event(
-                **parameters
-            )
+        event_type = self._le_event_version(
+            hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_V2_Event,
+            hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_Event,
         )
+        if event_type is not None:
+            if (
+                event_type
+                is hci.HCI_LE_Periodic_Advertising_Sync_Transfer_Received_V2_Event
+            ):
+                parameters.update(self._pawr_timing(sync))
+            self._emit_hci_packet(event_type(**parameters))
 
     def on_periodic_report(
         self,
@@ -780,7 +803,12 @@ class LeControllerEvents:
         [v2] adds the event counter and subevent, and reports a PAwR subevent
         listened to in vain; [v1] can represent neither.
         """
-        v2 = self._le_event_unmasked(hci.HCI_LE_PERIODIC_ADVERTISING_REPORT_V2_EVENT)
+        event_type = self._le_event_version(
+            PeriodicReportV2, hci.HCI_LE_Periodic_Advertising_Report_Event
+        )
+        if event_type is None:
+            return
+        v2 = event_type is PeriodicReportV2
         if not v2 and data_status == DataStatus.RECEIVE_FAILED:
             return
         tx_power = (
@@ -807,17 +835,14 @@ class LeControllerEvents:
                 ),
                 data=data[offset : offset + size],
             )
-            self._emit_hci_packet(
-                hci.HCI_LE_Periodic_Advertising_Report_V2_Event(
-                    **parameters,
+            if v2:
+                parameters.update(
                     periodic_event_counter=counter,
                     subevent=PeriodicReportV2.NO_SUBEVENT
                     if subevent is None
                     else subevent,
                 )
-                if v2
-                else hci.HCI_LE_Periodic_Advertising_Report_Event(**parameters)
-            )
+            self._emit_hci_packet(event_type(**parameters))
 
     def on_subevent_data_request(self, item: AdvertisingSnapshot, start, count):
         """LE Periodic Advertising Subevent Data Request (Vol 4, Part E, 7.7.65.36)."""
@@ -917,6 +942,7 @@ class LeControllerEvents:
 
     def _release_cis_buffers(self, handle: int):
         self.cis_established.pop(handle, None)
+        self.deferred_cis_credits.pop(handle, None)
         self.iso_buffers.release(handle)
 
     def on_cis_established(self, result: CisEstablished, status: int):
@@ -939,9 +965,11 @@ class LeControllerEvents:
             max_pdu_p_to_c=result.max_pdu_p_to_c,
             iso_interval=result.iso_interval,
         )
-        if self._le_event_unmasked(hci.HCI_LE_CIS_ESTABLISHED_V2_EVENT):
-            event = hci.HCI_LE_CIS_Established_V2_Event(
-                **parameters,
+        event_type = self._le_event_version(
+            hci.HCI_LE_CIS_Established_V2_Event, hci.HCI_LE_CIS_Established_Event
+        )
+        if event_type is hci.HCI_LE_CIS_Established_V2_Event:
+            parameters.update(
                 sub_interval=result.sub_interval,
                 max_sdu_c_to_p=result.max_sdu_c_to_p,
                 max_sdu_p_to_c=result.max_sdu_p_to_c,
@@ -949,17 +977,17 @@ class LeControllerEvents:
                 sdu_interval_p_to_c=result.sdu_interval_p_to_c,
                 framing=result.framing,
             )
-        else:
-            event = hci.HCI_LE_CIS_Established_Event(**parameters)
-        sent = self._emit_hci_packet(event)
+        sent = event_type is not None and self._emit_hci_packet(
+            event_type(**parameters)
+        )
         handle = result.connection_handle
         if status != SUCCESS:
             if not self.ll.cig.contains(handle):
                 self._release_cis_buffers(handle)
         elif sent and not self.cis_established.get(handle):
             self.cis_established[handle] = True
-            if count := self.iso_buffers.pending(handle):
-                self.on_iso_completed(handle, count)
+            if count := self.deferred_cis_credits.pop(handle, 0):
+                self._report_completed_packets(handle, count)
 
     def on_cis_disconnected(self, cis_handle: int, reason: int):
         """Report CIS termination without removing its ACL record."""
@@ -1064,11 +1092,23 @@ class LeControllerEvents:
                 break
         self.controller.send_hci_packets(packets)
 
+    def on_iso_tx_reset(self, handle: int) -> None:
+        self.iso_assemblies.pop(handle, None)
+
     def on_iso_completed(self, handle: int, count: int):
+        self.iso_buffers.complete(handle, count)
         # Vol 4, Part E, 7.7.19: report this handle only after CIS Established.
         if self.cis_established.get(handle) is False:
+            # Flushed packets release storage now. A conforming Host could
+            # have used at most the advertised pool before receiving credit.
+            self.deferred_cis_credits[handle] = min(
+                self.deferred_cis_credits.get(handle, 0) + count,
+                self.iso_buffers.packet_count,
+            )
             return
-        self.iso_buffers.complete(handle, count)
+        self._report_completed_packets(handle, count)
+
+    def _report_completed_packets(self, handle: int, count: int) -> None:
         self._emit_hci_packet(
             hci.HCI_Number_Of_Completed_Packets_Event([handle], [count])
         )

@@ -10,6 +10,7 @@ a connection, advertiser, or synchronization context (Core Vol 1, Part A, 2.1.2)
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol
 
 from bscontroller.linklayer.api import (
@@ -34,7 +35,6 @@ if TYPE_CHECKING:
     from bscontroller.linklayer.api import CisEstablished
     from bscontroller.linklayer.connection import Connection
     from bscontroller.linklayer.discovery import Advertising, PeriodicSync
-    from bscontroller.linklayer.link import RadioLink
     from bscontroller.linklayer.pawr import SlotResponse
 
 
@@ -42,11 +42,11 @@ class NotificationSink(IsoListener, Protocol):
     @property
     def local_version(self) -> tuple[int, int, int]: ...
 
-    def trace(self, message: str) -> None: ...
+    def trace(self, message: str | Callable[[], str]) -> None: ...
     def on_connected(self, connection: ConnectionSnapshot) -> None: ...
     def on_disconnected(self, connection: ConnectionSnapshot, reason: int) -> None: ...
     def on_acl_received(self, handle: int, continuation: bool, data: bytes) -> None: ...
-    def on_acl_completed(self, handle: int) -> None: ...
+    def on_acl_completed(self, handle: int, count: int) -> None: ...
     def on_connection_updated(
         self, connection: ConnectionSnapshot, status: int
     ) -> None: ...
@@ -187,21 +187,22 @@ class NotificationSink(IsoListener, Protocol):
     ) -> bool: ...
     def on_cis_established(self, result: CisEstablished, status: int) -> None: ...
     def on_cis_disconnected(self, cis_handle: int, reason: int) -> None: ...
+    def on_iso_tx_reset(self, handle: int) -> None: ...
 
 
 class NotificationAdapter:
     def __init__(self, sink: NotificationSink):
         self.sink = sink
-        self._link: RadioLink | None = None
+        self._advertiser_handle: Callable[[Advertising], int | None] | None = None
 
-    def bind(self, link: RadioLink) -> None:
-        self._link = link
+    def bind_advertising(self, handle_of: Callable[[Advertising], int | None]) -> None:
+        self._advertiser_handle = handle_of
 
     @property
     def local_version(self) -> tuple[int, int, int]:
         return self.sink.local_version
 
-    def trace(self, message: str) -> None:
+    def trace(self, message: str | Callable[[], str]) -> None:
         self.sink.trace(message)
 
     def on_connected(self, connection: Connection) -> None:
@@ -215,8 +216,8 @@ class NotificationAdapter:
     ) -> None:
         self.sink.on_acl_received(connection.handle, continuation, data)
 
-    def on_acl_completed(self, connection: Connection) -> None:
-        self.sink.on_acl_completed(connection.handle)
+    def on_acl_completed(self, connection: Connection, count: int = 1) -> None:
+        self.sink.on_acl_completed(connection.handle, count)
 
     def on_connection_updated(self, connection: Connection, status: int) -> None:
         self.sink.on_connection_updated(connection_snapshot(connection), status)
@@ -353,24 +354,25 @@ class NotificationAdapter:
     def on_authenticated_payload_timeout(self, connection: Connection) -> None:
         self.sink.on_authenticated_payload_timeout(connection_snapshot(connection))
 
-    def _advertiser(self, item: Advertising) -> AdvertisingSnapshot:
-        assert self._link is not None
-        handle = next(
-            key for key, value in self._link.advertisers.items() if value is item
-        )
-        return advertising_snapshot(handle, item)
+    def _advertiser(self, item: Advertising) -> AdvertisingSnapshot | None:
+        assert self._advertiser_handle is not None
+        handle = self._advertiser_handle(item)
+        return advertising_snapshot(handle, item) if handle is not None else None
 
     def on_advertising_ended(self, item: Advertising, status: int) -> None:
-        self.sink.on_advertising_ended(self._advertiser(item), status)
+        if (advertiser := self._advertiser(item)) is not None:
+            self.sink.on_advertising_ended(advertiser, status)
 
     def on_monitored_advertiser(self, address: Address, condition: int) -> None:
         self.sink.on_monitored_advertiser(AddressSnapshot(address), condition)
 
     def on_scan_request(self, item: Advertising, peer: Address) -> None:
-        self.sink.on_scan_request(self._advertiser(item), AddressSnapshot(peer))
+        if (advertiser := self._advertiser(item)) is not None:
+            self.sink.on_scan_request(advertiser, AddressSnapshot(peer))
 
     def on_subevent_data_request(self, item: Advertising, start: int, count: int):
-        self.sink.on_subevent_data_request(self._advertiser(item), start, count)
+        if (advertiser := self._advertiser(item)) is not None:
+            self.sink.on_subevent_data_request(advertiser, start, count)
 
     def on_response_report(
         self,
@@ -379,9 +381,10 @@ class NotificationAdapter:
         transmitted: bool,
         responses: list[SlotResponse],
     ) -> None:
-        self.sink.on_response_report(
-            self._advertiser(item), subevent, transmitted, tuple(responses)
-        )
+        if (advertiser := self._advertiser(item)) is not None:
+            self.sink.on_response_report(
+                advertiser, subevent, transmitted, tuple(responses)
+            )
 
     def on_connect_failed(self, peer: Address, status: int) -> None:
         self.sink.on_connect_failed(AddressSnapshot(peer), status)
@@ -480,3 +483,6 @@ class NotificationAdapter:
 
     def on_iso_completed(self, handle: int, count: int) -> None:
         self.sink.on_iso_completed(handle, count)
+
+    def on_iso_tx_reset(self, handle: int) -> None:
+        self.sink.on_iso_tx_reset(handle)

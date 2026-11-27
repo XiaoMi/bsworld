@@ -4,7 +4,6 @@
 
 """Initiating, ACL, encryption and connected Link Layer procedure HCI commands."""
 
-import asyncio
 import logging
 
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -82,10 +81,6 @@ class LeConnectionCommands(LeControllerContext):
         Connection [v2]; the filter policy does not apply to it (7.8.66).
         """
         filter_policy = command.initiator_filter_policy if pawr is None else 0
-        status = self.ll.initiating_status(command.peer_address, bool(filter_policy))
-        if status != SUCCESS:
-            self.controller._send_hci_command_status(status, command.op_code)
-            return
         if (
             command.initiator_filter_policy
             not in (
@@ -97,11 +92,15 @@ class LeConnectionCommands(LeControllerContext):
             or command.peer_address_type
             not in (hci.AddressType.PUBLIC_DEVICE, hci.AddressType.RANDOM_DEVICE)
         ):
-            self.controller._send_hci_command_status(UNSUPPORTED, command.op_code)
-            return
+            # Preserve the admission error if this command also conflicts
+            # with a connection or an initiation already in progress.
+            return (
+                self.ll.initiating_status(command.peer_address, bool(filter_policy))
+                or UNSUPPORTED
+            )
         # Commit after validation. Keep the first window in the common fields
         # and retain the full per-PHY configuration for the selected air PHY.
-        status = self.ll.start_initiating(
+        return self.ll.start_initiating(
             InitiatingConfig(
                 self._address(command.own_address_type),
                 command.peer_address,
@@ -113,7 +112,6 @@ class LeConnectionCommands(LeControllerContext):
                 pawr_subevent=pawr[1] if pawr else 0,
             )
         )
-        self.controller._send_hci_command_status(status, command.op_code)
 
     def on_hci_le_create_connection_command(self, command):
         '''
@@ -132,8 +130,7 @@ class LeConnectionCommands(LeControllerContext):
             <= command.le_scan_interval
             <= HCI_LE_SCAN_INTERVAL_MAX
         ):
-            self.controller._send_hci_command_status(INVALID, command.op_code)
-            return
+            return INVALID
         # Wire identity and hop are allocated only before sending CONNECT_IND.
         parameters = Parameters(
             0,
@@ -146,7 +143,7 @@ class LeConnectionCommands(LeControllerContext):
             self.host_channel_map,
             0,
         )
-        self._start_initiating(
+        return self._start_initiating(
             command,
             {Phy.LE_1M: parameters},
             (
@@ -162,7 +159,7 @@ class LeConnectionCommands(LeControllerContext):
         '''
         See Bluetooth spec Vol 4, Part E - 7.8.66 LE Extended Create Connection Command
         '''
-        self._extended_create_connection(command)
+        return self._extended_create_connection(command)
 
     def on_hci_le_extended_create_connection_v2_command(self, command):
         '''
@@ -179,8 +176,7 @@ class LeConnectionCommands(LeControllerContext):
             subevent == HCI_LE_NO_SUBEVENT,
         )
         if all(none):
-            self._extended_create_connection(command)
-            return
+            return self._extended_create_connection(command)
         status = (
             INVALID
             if any(none)
@@ -191,20 +187,17 @@ class LeConnectionCommands(LeControllerContext):
             )
         )
         if status != SUCCESS:
-            self.controller._send_hci_command_status(status, command.op_code)
-            return
-        self._extended_create_connection(command, pawr=(handle, subevent))
+            return status
+        return self._extended_create_connection(command, pawr=(handle, subevent))
 
     def _extended_create_connection(self, command, pawr=None):
         if command.initiating_phys & ~CONTROLLER_SUPPORTED_PHY_MASK:
-            self.controller._send_hci_command_status(UNSUPPORTED, command.op_code)
-            return
+            return UNSUPPORTED
         if (
             pawr is None
             and not command.initiating_phys & CONTROLLER_PRIMARY_SCAN_PHY_MASK
         ):
-            self.controller._send_hci_command_status(INVALID, command.op_code)
-            return
+            return INVALID
         # Parameter arrays follow set PHY bits, including LE 2M parameters even
         # though only LE 1M/Coded contribute primary-channel scanning windows.
         phys = [phy for phy in Phy if command.initiating_phys & (1 << (phy - 1))]
@@ -225,8 +218,7 @@ class LeConnectionCommands(LeControllerContext):
                 <= command.scan_intervals[index]
                 <= HCI_LE_EXT_SCAN_INTERVAL_MAX
             ):
-                self.controller._send_hci_command_status(INVALID, command.op_code)
-                return
+                return INVALID
             # The selected PHY receives its wire parameters at connection creation.
             values[phy] = Parameters(
                 0,
@@ -239,7 +231,7 @@ class LeConnectionCommands(LeControllerContext):
                 self.host_channel_map,
                 0,
             )
-        self._start_initiating(
+        return self._start_initiating(
             command,
             values,
             ()
@@ -263,8 +255,7 @@ class LeConnectionCommands(LeControllerContext):
         item = self.ll.cancel_initiating()
         if item is None:
             return hci.HCI_StatusReturnParameters(DISALLOWED)
-        asyncio.get_running_loop().call_soon(
-            self._emit_hci_packet,
+        self._emit_hci_packet(
             self._connection_complete_event(
                 status=hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR,
                 connection_handle=0,
@@ -281,7 +272,7 @@ class LeConnectionCommands(LeControllerContext):
 
     def on_hci_disconnect_command(self, command):
         status = self.ll.disconnect(command.connection_handle, command.reason)
-        self.controller._send_hci_command_status(status, command.op_code)
+        return status
 
     def on_hci_read_rssi_command(self, command):
         '''
@@ -302,9 +293,7 @@ class LeConnectionCommands(LeControllerContext):
 
     def on_hci_le_request_peer_sca_command(self, command):
         """Read the peer's sleep clock accuracy (Core Vol 4, Part E, 7.8.108)."""
-        self._run_ll_request(
-            command, self.ll.request_peer_sca(command.connection_handle)
-        )
+        return self.ll.request_peer_sca(command.connection_handle)
 
     def on_hci_le_modify_sleep_clock_accuracy_command(self, command):
         """Change the modeled sleep clock for testing (Core Vol 4, Part E, 7.8.94)."""
@@ -313,14 +302,11 @@ class LeConnectionCommands(LeControllerContext):
         )
 
     def on_hci_le_enable_encryption_command(self, command):
-        self._run_ll_request(
-            command,
-            self.ll.prepare_encryption(
-                command.connection_handle,
-                command.random_number,
-                command.encrypted_diversifier,
-                command.long_term_key,
-            ),
+        return self.ll.prepare_encryption(
+            command.connection_handle,
+            command.random_number,
+            command.encrypted_diversifier,
+            command.long_term_key,
         )
 
     def on_hci_le_encrypt_command(self, command):
@@ -381,7 +367,6 @@ class LeConnectionCommands(LeControllerContext):
         )
 
     def on_hci_le_read_local_p_256_public_key_command(self, command):
-        self.controller._send_hci_command_status(SUCCESS, command.op_code)
         # Use the same per-controller simulation RNG as LE Rand. Sample only
         # scalars in the nonzero range of the P-256 subgroup.
         scalar = 0
@@ -396,12 +381,13 @@ class LeConnectionCommands(LeControllerContext):
                 public.y.to_bytes(32, 'little'),
             )
         )
+        return SUCCESS
 
     def on_hci_le_generate_dhkey_command(self, command):
-        self._generate_dhkey(command, key_type=0)
+        return self._generate_dhkey(command, key_type=0)
 
     def on_hci_le_generate_dhkey_v2_command(self, command):
-        self._generate_dhkey(command, key_type=command.key_type)
+        return self._generate_dhkey(command, key_type=command.key_type)
 
     def _generate_dhkey(self, command, *, key_type):
         if key_type == 0:
@@ -409,12 +395,9 @@ class LeConnectionCommands(LeControllerContext):
         elif key_type == 1:
             private_key = ec.derive_private_key(P256_DEBUG_PRIVATE_KEY, ec.SECP256R1())
         else:
-            self.controller._send_hci_command_status(INVALID, command.op_code)
-            return
+            return INVALID
         if private_key is None:
-            self.controller._send_hci_command_status(DISALLOWED, command.op_code)
-            return
-        self.controller._send_hci_command_status(SUCCESS, command.op_code)
+            return DISALLOWED
         try:
             # SEC1 decoding requires in-range affine coordinates before
             # checking the curve. Convert each HCI coordinate to big-endian.
@@ -430,18 +413,14 @@ class LeConnectionCommands(LeControllerContext):
         else:
             status, shared = SUCCESS, private_key.exchange(ec.ECDH(), public_key)[::-1]
         self._emit_hci_packet(hci.HCI_LE_Generate_DHKey_Complete_Event(status, shared))
+        return SUCCESS
 
     def on_hci_le_read_remote_features_command(self, command):
-        self._run_ll_request(
-            command, self.ll.prepare_features(command.connection_handle)
-        )
+        return self.ll.prepare_features(command.connection_handle)
 
     def on_hci_le_read_all_remote_features_command(self, command):
-        self._run_ll_request(
-            command,
-            self.ll.prepare_features(
-                command.connection_handle, command.pages_requested
-            ),
+        return self.ll.prepare_features(
+            command.connection_handle, command.pages_requested
         )
 
     def on_hci_le_set_host_feature_command(self, command):
@@ -454,21 +433,17 @@ class LeConnectionCommands(LeControllerContext):
         return self.on_hci_le_set_host_feature_command(command)
 
     def on_hci_read_remote_version_information_command(self, command):
-        self._run_ll_request(
-            command, self.ll.prepare_version(command.connection_handle)
-        )
+        return self.ll.prepare_version(command.connection_handle)
 
     def on_hci_le_connection_update_command(self, command):
-        self._run_ll_request(
-            command,
-            self.ll.prepare_parameters(
-                command.connection_handle,
-                command.connection_interval_min,
-                command.connection_interval_max,
-                command.max_latency,
-                command.supervision_timeout,
-                valid_ce_lengths=command.min_ce_length <= command.max_ce_length,
-            ),
+        return self.ll.prepare_parameters(
+            command.connection_handle,
+            command.connection_interval_min,
+            command.connection_interval_max,
+            command.max_latency,
+            command.supervision_timeout,
+            min_ce_length=command.min_ce_length,
+            max_ce_length=command.max_ce_length,
         )
 
     def on_hci_le_set_default_subrate_command(self, command):
@@ -485,16 +460,13 @@ class LeConnectionCommands(LeControllerContext):
 
     def on_hci_le_subrate_request_command(self, command):
         """Request a subrate change for an ACL (Core Vol 4, Part E, 7.8.124)."""
-        self._run_ll_request(
-            command,
-            self.ll.prepare_subrate(
-                command.connection_handle,
-                command.subrate_min,
-                command.subrate_max,
-                command.max_latency,
-                command.continuation_number,
-                command.supervision_timeout,
-            ),
+        return self.ll.prepare_subrate(
+            command.connection_handle,
+            command.subrate_min,
+            command.subrate_max,
+            command.max_latency,
+            command.continuation_number,
+            command.supervision_timeout,
         )
 
     @staticmethod
@@ -513,11 +485,8 @@ class LeConnectionCommands(LeControllerContext):
 
     def on_hci_le_connection_rate_request_command(self, command):
         """Request new connection timing (Core Vol 4, Part E, 7.8.154)."""
-        self._run_ll_request(
-            command,
-            self.ll.prepare_connection_rate(
-                command.connection_handle, self._connection_rate_parameters(command)
-            ),
+        return self.ll.prepare_connection_rate(
+            command.connection_handle, self._connection_rate_parameters(command)
         )
 
     def on_hci_le_set_default_rate_parameters_command(self, command):
@@ -534,15 +503,12 @@ class LeConnectionCommands(LeControllerContext):
 
     def on_hci_le_frame_space_update_command(self, command):
         """Request new frame spacing (Core Vol 4, Part E, 7.8.151)."""
-        self._run_ll_request(
-            command,
-            self.ll.prepare_frame_space(
-                command.connection_handle,
-                command.frame_space_min,
-                command.frame_space_max,
-                command.phys,
-                command.spacing_types,
-            ),
+        return self.ll.prepare_frame_space(
+            command.connection_handle,
+            command.frame_space_min,
+            command.frame_space_max,
+            command.phys,
+            command.spacing_types,
         )
 
     def on_hci_le_remote_connection_parameter_request_reply_command(self, command):
@@ -635,39 +601,32 @@ class LeConnectionCommands(LeControllerContext):
         return hci.HCI_StatusReturnParameters(SUCCESS)
 
     def on_hci_le_set_phy_command(self, command):
-        phys = self._phys(command)
-        parameter_status = SUCCESS
+        if self.controller.find_connection_by_handle(command.connection_handle) is None:
+            return hci.HCI_ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
         if (command.tx_phys | command.rx_phys) & ~CONTROLLER_SUPPORTED_PHY_MASK:
-            parameter_status = UNSUPPORTED
-        elif phys is None or command.phy_options not in (
+            return UNSUPPORTED
+        phys = self._phys(command)
+        if phys is None or command.phy_options not in (
             HCI_LE_PHY_OPTIONS_NO_PREFERENCE,
             HCI_LE_PHY_OPTIONS_S2_PREFERRED,
             HCI_LE_PHY_OPTIONS_S8_PREFERRED,
         ):
-            parameter_status = INVALID
+            return INVALID
         coding = (
             PHY_CODED_S2_FACTOR
             if command.phy_options == HCI_LE_PHY_OPTIONS_S2_PREFERRED
             else PHY_CODED_S8_FACTOR
         )
-        self._run_ll_request(
-            command,
-            self.ll.prepare_phy(
-                command.connection_handle, *(phys or (0, 0)), coding, parameter_status
-            ),
-        )
+        return self.ll.prepare_phy(command.connection_handle, *phys, coding)
 
     def on_hci_acl_data_packet(self, packet):
-        connection = self.ll.connection_snapshot(packet.connection_handle)
-        if (
-            connection is None
-            or packet.bc_flag
-            or packet.pb_flag
-            not in (
-                hci.HCI_ACL_PB_FIRST_NON_FLUSHABLE,
-                hci.HCI_ACL_PB_CONTINUATION,
-                hci.HCI_ACL_PB_FIRST_FLUSHABLE,
-            )
+        if packet.connection_handle not in self.controller.le_connections:
+            logger.warning('No connection for handle 0x%04X', packet.connection_handle)
+            return
+        if packet.bc_flag or packet.pb_flag not in (
+            hci.HCI_ACL_PB_FIRST_NON_FLUSHABLE,
+            hci.HCI_ACL_PB_CONTINUATION,
+            hci.HCI_ACL_PB_FIRST_FLUSHABLE,
         ):
             logger.warning('Invalid ACL handle or flags')
             return

@@ -19,7 +19,7 @@ from bscontroller.linklayer import (
     PDU_ADV_SYNC_OFFSET_RESERVED_MASK,
     AdvertisingPduType,
 )
-from bscontroller.linklayer.advertising import (
+from bscontroller.linklayer.advertising_pdu import (
     AuxPtr,
     ExtendedPdu,
     SyncInfo,

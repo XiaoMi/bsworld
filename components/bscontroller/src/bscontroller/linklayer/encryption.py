@@ -18,23 +18,20 @@ from bscontroller.linklayer import (
     LL_ENCRYPTION_IV_HALF_SIZE,
     LL_ENCRYPTION_RANDOM_SIZE,
     LL_ENCRYPTION_SKD_HALF_SIZE,
-    LL_RESPONSE_TIMEOUT_US,
     PDU_DATA_AUTHENTICATED_HEADER_MASK,
     ControlOpcode,
 )
-from bscontroller.linklayer.data_path import PacketCipher, ReceiveContext
 from bscontroller.linklayer.features import LeFeatureMask
-from bscontroller.linklayer.procedure import ProcedureContext
+from bscontroller.linklayer.packet_security import PacketCipher
+from bscontroller.linklayer.procedure import PROCEDURE_COLLISION, ProcedureContext
 from bscontroller.linklayer.state import Role
 from bscontroller.linklayer.timing import LL_AUTHENTICATED_PAYLOAD_TIMEOUT_DEFAULT_US
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.connection import Connection
     from bscontroller.linklayer.listener import EncryptionListener
+    from bscontroller.linklayer.procedure import ProcedureResponseTimer
 
-PROCEDURE_COLLISION = (
-    ErrorCode.LMP_ERROR_TRANSACTION_COLLISION_OR_LL_PROCEDURE_COLLISION_ERROR
-)
 Opcode = ControlOpcode
 ENC_REQUEST = struct.Struct(
     f'<{LL_ENCRYPTION_RANDOM_SIZE}sH{LL_ENCRYPTION_SKD_HALF_SIZE}s{LL_ENCRYPTION_IV_HALF_SIZE}s'
@@ -60,7 +57,6 @@ class State(Enum):
     START_REQ = auto()
     KEY = auto()
     START_RSP = auto()
-    START_ACK = auto()
     PAUSE_RSP = auto()
     PAUSE_ACK = auto()
     RESTART = auto()
@@ -75,7 +71,7 @@ class Encryption:
         self.security = connection.packet_security
         self.enabled = False
         self.refresh = False
-        self.deadline_us = 0
+        self.response_timer: ProcedureResponseTimer | None = None
         self.ltk = b''
         self.rand = b''
         self.ediv = 0
@@ -106,10 +102,13 @@ class Encryption:
     def busy(self) -> bool:
         return self.state != State.IDLE
 
+    @property
+    def deadline_us(self) -> int:
+        return self.response_timer.deadline_us if self.response_timer is not None else 0
+
     def enqueue(self, opcode: int, payload: bytes = b'') -> None:
         if self.busy:
-            # Core Vol 6 Part B 5.2: queueing each procedure control PDU resets T_PRT.
-            self.deadline_us = self.connection.radio.now_us + LL_RESPONSE_TIMEOUT_US
+            self.response_timer = self.connection.llcp.response_timer
         self.connection.enqueue_control(bytes([opcode]) + payload)
 
     def start(self, rand: bytes, ediv: int, ltk: bytes) -> None:
@@ -118,7 +117,7 @@ class Encryption:
         """
         self.rand, self.ediv, self.ltk = rand, ediv, ltk
         self.refresh = self.enabled
-        self.deadline_us = 0
+        self.response_timer = None
         if self.refresh:
             self.state = State.PAUSE_RSP
             self.enqueue(Opcode.LL_PAUSE_ENC_REQ)
@@ -133,7 +132,7 @@ class Encryption:
         self.skd_c = generator.randbytes(LL_ENCRYPTION_SKD_HALF_SIZE)
         self.iv_c = generator.randbytes(LL_ENCRYPTION_IV_HALF_SIZE)
         self.state = State.ENC_RSP
-        self.deadline_us = 0
+        self.response_timer = None
         self.enqueue(
             Opcode.LL_ENC_REQ,
             ENC_REQUEST.pack(self.rand, self.ediv, self.skd_c, self.iv_c),
@@ -160,7 +159,7 @@ class Encryption:
             self.state = State.REJECT
             # T_terminate now owns this failure; the aborted encryption timer must not
             # win.
-            self.deadline_us = 0
+            self.response_timer = None
             self.connection.terminate(
                 ErrorCode.PIN_OR_KEY_MISSING_ERROR,
                 status=ErrorCode.PIN_OR_KEY_MISSING_ERROR,
@@ -187,7 +186,7 @@ class Encryption:
         (Vol 4, Part E, 7.7.8, 7.7.39).
         """
         self.state = State.IDLE
-        self.deadline_us = 0
+        self.response_timer = None
         self.enabled = not status
         self.last_authenticated_us = self.connection.radio.now_us
         self.stop_ping()
@@ -264,15 +263,14 @@ class Encryption:
             and not data
             and self.state == State.START_RSP
         ):
-            if central:
-                self.finish()
-            else:
-                # Keep the final encrypted response tied to this cipher while it is
-                # retried.
-                # TODO: align Peripheral completion timing with Vol 6, Part B, 5.1.3.1.
+            if not central:
+                # Queue the final encrypted response ahead of the resumed ACL data.
+                # ARQ retains its ciphertext through retries (Vol 6, Part B, 4.5.9).
                 self.security.tx_enabled = True
-                self.state = State.START_ACK
-                self.enqueue(Opcode.LL_START_ENC_RSP)
+                self.connection.enqueue_control(
+                    bytes([Opcode.LL_START_ENC_RSP]), priority=True
+                )
+            self.finish()
             return True
         if (
             opcode == Opcode.LL_PAUSE_ENC_REQ
@@ -345,12 +343,7 @@ class Encryption:
             # Core Vol 6, Part B, 5.1.3.1: keep Host ACL paused until rejection is
             # acknowledged.
             self.state = State.IDLE
-            self.deadline_us = 0
-        elif (
-            payload == bytes([Opcode.LL_START_ENC_RSP])
-            and self.state == State.START_ACK
-        ):
-            self.finish()
+            self.response_timer = None
         elif (
             payload == bytes([Opcode.LL_PAUSE_ENC_RSP])
             and self.connection.role == Role.CENTRAL
@@ -399,9 +392,6 @@ class Encryption:
             self.last_authenticated_us = self.connection.radio.now_us
             self.stop_ping()
         return payload
-
-    def receive(self, header: int, payload: bytes, *, duplicate: bool) -> bytes | None:
-        return self.connection.llcp.receive(ReceiveContext(header, payload, duplicate))
 
     @property
     def next_deadline_us(self) -> int:

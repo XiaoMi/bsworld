@@ -12,7 +12,9 @@ from bscontroller.address import Address
 from bscontroller.errors import ErrorCode
 
 if TYPE_CHECKING:
-    from bscontroller.linklayer.link import RadioLink
+    from collections.abc import Callable
+
+    from bscontroller.radio.base import Radio
 
 MONITORED_ADVERTISERS_MAX = 8
 MONITOR_TIMEOUT_UNIT_US = 1_000_000
@@ -35,8 +37,9 @@ class AdvertiserMonitoring:
     address types. Keys compare the underlying public/random address identity.
     """
 
-    def __init__(self, link: RadioLink):
-        self.link = link
+    def __init__(self, radio: Radio, report: Callable[[Address, int], None]):
+        self._radio = radio
+        self._report = report
         self.entries: dict[tuple[bytes, bool], MonitoredAdvertiser] = {}
         self.enabled = False
 
@@ -56,7 +59,7 @@ class AdvertiserMonitoring:
             low,
             high,
             duration,
-            self.link.now_us + duration if self.enabled else None,
+            self._radio.now_us + duration if self.enabled else None,
         )
         return ErrorCode.SUCCESS
 
@@ -76,7 +79,9 @@ class AdvertiserMonitoring:
         self.enabled = enabled
         for entry in self.entries.values():
             entry.awaiting_high = False
-            entry.deadline_us = self.link.now_us + entry.timeout_us if enabled else None
+            entry.deadline_us = (
+                self._radio.now_us + entry.timeout_us if enabled else None
+            )
 
     @property
     def deadline_us(self) -> int | None:
@@ -89,10 +94,13 @@ class AdvertiserMonitoring:
         for key, entry in list(self.entries.items()):
             if self.entries.get(key) is not entry:
                 continue
-            if entry.deadline_us is not None and entry.deadline_us <= self.link.now_us:
+            if (
+                entry.deadline_us is not None
+                and entry.deadline_us <= self._radio.now_us
+            ):
                 entry.deadline_us = None
                 entry.awaiting_high = True
-                self.link.listener.on_monitored_advertiser(entry.address, 0)
+                self._report(entry.address, 0)
 
     def received(self, address: Address, rssi: float) -> None:
         if not self.enabled:
@@ -105,7 +113,7 @@ class AdvertiserMonitoring:
         if entry.awaiting_high:
             if rssi >= entry.high:
                 entry.awaiting_high = False
-                entry.deadline_us = self.link.now_us + entry.timeout_us
-                self.link.listener.on_monitored_advertiser(address, 1)
+                entry.deadline_us = self._radio.now_us + entry.timeout_us
+                self._report(address, 1)
         elif rssi > entry.low:
-            entry.deadline_us = self.link.now_us + entry.timeout_us
+            entry.deadline_us = self._radio.now_us + entry.timeout_us

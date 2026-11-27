@@ -165,11 +165,14 @@ class Radio(Protocol):
         until_us: int,
         *,
         start_us: int | None = None,
+        deadline_us: int | None = None,
         access_address: int = PDU_ADV_ACCESS_ADDRESS,
         crc_init: int = PDU_ADV_CRC_INIT,
         accept_bad_crc: bool = False,
         phy: Phy = Phy.LE_1M,
-    ) -> Received | None: ...
+    ) -> Received | None:
+        """Bound address search by ``until_us`` and reception by ``deadline_us``."""
+        ...
 
 
 @dataclass

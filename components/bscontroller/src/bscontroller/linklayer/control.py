@@ -18,16 +18,13 @@ from typing import TYPE_CHECKING
 from bscontroller.capabilities import CONTROLLER_SUPPORTED_PHY_MASK
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
-    LL_CHANNEL_MAP_SIZE,
     LL_CONN_INTERVAL_UNIT_US,
     LL_DATA_CHANNEL_COUNT,
     LL_DATA_CHANNEL_COUNT_MIN,
     LL_DATA_CHANNEL_MAP_ALL,
     LL_EVENT_COUNTER_MASK,
     LL_INSTANT_MIN_LISTENING_EVENTS,
-    LL_RESPONSE_TIMEOUT_US,
     PDU_CONTROL_CHANNEL_MAP_SIZE,
-    PDU_CONTROL_INSTANT_SIZE,
     PDU_CONTROL_MIN_USED_CHANNELS_SIZE,
     PDU_CONTROL_OPCODE_SIZE,
     PDU_CONTROL_PERIODIC_SYNC_SIZE,
@@ -40,22 +37,18 @@ from bscontroller.linklayer import (
 )
 from bscontroller.linklayer.clock_accuracy import ClockAccuracyProcedure
 from bscontroller.linklayer.connection_parameters import (
-    UPDATE,
     ConnectionParametersProcedure,
     anchor_offset,
-)
-from bscontroller.linklayer.connection_rate import (
-    INDICATION as RATE_INDICATION,
 )
 from bscontroller.linklayer.connection_rate import (
     ConnectionRateProcedure,
 )
 from bscontroller.linklayer.data_length import DataLengthProcedure
-from bscontroller.linklayer.data_path import TransmissionConstraints
 from bscontroller.linklayer.feature_exchange import FeatureExchangeProcedure
 from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.frame_space import FrameSpaceProcedure
-from bscontroller.linklayer.instant import InstantUpdate
+from bscontroller.linklayer.instant import CHANNEL_MAP, InstantUpdate
+from bscontroller.linklayer.packet_control import TransmissionConstraints
 from bscontroller.linklayer.parameters import valid_channel_map
 from bscontroller.linklayer.phy import PhyProcedure
 from bscontroller.linklayer.power_control import PowerControl
@@ -74,10 +67,8 @@ if TYPE_CHECKING:
     from bscontroller.linklayer.connection import Connection
     from bscontroller.linklayer.listener import ControlListener
 
-PROCEDURE_COLLISION = (
-    ErrorCode.LMP_ERROR_TRANSACTION_COLLISION_OR_LL_PROCEDURE_COLLISION_ERROR
-)
 Opcode = ControlOpcode
+PAST_INDICATIONS = (Opcode.LL_PERIODIC_SYNC_IND, Opcode.LL_PERIODIC_SYNC_WR_IND)
 
 
 def valid_minimum_channels(phys: int, minimum: int) -> bool:
@@ -94,6 +85,7 @@ class ControlProcedures:
         self.phy = PhyProcedure(self)
         self.connection_parameters = ConnectionParametersProcedure(self)
         self.response_timer = response_timer
+        self._instant_timer_owner: ProcedureContext | None = None
         self.pending: InstantUpdate | None = None
         self.transmitted = False
         self.acknowledged = False
@@ -119,10 +111,9 @@ class ControlProcedures:
         self.host_channel_map = connection.parameters.channel_map
         self.peer_minimum_channel_phys = 0
         self.peer_minimum_used_channels = LL_DATA_CHANNEL_COUNT_MIN
-        # LL_PERIODIC_SYNC_IND waiting for a describable train, and those already
-        # in the TX queue, both in transmission order.
+        # Train references awaiting a describable event, and the one queued for TX.
         self.transfers: deque[tuple[TrainSource, int]] = deque()
-        self.released: deque[tuple[TrainSource, int]] = deque()
+        self.active_transfer: tuple[TrainSource, int] | None = None
 
     @property
     def feature_request(self) -> bool:
@@ -148,9 +139,18 @@ class ControlProcedures:
         )
         return tuple(context for context in contexts if context is not None)
 
+    def start_instant_timer(self, owner: ProcedureContext) -> None:
+        self._instant_timer_owner = owner
+        self.response_timer.restart(self.connection.radio.now_us)
+
+    def stop_instant_timer(self, owner: ProcedureContext | None = None) -> None:
+        # A rejected local request can overlap a peer's pending Host decision.
+        if owner is None or self._instant_timer_owner is owner:
+            self._instant_timer_owner = None
+
     @property
     def deadline_us(self) -> int:
-        return self.response_timer.deadline_us
+        return self.response_timer.deadline_us if self._instant_timer_owner else 0
 
     @property
     def listener(self) -> ControlListener:
@@ -174,22 +174,23 @@ class ControlProcedures:
         return (
             self.peer_instant_blocked
             or self.version_request
-            or any(procedure.busy for procedure in self._local_procedures)
+            or self.active_transfer is not None
+            or self.frame_space.response is not None
+            or any(procedure.pending for procedure in self._local_procedures)
         )
 
     @property
     def next_deadline_us(self) -> int:
-        deadlines = (
-            self.data_length.deadline_us,
-            self.features.deadline_us,
-            self.version_deadline_us,
-            *self._response_deadlines(),
-        )
-        return min((deadline for deadline in deadlines if deadline), default=0)
-
-    def _response_deadlines(self) -> tuple[int, ...]:
-        """Procedures that disconnect the ACL on response timeout."""
-        return (self.deadline_us, *(p.deadline_us for p in self._local_procedures))
+        if (
+            self._instant_timer_owner is not None
+            or self.active_transfer is not None
+            or self.version_deadline_us
+            or self.features.deadline_us
+            or self.data_length.deadline_us
+            or any(procedure.deadline_us for procedure in self._local_procedures)
+        ):
+            return self.response_timer.deadline_us
+        return 0
 
     def _instant_phys(self, update: InstantUpdate) -> tuple[int, int]:
         if self.connection.role == Role.CENTRAL:
@@ -256,13 +257,8 @@ class ControlProcedures:
             )
         return TransmissionConstraints(frozenset(tx_phys), rx_phy, interval_us)
 
-    def enqueue(self, payload: bytes, *, priority: bool = False) -> None:
-        # Core Vol 6, Part B, 5.2: each queued procedure PDU restarts a running T_PRT.
-        self.response_timer.restart(self.connection.radio.now_us)
-        self.connection.enqueue_control(payload, priority=priority)
-
     def reject(self, opcode: int, reason: int, *, priority: bool = False) -> None:
-        self.enqueue(
+        self.connection.enqueue_control(
             bytes([Opcode.LL_REJECT_EXT_IND, opcode, reason]), priority=priority
         )
 
@@ -323,7 +319,7 @@ class ControlProcedures:
         else:
             self.pending = update
             self._awaiting_instant_ack_confirmation = bool(distance)
-            if distance == 0:
+            if distance == 0 and not self.check_timeout():
                 self.apply(received_at_instant=True)
 
     def request_channel_map(self, channel_map: int) -> None:
@@ -331,7 +327,7 @@ class ControlProcedures:
         5.1.2; Vol 4, Part E, 7.8.19).
         """
         self.host_channel_map = channel_map
-        self._start_channel_map(self.selected_channel_map())
+        self.connection.llcp.schedule_channel_map()
 
     def selected_channel_map(self) -> int:
         """Prefer Host-usable channels; fill missing indices in ascending order.
@@ -347,26 +343,17 @@ class ControlProcedures:
                 value |= 1 << channel
         return value & LL_DATA_CHANNEL_MAP_ALL
 
-    def _refresh_channel_map(self) -> None:
-        if (
-            self.connection.role == Role.CENTRAL
-            and not self.connection.closed
-            and self.peer_minimum_channel_phys
-            and not self.busy
-        ):
-            value = self.selected_channel_map()
-            if value != self.connection.parameters.channel_map:
-                self._start_channel_map(value)
-
-    def _start_channel_map(self, channel_map: int) -> None:
+    def update_channel_map(self) -> None:
+        connection = self.connection
+        if connection.role != Role.CENTRAL or connection.closed:
+            return
+        channel_map = self.selected_channel_map()
+        if channel_map == connection.parameters.channel_map:
+            return
         instant = self.instant()
         self.pending = InstantUpdate(instant, channel_map=channel_map, local=True)
         self.transmitted = self.acknowledged = False
-        self.enqueue(
-            bytes([Opcode.LL_CHANNEL_MAP_IND])
-            + channel_map.to_bytes(LL_CHANNEL_MAP_SIZE, 'little')
-            + instant.to_bytes(PDU_CONTROL_INSTANT_SIZE, 'little')
-        )
+        connection.enqueue_control(self.pending.encode())
 
     def request_minimum_channels(self, phys: int, minimum: int) -> None:
         """Queue a Peripheral indication after Feature Exchange, on its radio thread."""
@@ -381,30 +368,34 @@ class ControlProcedures:
             & feature
         ):
             raise ValueError('minimum used channels requires negotiated peer support')
-        self.enqueue(bytes([Opcode.LL_MIN_USED_CHANNELS_IND, phys, minimum]))
+        self.connection.enqueue_control(
+            bytes([Opcode.LL_MIN_USED_CHANNELS_IND, phys, minimum])
+        )
 
     def transfer(self, source: TrainSource, service_data: int) -> None:
         """Queue LL_PERIODIC_SYNC_IND for ``source``'s train.
 
-        The procedure has no response and completes once the PDU is sent, so it
-        holds no procedure slot and no response timer (Core Vol 6, Part B,
-        5.1.13). The PDU waits until the train can be described (2.4.2.27), and
-        is dropped if the train ends before that.
+        Wait until the train can be described (2.4.2.27). The procedure occupies
+        the ACL from queuing the indication until its first transmission (5.1.13).
         """
         self.transfers.append((source, service_data))
         self.release_transfers()
 
     def release_transfers(self) -> None:
-        """Queue each waiting transfer whose train can now be described.
+        """Queue one transfer whose train can now be described.
 
         The queued PDU describes the train relative to this event. prepare()
         describes it again relative to the transmitting event, and keeps this
         description only if the train can no longer be described then.
         """
-        if self.connection.llcp.local_procedure_busy:
+        if (
+            not self.transfers
+            or self.connection.llcp.deferred
+            or self.connection.llcp.local_procedure_busy
+        ):
             return
-        waiting: deque[tuple[TrainSource, int]] = deque()
-        for source, service_data in self.transfers:
+        for _ in range(len(self.transfers)):
+            source, service_data = self.transfers.popleft()
             if source.ended:
                 continue
             train = source.reference()
@@ -414,11 +405,11 @@ class ControlProcedures:
                 else transfer_indication(train, self.connection, service_data)
             )
             if payload is None:
-                waiting.append((source, service_data))
+                self.transfers.append((source, service_data))
                 continue
-            self.released.append((source, service_data))
+            self.active_transfer = source, service_data
             self.connection.enqueue_control(payload)
-        self.transfers = waiting
+            return
 
     def prepare(self, payload: bytes) -> bytes:
         """Finalize a control PDU at its first transmission.
@@ -428,11 +419,8 @@ class ControlProcedures:
         2.4.2.27 and 5.5).
         """
         payload = self.frame_space.prepare(payload)
-        if (
-            payload[0] in (Opcode.LL_PERIODIC_SYNC_IND, Opcode.LL_PERIODIC_SYNC_WR_IND)
-            and self.released
-        ):
-            source, service_data = self.released.popleft()
+        if payload[0] in PAST_INDICATIONS and self.active_transfer is not None:
+            source, service_data = self.active_transfer
             train = source.reference()
             if train is not None:
                 payload = (
@@ -446,82 +434,52 @@ class ControlProcedures:
             self.phy.mark_transmitted()
         update = self.pending
         if (
-            update is not None
-            and update.local
-            and not self.transmitted
-            and payload[0]
-            in (
-                Opcode.LL_CONNECTION_UPDATE_IND,
-                Opcode.LL_CONNECTION_RATE_IND,
-                Opcode.LL_CHANNEL_MAP_IND,
-                Opcode.LL_PHY_UPDATE_IND,
-            )
+            update is None
+            or not update.local
+            or self.transmitted
+            or payload[0] != update.opcode
         ):
-            # A queued ACL retransmission can delay the first control transmission.
-            # Reserve six listening events from actual transmission, not HCI input.
-            instant = self.instant()
-            if update.rate is not None and payload[0] == Opcode.LL_CONNECTION_RATE_IND:
-                self.pending = self.rate.prepare(update, instant)
-                self.transmitted = True
-                return self.pending.rate.encode(instant)
+            return payload
+        # ARQ may have delayed the first transmission since the Host request.
+        instant = self.instant()
+        if update.rate is not None:
+            update = self.rate.prepare(update, instant)
+        else:
+            update = replace(update, instant=instant)
             if update.parameters is not None and update.anchor_reference is not None:
-                parameters = replace(
-                    update.parameters,
-                    window_offset=anchor_offset(
-                        update.anchor_reference,
-                        instant,
-                        self.connection.parameters.interval_us
-                        // LL_CONN_INTERVAL_UNIT_US,
-                        update.parameters.interval,
-                    ),
-                )
-                update = replace(update, parameters=parameters)
-                payload = bytes([Opcode.LL_CONNECTION_UPDATE_IND]) + UPDATE.pack(
-                    parameters.window_size,
-                    parameters.window_offset,
-                    parameters.interval,
-                    parameters.latency,
-                    parameters.timeout,
+                offset = anchor_offset(
+                    update.anchor_reference,
                     instant,
+                    self.connection.parameters.interval_us // LL_CONN_INTERVAL_UNIT_US,
+                    update.parameters.interval,
                 )
-            self.pending = replace(update, instant=instant)
-            self.transmitted = True
-            return payload[:-PDU_CONTROL_INSTANT_SIZE] + instant.to_bytes(
-                PDU_CONTROL_INSTANT_SIZE, 'little'
-            )
-        return payload
+                update = replace(
+                    update, parameters=replace(update.parameters, window_offset=offset)
+                )
+        self.pending = update
+        self.transmitted = True
+        return update.encode()
 
     def acknowledge(self, payload: bytes) -> None:
         self.subrating.acknowledged(payload)
         self.rate.acknowledge(payload)
         update = self.pending
-        if update is not None and update.local and update.rate is not None:
-            if (
-                payload[0] == Opcode.LL_CONNECTION_RATE_IND
-                and RATE_INDICATION.unpack_from(payload, 1)[2] == update.instant
-            ):
-                self.acknowledged = True
-            return
         if (
-            update
+            update is not None
             and update.local
-            and payload[0]
-            in (
-                Opcode.LL_CONNECTION_UPDATE_IND,
-                Opcode.LL_CHANNEL_MAP_IND,
-                Opcode.LL_PHY_UPDATE_IND,
-            )
-            and int.from_bytes(payload[-PDU_CONTROL_INSTANT_SIZE:], 'little')
-            == update.instant
+            and self.transmitted
+            and payload[0] == update.opcode
+            and payload == update.encode()
         ):
             self.acknowledged = True
 
     def sent(self, payload: bytes) -> None:
         self.subrating.sent(payload)
-        self.rate.sent(payload)
         self.frame_space.sent(payload)
         if payload[0] == Opcode.LL_PHY_UPDATE_IND:
             self.phy.indication_sent(payload)
+        elif payload[0] in PAST_INDICATIONS:
+            self.active_transfer = None
 
     def send_version(self) -> None:
         """Send LL_VERSION_IND at most once per connection (Core Vol 6, Part B,
@@ -545,9 +503,7 @@ class ControlProcedures:
         if self.peer_version is not None:
             self.finish_version(ErrorCode.SUCCESS)
             return
-        self.version_context.deadline_us = (
-            self.connection.radio.now_us + LL_RESPONSE_TIMEOUT_US
-        )
+        self.version_context.response_timer = self.response_timer
         self.send_version()
 
     def finish_version(self, status: int | None) -> None:
@@ -582,7 +538,7 @@ class ControlProcedures:
                 return False
             self.peer_minimum_channel_phys = phys
             self.peer_minimum_used_channels = minimum
-            self._refresh_channel_map()
+            self.connection.llcp.schedule_channel_map()
             return True
         if (
             opcode == Opcode.LL_PERIODIC_SYNC_IND
@@ -613,25 +569,14 @@ class ControlProcedures:
             opcode == Opcode.LL_CHANNEL_MAP_IND
             and len(payload) == PDU_CONTROL_CHANNEL_MAP_SIZE
         ):
-            channel_map = int.from_bytes(
-                payload[
-                    PDU_CONTROL_OPCODE_SIZE : PDU_CONTROL_OPCODE_SIZE
-                    + LL_CHANNEL_MAP_SIZE
-                ],
-                'little',
+            channels, instant = CHANNEL_MAP.unpack_from(
+                payload, PDU_CONTROL_OPCODE_SIZE
             )
+            channel_map = int.from_bytes(channels, 'little')
             if connection.role != Role.PERIPHERAL or not valid_channel_map(channel_map):
                 connection.complete(ErrorCode.INVALID_LMP_OR_LL_PARAMETERS_ERROR)
             else:
-                self.accept_instant(
-                    InstantUpdate(
-                        int.from_bytes(
-                            payload[PDU_CONTROL_OPCODE_SIZE + LL_CHANNEL_MAP_SIZE :],
-                            'little',
-                        ),
-                        channel_map=channel_map,
-                    )
-                )
+                self.accept_instant(InstantUpdate(instant, channel_map=channel_map))
             return True
         if (
             opcode == Opcode.LL_UNKNOWN_RSP
@@ -677,10 +622,7 @@ class ControlProcedures:
         """
         connection = self.connection
         update = self.pending
-        if self.check_timeout():
-            return
         if update is None:
-            self._refresh_channel_map()
             return
         if update.instant != connection.event_counter:
             return
@@ -697,7 +639,7 @@ class ControlProcedures:
         self._awaiting_instant_ack_confirmation = False
         if update.central_tx_phy or update.peripheral_tx_phy:
             if self.phy.context is not None:
-                self.response_timer.stop(self.phy.context)
+                self.stop_instant_timer(self.phy.context)
         if update.parameters is not None:
             old = connection.parameters
             notify = (
@@ -741,24 +683,21 @@ class ControlProcedures:
             connection.rx_phy = Phy(rx or connection.rx_phy)
             self.power.update_transmitter()
             self.phy.finish(ErrorCode.SUCCESS)
+            if self.peer_minimum_channel_phys:
+                connection.llcp.schedule_channel_map()
         self.data_length.refresh()
-        self._refresh_channel_map()
 
     def check_timeout(self) -> bool:
         """Procedure response timeout T_PRT (Core Vol 6, Part B, 5.2)."""
-        if self.data_length.check_timeout():
-            return True
+        deadline = self.response_timer.deadline_us
         if (
-            self.version_deadline_us
-            and self.connection.radio.now_us >= self.version_deadline_us
+            not deadline
+            or self.connection.radio.now_us < deadline
+            or not self.next_deadline_us
         ):
-            self.finish_version(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
-            self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
-            return True
-        if self.features.check_timeout():
-            return True
-        now = self.connection.radio.now_us
-        if any(deadline and now >= deadline for deadline in self._response_deadlines()):
-            self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
-            return True
-        return False
+            return False
+        reason = ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR
+        if self.version_deadline_us:
+            self.finish_version(reason)
+        self.connection.complete(reason)
+        return True

@@ -37,7 +37,7 @@ from bscontroller.linklayer import (
     PDU_ADV_TYPE_MASK,
     AdvertisingPduType,
 )
-from bscontroller.linklayer.advertising import ExtendedPdu, scan_request
+from bscontroller.linklayer.advertising_pdu import ExtendedPdu, scan_request
 from bscontroller.linklayer.parameters import Parameters
 from bscontroller.linklayer.timing import LL_RESPONSE_START_TOLERANCE_US
 from bscontroller.radio.base import PHY_CODED_S8_FACTOR, Phy, RadioSwitch, Received
@@ -225,6 +225,7 @@ class ScriptedRadio:
         until_us,
         *,
         start_us=None,
+        deadline_us=None,
         phy=Phy.LE_1M,
         access_address=None,
         accept_bad_crc=False,
@@ -235,12 +236,23 @@ class ScriptedRadio:
             start_us or self.now_us + 1,
             self.earliest_start_us(channel, phy, transmit=False),
         )
+        if deadline_us is not None:
+            until_us = min(until_us, deadline_us)
         self.listens.append((start, until_us, channel, phy))
         packet = self._match(channel, phy, start, until_us, access_address)
+        if (
+            packet is not None
+            and deadline_us is not None
+            and packet.end_us > deadline_us
+        ):
+            self.now_us = deadline_us
+            self.switch.complete(channel, phy, transmit=False, end_us=deadline_us)
+            return None
         if packet is None:
             self.now_us = max(self.now_us, until_us)
             self.switch.complete(channel, phy, transmit=False, end_us=self.now_us + 1)
             return None
+        self.delivered.append(packet)
         self.now_us = packet.end_us - 1
         self.switch.complete(channel, phy, transmit=False, end_us=packet.end_us)
         # As the BabbleSim PHY adapter: a CRC failure is only surfaced on request.
@@ -276,7 +288,6 @@ class ScriptedRadio:
             air.valid_crc,
             phy,
         )
-        self.delivered.append(packet)
         return packet
 
 

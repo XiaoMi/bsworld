@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
+from collections.abc import Callable
 from concurrent.futures import Future
 from contextlib import AsyncExitStack, ExitStack
 from functools import partial
@@ -60,6 +61,7 @@ class RadioControllerWorker:
         ellisys_capture: EllisysCapture | None = None,
         hci_socket: Path | None = None,
         config: ConfigSource = None,
+        tx_filter: Callable[[bytes], bytes] | None = None,
     ):
         if max_step_us <= 0:
             raise ValueError('max_step_us must be positive')
@@ -71,6 +73,7 @@ class RadioControllerWorker:
         self.hci_snoop_file = hci_snoop_file
         self.rf_pcap_file = rf_pcap_file
         self.ellisys_capture = ellisys_capture
+        self.tx_filter = tx_filter
         self.hci_socket = Path(hci_socket) if hci_socket is not None else None
         self.sink = None
         self._input: SimpleQueue[bytes] | None = (
@@ -162,6 +165,7 @@ class RadioControllerWorker:
         assert loop is not None
         self._task = asyncio.current_task()
         radio = BabbleSimRadio()
+        radio.tx_filter = self.tx_filter
         with ExitStack() as resources:
             resources.callback(radio.close)
             pcap = None

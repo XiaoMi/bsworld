@@ -107,9 +107,13 @@ with asyncio.Runner(loop_factory=RadioEventLoop) as runner:
 - **Unix socket** 方式通过 `hci_socket` 指定路径。Controller 启动时开始监听 socket，与 PHY 完成同步后开始处理 HCI 命令。
 - **进程内 H4** 方式省略 `hci_socket`。启动前调用 `controller.set_packet_sink(sink)` 注册接收端，由其 `on_packet(packet: bytes)` 接收 H4 报文。调用 `controller.on_packet(packet)` 向 Controller 发送完整的 H4 报文。
 
+如果传输层提供的是字节流，可以创建 `bscontroller.hci.H4Parser(sink)`，通过 `feed_data(chunk)` 将完整的 H4 报文交给接收端。
+
 传入 `hci_snoop_file=Path(...)` 可以录制 BTSnoop 抓包，时间戳使用仿真时间。
 
 传入 `rf_pcap_file=Path(...)` 可将当前 Controller 的空口报文写入 PCAPNG。需要汇总多个 Controller 的发射时，创建一个 `EllisysCapture(Path(...))`，并通过 `ellisys_capture` 传给每个 Controller。退出 `RadioSession` 后关闭它，即可保存汇总文件。
+
+联测需要构造特定空口 PDU 时，可以向目标 Controller 传入 `tx_filter` 函数。Controller 用返回的 PDU 计算 CRC、发送并抓包。
 
 包还导出 `Radio`、`Phy`、`Received` 和 `hci` 中的报文类。`ControllerConfig` 用法见[配置](#配置)。
 
@@ -119,11 +123,18 @@ with asyncio.Runner(loop_factory=RadioEventLoop) as runner:
 - 让 Host 按仿真时间运行时，选择 `RadioEventLoop`，并为 Host 时钟设置一个与 Controller 设备编号不同的 `clock_dev_id`。
 - 退出 `RadioSession` 时，会先停止 Controller，再关闭会话的 Host 时钟连接。会话结束后再退出 `PhyProcess`。
 
+在包含外部固件的拓扑中，先注册各个射频设备，再通过
+`BabbleSimClock.for_device(phy.state_dir, clock_id)` 创建时钟。依次执行
+`await clock.connect()` 和 `clock.bind(loop)`，等 PHY 首次放行后开始运行 Host。
+退出时先从事件循环解绑时钟，再停止设备并关闭时钟。时钟类和构造 PHY 命令的
+`phy_command` 都可以从 `bscontroller.runtime` 导入。
+仿真时钟以微秒计时，可以用 `bscontroller.radio.PHY_TIME_UNITS_PER_SECOND` 在微秒与秒之间换算。
+
 LE 广播、连接管理、ISO 数据和多角色共存的运行方式见 [Bumble Host 示例](samples/README.zh-CN.md)。
 
 ## 配置
 
-`ControllerConfig` 管理蓝牙规范交由 Controller 决定的参数。省略的字段使用默认值。
+`ControllerConfig` 管理 Controller 参数和资源上限。省略的字段使用默认值。
 
 | JSON 键 | 默认值 | 范围 | 规范章节（Vol 4, Part E） |
 |---|---|---|---|
@@ -149,8 +160,11 @@ LE 广播、连接管理、ISO 数据和多角色共存的运行方式见 [Bumbl
 | `isoPacketLength` | `251` | `5`–`16383` | 7.8.2 |
 | `maxBigs` | `4` | `1`–`240` | 7.8.103, 7.8.106 |
 | `maxBis` | `16` | `1`–`3839` | 5.3.1, 7.8.103, 7.8.106 |
+| `maxScanDuplicateEntries` | `1024` | `1`–`65535` | 实现上限 |
 
 所有 ACL 连接共享一组 ACL 缓冲区，所有 ISO 流共享另一组 ISO 缓冲区。Host 发来的包超过单包长度上限，或对应的缓冲区已满时，Controller 丢弃该包，并在日志中记录句柄和上限。
+
+开启扫描去重后，广播和扫描响应分别占用记录。达到上限时，新记录替换最久未收到的记录。
 
 在 `defaults` 中填写所有 Controller 共用的设置，在 `controllers` 中按名称覆盖单个 Controller 的设置。
 
@@ -232,6 +246,8 @@ other = RadioController("x", "F0:F1:F2:F3:F4:03", config=ControllerConfig(max_co
 | 6.2 | Channel Sounding Amplitude-based Attack Resilience |  |
 | 6.3 | Channel Sounding Inline Phase Correction Term Transfer |  |
 
+CIS 每个启用的方向支持 BN（突发数）为 1，FT（刷新超时）为一个 ISO 间隔。同一个载荷可以在多个子事件中重传。
+
 ## 工作原理
 
 HCI 层与 Host 交换报文，Link Layer 执行 Controller 侧的协议流程，射频适配层负责与 BabbleSim PHY 收发空口报文。协议行为遵循 [Bluetooth Core 6.3](https://www.bluetooth.com/wp-content/uploads/Files/Specification/HTML/Core_v6.3/out/en/architecture,-change-history,-and-conventions/architecture.html#UUID-37039e1f-e0cd-37ce-2cf0-15dd6e6cff2e)。
@@ -240,7 +256,9 @@ HCI 层与 Host 交换报文，Link Layer 执行 Controller 侧的协议流程�
 
 Link Layer 分别管理广播、扫描、发起连接、同步、ACL 连接和等时组。每条 ACL 连接独立维护控制流程状态、加密状态和连接事件执行器。各角色由同一个调度器协调射频使用。
 
-每个 Controller 线程有自己的事件循环和 PHY 连接，通过完整的 H4 报文与 Host 通信。各 Controller 和 Host 时钟（如有）与 PHY 同步，PHY 以整数微秒为单位推进仿真时间。
+每个 Controller 线程有自己的事件循环和 PHY 连接，通过完整的 H4 报文与 Host 通信。
+
+PHY 每次只放行一个设备，等它提交下一次请求后再放行其他设备。同一仿真微秒的事件先按 PHY 操作优先级排序，优先级相同时按设备编号从小到大执行。在相同拓扑和 PHY 配置下，固定设备编号、随机种子以及 Host 输入的内容和时刻，便可复现空口轨迹。
 
 | 对象 | 负责的资源 |
 | --- | --- |

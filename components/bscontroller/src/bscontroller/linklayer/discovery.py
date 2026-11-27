@@ -30,7 +30,7 @@ from bscontroller.linklayer import (
     AdvertisingMode,
     AdvertisingPduType,
 )
-from bscontroller.linklayer.advertising import AdvertisingCoding, SyncInfo
+from bscontroller.linklayer.advertising_pdu import AdvertisingCoding, SyncInfo
 from bscontroller.linklayer.parameters import Parameters, valid_channel_map
 from bscontroller.linklayer.pawr import (
     PawrAdvertiser,
@@ -120,6 +120,7 @@ class Advertising:
     decision_adi: bool = False
     decision_flags: int = 0
     decision_data: bytes = b''
+    use_public_address: bool = False
 
     def __post_init__(self) -> None:
         # Public HCI records and RF procedures share mutable advertising buffers.

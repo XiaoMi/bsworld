@@ -338,6 +338,7 @@ class BabbleSimRadio:
         self.now_us = 0
         self.switch = RadioSwitch(switch_time_us=switch_time_us)
         self.on_air_packet: Callable[[AirPacket], None] | None = None
+        self.tx_filter: Callable[[bytes], bytes] | None = None
 
     async def connect(self, sim_id: str, dev_id: int) -> None:
         if self.connection is not None:
@@ -400,6 +401,9 @@ class BabbleSimRadio:
         power_dbm: int = 0,
     ) -> int:
         phy = Phy(phy)
+        # Apply the device's test condition once, before CRC, coding and capture.
+        if self.tx_filter is not None:
+            pdu = self.tx_filter(pdu)
         packet = pdu + crc24(pdu, crc_init)
         duration_us = phy.airtime_us(len(pdu), coding)
         if not RADIO_TX_POWER_MIN_DBM <= power_dbm <= RADIO_TX_POWER_MAX_DBM:
@@ -498,12 +502,15 @@ class BabbleSimRadio:
         until_us: int,
         *,
         start_us: int | None = None,
+        deadline_us: int | None = None,
         access_address: int = PDU_ADV_ACCESS_ADDRESS,
         crc_init: int = PDU_ADV_CRC_INIT,
         accept_bad_crc: bool = False,
         phy: Phy = Phy.LE_1M,
     ) -> Received | None:
         phy = Phy(phy)
+        abort = NEVER if deadline_us is None else deadline_us
+        until_us = min(until_us, abort)
         start_us = self.now_us + 1 if start_us is None else start_us
         if start_us <= self.now_us:
             raise ValueError('reception must start after the current PHY time')
@@ -526,7 +533,7 @@ class BabbleSimRadio:
             PDU_HEADER_SIZE
             * (PHY_2M_OCTET_TIME_US if phy == Phy.LE_2M else PHY_1M_OCTET_TIME_US),
             PHY_2M_BITRATE_BPS if phy == Phy.LE_2M else PHY_1M_BITRATE_BPS,
-            NEVER,
+            abort,
             NEVER,
         )
         await connection.start_request(start_us)
@@ -539,6 +546,7 @@ class BabbleSimRadio:
                     access_address,
                     crc_init,
                     accept_bad_crc,
+                    abort,
                 )
             await connection.send(HEADER.pack(RX_REQUEST) + request)
             header = HEADER.unpack(await connection.receive(HEADER.size))[0]
@@ -562,7 +570,11 @@ class BabbleSimRadio:
             )
             self.now_us = end_us
             # Without -crcerr_data, PHY clears packet_size on CRC failure.
-            if status not in (RX_STATUS_OK, RX_STATUS_CRC_ERROR) or size == 0:
+            if (
+                end_us >= abort
+                or status not in (RX_STATUS_OK, RX_STATUS_CRC_ERROR)
+                or size == 0
+            ):
                 return None
             if len(packet) != size:
                 raise RuntimeError('BabbleSim RX packet size changed')
@@ -585,10 +597,12 @@ class BabbleSimRadio:
             return received if valid_crc or accept_bad_crc else None
         finally:
             connection.end_request()
-            self.switch.complete(channel, phy, transmit=False, end_us=self.now_us + 1)
+            self.switch.complete(
+                channel, phy, transmit=False, end_us=min(self.now_us + 1, abort)
+            )
 
     async def _receive_coded_part(
-        self, channel, start, until, address, coding, prelocked
+        self, channel, start, until, address, coding, prelocked, abort
     ):
         connection = self._connection()
         # The first part searches for an Access Address. The second inherits
@@ -596,7 +610,7 @@ class BabbleSimRadio:
         # rate.
         request = RX_V2.pack(
             start,
-            NEVER,
+            abort,
             NEVER,
             1 if prelocked else until - start,
             BSIM_RX_FORCED_DURATION_FOLLOW_TX,
@@ -628,7 +642,7 @@ class BabbleSimRadio:
                 raise RuntimeError(f'invalid BabbleSim Coded packet size: {size}')
             packet = await connection.receive(size)
             await connection.send(
-                HEADER.pack(RX_V2_CONTINUE) + TIME.pack(NEVER) + TIME.pack(NEVER)
+                HEADER.pack(RX_V2_CONTINUE) + TIME.pack(abort) + TIME.pack(NEVER)
             )
             await connection.response(RX_V2_END)
         elif header != RX_V2_END:
@@ -638,21 +652,26 @@ class BabbleSimRadio:
         return packet, result
 
     async def _receive_coded(
-        self, channel, start, until, address, crc_init, accept_bad_crc
+        self, channel, start, until, address, crc_init, accept_bad_crc, abort
     ):
         ci, first = await self._receive_coded_part(
-            channel, start, until, address, PHY_CODED_S8_FACTOR, False
+            channel, start, until, address, PHY_CODED_S8_FACTOR, False, abort
         )
         address_end_us, ci_end_us, _, _, _, ci_status, _ = first
-        if ci_status != RX_STATUS_OK or ci not in (BSIM_CODED_CI_S8, BSIM_CODED_CI_S2):
+        if (
+            ci_status != RX_STATUS_OK
+            or ci_end_us + 1 >= abort
+            or ci not in (BSIM_CODED_CI_S8, BSIM_CODED_CI_S2)
+        ):
             return None
         coding = PHY_CODED_S2_FACTOR if ci == BSIM_CODED_CI_S2 else PHY_CODED_S8_FACTOR
         packet, result = await self._receive_coded_part(
-            channel, ci_end_us + 1, until, address, coding, True
+            channel, ci_end_us + 1, until, address, coding, True, abort
         )
         _, end, _, _, rssi, status, size = result
         if (
-            status not in (RX_STATUS_OK, RX_STATUS_CRC_ERROR)
+            end >= abort
+            or status not in (RX_STATUS_OK, RX_STATUS_CRC_ERROR)
             or size < BSIM_PACKET_SIZE_MIN
             or size != len(packet)
         ):

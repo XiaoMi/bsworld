@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from bscontroller.address import Address
-from bscontroller.linklayer.advertising import ExtendedPdu
+from bscontroller.linklayer.advertising_pdu import ExtendedPdu
 from bscontroller.linklayer.decision import DecisionProgram
 
 

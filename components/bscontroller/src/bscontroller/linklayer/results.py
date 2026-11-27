@@ -19,7 +19,7 @@ from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
     from bscontroller.address import Address
-    from bscontroller.linklayer.advertising import ExtendedPdu, SyncInfo
+    from bscontroller.linklayer.advertising_pdu import ExtendedPdu, SyncInfo
     from bscontroller.linklayer.discovery import Advertising, Initiating, PeriodicSync
     from bscontroller.linklayer.parameters import Parameters
     from bscontroller.radio.base import Received

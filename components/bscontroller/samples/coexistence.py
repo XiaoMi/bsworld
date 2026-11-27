@@ -6,6 +6,7 @@
 import asyncio
 from collections import Counter
 from contextlib import AsyncExitStack
+from functools import partial
 
 from bumble.core import AdvertisingData
 from bumble.device import (
@@ -79,8 +80,9 @@ async def run(devices):
 
         # Each hub advertises a periodic train and listens to the other hub's train.
         periodic = []
-        for sid, name in enumerate(NAMES[:2], 1):
-            interval = 80 + sid * 20
+        # 83 and 97 units of 1.25 ms move the trains through different gaps
+        # between the 15-ms ACL anchors on the receiving hubs.
+        for sid, name, interval in ((1, 'hub-a', 103.75), (2, 'hub-b', 121.25)):
             data = bytes(AdvertisingData([(LOCAL_NAME, f'{name}-pa'.encode())]))
             advertiser = await devices[name].create_advertising_set(
                 advertising_parameters=AdvertisingParameters(
@@ -133,11 +135,16 @@ async def run(devices):
             sync = await devices[observer].create_periodic_advertising_sync(
                 devices[advertiser].public_address, sid, sync_timeout=5
             )
-            stack.push_async_callback(sync.terminate)
             queue = asyncio.Queue()
             sync.on(sync.EVENT_PERIODIC_ADVERTISEMENT, queue.put_nowait)
+            sync.once(sync.EVENT_ESTABLISHMENT_ERROR, partial(queue.put_nowait, None))
             name = f'{advertiser}-pa'
-            report = await queue.get()
+            report = None if sync.state == sync.State.ERROR else await queue.get()
+            if report is None:
+                raise RuntimeError(
+                    f'{observer} sync to {name} failed (HCI 0x{sync.status:02X})'
+                )
+            stack.push_async_callback(sync.terminate)
             assert report.data.get(LOCAL_NAME) == name
             syncs[(observer, name)] = queue
             periodic_reports[f'{observer}/{name}'] += 1

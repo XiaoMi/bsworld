@@ -34,12 +34,13 @@ from bscontroller.linklayer import (
     PDU_HEADER_SIZE,
     AdvertisingPduType,
 )
-from bscontroller.linklayer.advertising import (
+from bscontroller.linklayer.advertising_pdu import (
     advertising_request_peer,
     scan_request,
 )
 from bscontroller.linklayer.discovery import Advertising
 from bscontroller.linklayer.extended import advertising_time_us
+from bscontroller.linklayer.extended_scanning import scan_extended
 from bscontroller.linklayer.filtering import (
     DecisionMode,
     InitiatorFilterPolicy,
@@ -59,6 +60,7 @@ from bscontroller.linklayer.timing import LL_RESPONSE_START_TOLERANCE_US
 from bscontroller.radio.base import RADIO_SWITCH_TIME_US, Phy, Received
 
 if TYPE_CHECKING:
+    from bscontroller.linklayer.advertiser import AdvertisingManager
     from bscontroller.linklayer.discovery import Initiating, Scanning
     from bscontroller.linklayer.link import RadioLink
     from bscontroller.linklayer.results import ScanEvent
@@ -71,8 +73,14 @@ async def receive_scan_event(link: RadioLink, event: ScanEvent) -> None:
         return
     # A single RX can serve both scanning and periodic sync acquisition. Each
     # recipient must still own its request when the primary or auxiliary PDU arrives.
-    scanner, sync = link.scan, link.sync
-    packet = await link.radio.receive(event.channel, event.end_us, phy=event.phy)
+    scanner = link.scan
+    sync = link.sync if scanner is not None else None
+    packet = await link.radio.receive(
+        event.channel,
+        event.end_us,
+        phy=event.phy,
+        deadline_us=link.resource.deadline_us,
+    )
     if not packet or not packet.pdu:
         return
     initiator = event.initiator
@@ -91,8 +99,8 @@ async def receive_scan_event(link: RadioLink, event: ScanEvent) -> None:
         if initiator is None and scanner is None and sync is None:
             return
         try:
-            await link.extended.scan(
-                packet, scan=scanner, sync=sync, initiator=initiator
+            await scan_extended(
+                link, packet, scan=scanner, sync=sync, initiator=initiator
             )
         except ValueError as error:
             link.trace(f'LL EXTENDED REJECTED {error}')
@@ -100,6 +108,16 @@ async def receive_scan_event(link: RadioLink, event: ScanEvent) -> None:
         await initiate(link, event.channel, packet, initiator)
     elif scanner is not None:
         await scan_packet(link, event.channel, packet, scanner)
+
+
+def _scan_exchange_us(response_size: int) -> int:
+    """From the end of a legacy advertisement through the end of SCAN_RSP."""
+    return (
+        2 * LL_IFS_US
+        + LL_RESPONSE_START_TOLERANCE_US
+        + Phy.LE_1M.airtime_us(PDU_ADV_SCAN_REQ_SIZE)
+        + Phy.LE_1M.airtime_us(response_size)
+    )
 
 
 def advertising_event_time_us(item: Advertising) -> int:
@@ -118,13 +136,8 @@ def advertising_event_time_us(item: Advertising) -> int:
         AdvertisingPduType.ADV_IND,
         AdvertisingPduType.ADV_SCAN_IND,
     ):
-        response_us = (
-            2 * LL_IFS_US
-            + LL_RESPONSE_START_TOLERANCE_US
-            + Phy.LE_1M.airtime_us(PDU_ADV_SCAN_REQ_SIZE)
-            + Phy.LE_1M.airtime_us(
-                PDU_HEADER_SIZE + PDU_ADV_ADDRESS_SIZE + len(item.scan_response)
-            )
+        response_us = _scan_exchange_us(
+            PDU_HEADER_SIZE + PDU_ADV_ADDRESS_SIZE + len(item.scan_response)
         )
     elif item.pdu_type == AdvertisingPduType.ADV_DIRECT_IND:
         response_us = (
@@ -138,11 +151,12 @@ def advertising_event_time_us(item: Advertising) -> int:
 
 
 async def advertising_request(
-    link: RadioLink, item: Advertising, channel: int, packet: Received
+    advertising: AdvertisingManager, item: Advertising, channel: int, packet: Received
 ) -> bool:
     """Answer SCAN_REQ with SCAN_RSP or accept CONNECT_IND after T_IFS (Core Vol 6, Part
     B, 4.4.2.3-4.4.2.5, 4.3.2).
     """
+    link = advertising.link
     pdu = packet.pdu
     peer = advertising_request_peer(pdu, item.address, None)
     if peer is None:
@@ -166,10 +180,10 @@ async def advertising_request(
         # legacy-PDU set configured with notifications reports it here too.
         if item.notify_scan_request:
             link.listener.on_scan_request(item, identity)
-            if not link.roles.advertising.event_is_current(item):
+            if not advertising.event_is_current(item):
                 return False
         payload = bytes(item.address) + item.scan_response
-        await link._transmit(
+        await link.transmit(
             channel,
             bytes(
                 [
@@ -202,7 +216,7 @@ async def advertising_request(
             return False
         # The role owner disables this advertiser only after a fully validated
         # CONNECT_IND transfers the radio activity to the new connection.
-        link.roles.connections.accepted(
+        link.roles.accepted(
             ConnectionAccepted(
                 parameters,
                 peer,
@@ -290,8 +304,8 @@ async def initiate(
         + bytes(peer)
         + parameters.encode()
     )
-    end_us = await link._transmit(channel, pdu, start_us=packet.end_us + LL_IFS_US)
-    link.roles.connections.accepted(
+    end_us = await link.transmit(channel, pdu, start_us=packet.end_us + LL_IFS_US)
+    link.roles.accepted(
         ConnectionAccepted(
             parameters,
             peer,
@@ -390,6 +404,10 @@ async def scan_packet(
         and scan.active
         and pdu[0] & PDU_ADV_TYPE_MASK
         in (AdvertisingPduType.ADV_IND, AdvertisingPduType.ADV_SCAN_IND)
+        # The response length is unknown when the scanner commits to SCAN_REQ.
+        and link.resource.fits_radio(
+            packet.end_us + _scan_exchange_us(PDU_ADV_LEGACY_SIZE_MAX)
+        )
         and scan.backoff.permit()
     ):
         # Consume backoff only for an eligible advertisement. A missing response
@@ -400,7 +418,7 @@ async def scan_packet(
             identity,
         )
         request = scan_request(scan.address, address)
-        end_us = await link._transmit(
+        end_us = await link.transmit(
             channel, request, start_us=packet.end_us + LL_IFS_US
         )
         if link.scan is not scan:
@@ -432,10 +450,11 @@ async def scan_packet(
             )
 
 
-async def advertise_legacy(link: RadioLink, item: Advertising) -> None:
+async def advertise_legacy(advertising: AdvertisingManager, item: Advertising) -> None:
     """One legacy advertising event over the used primary channels in ascending order
     (Core Vol 6, Part B, 4.4.2.1-4.4.2.2).
     """
+    link = advertising.link
     payload = bytes(item.address) + (bytes(item.target) if item.target else item.data)
     chsel = (
         PDU_ADV_CHSEL_MASK
@@ -457,7 +476,7 @@ async def advertise_legacy(link: RadioLink, item: Advertising) -> None:
     )
     for bit, channel in enumerate(LL_ADV_PRIMARY_CHANNELS):
         if item.channel_map & (1 << bit):
-            if not link.roles.advertising.event_is_current(item):
+            if not advertising.event_is_current(item):
                 return
             # Do not start a high-duty packet that would run past advertising expiry.
             if (
@@ -466,22 +485,24 @@ async def advertise_legacy(link: RadioLink, item: Advertising) -> None:
             ):
                 await link.radio.advance_to_us(item.deadline_us)
                 break
-            end_us = await link._transmit(channel, pdu, power_dbm=item.tx_power_dbm)
+            end_us = await link.transmit(channel, pdu, power_dbm=item.tx_power_dbm)
             if item.pdu_type in (
                 AdvertisingPduType.ADV_IND,
                 AdvertisingPduType.ADV_DIRECT_IND,
                 AdvertisingPduType.ADV_SCAN_IND,
             ):
-                if not link.roles.advertising.event_is_current(item):
+                if not advertising.event_is_current(item):
                     return
                 packet = await link.receive_response(
                     channel,
                     end_us,
                     deadline_us=item.deadline_us if item.high_duty else None,
                 )
-                if not link.roles.advertising.event_is_current(item):
+                if not advertising.event_is_current(item):
                     return
-                if packet and await advertising_request(link, item, channel, packet):
+                if packet and await advertising_request(
+                    advertising, item, channel, packet
+                ):
                     # A connection ends the entire advertising event, including
                     # transmissions that were still due on other primary channels.
                     break

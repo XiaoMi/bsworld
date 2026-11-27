@@ -31,6 +31,7 @@ from tests.unit.linklayer.llcp.harness import (
     hci,
     instant_of,
     pdu,
+    reject_ext_ind,
     unknown_rsp,
 )
 
@@ -74,7 +75,7 @@ def test_chmu_central_loc(central):
     service = central.controller.le_procedures.ll
     assert service.classify_channels(0x1F) == ErrorCode.SUCCESS
     # No response timer for Channel Map Update (5.2).
-    assert central.controls.deadline_us == 0
+    assert central.connection.llcp.next_deadline_us == 0
     central.event_prepare()
     indication = central.lt_rx(Opcode.LL_CHANNEL_MAP_IND)
     assert int.from_bytes(indication[1:6], 'little') == 0x1F
@@ -90,6 +91,58 @@ def test_chmu_central_loc(central):
     # No Host notification for Channel Map Update.
     central.ut_rx_q_is_empty()
     assert not central.controls.busy
+
+
+def test_chmu_waits_for_cis_creation(iut, controller):
+    """Queue the latest Host classification behind CIS Creation (Core 6.B.5).
+
+    Steps:
+        1. Create a CIS and acknowledge LL_CIS_REQ without answering the request.
+        2. Supply two channel classifications a second apart. Observe the ACL
+           before and after the peer rejects the CIS request.
+
+    Expected:
+        - Both HCI commands succeed. Only Empty PDUs are sent until the rejection.
+        - The first Channel Map Update contains the latest classification.
+    """
+    controller.on_packet(
+        bytes(
+            hci.HCI_LE_Set_Host_Feature_Command(
+                hci.LeFeature.CONNECTED_ISOCHRONOUS_STREAM, 1
+            )
+        )
+    )
+    assert controller.events[-1].return_parameters.status == ErrorCode.SUCCESS
+    central = iut(CENTRAL)
+    central.set_peer_features(LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_PERIPHERAL)
+    (result,) = central.hci(
+        hci.HCI_LE_Set_CIG_Parameters_Command(
+            1, 20_000, 20_000, 0, 0, 0, 40, 40, [1], [40], [40], [1], [1], [1], [1]
+        )
+    )
+    (handle,) = result.return_parameters.connection_handle
+    (status,) = central.hci(hci.HCI_LE_Create_CIS_Command([handle], [central.handle]))
+    assert status.status == ErrorCode.SUCCESS
+    central.event_prepare()
+    central.lt_rx(Opcode.LL_CIS_REQ)
+    central.tx_ack()
+    for channel_map in (0x07, 0x1F):
+        central.elapse(1_000_000)
+        (result,) = central.hci(
+            hci.HCI_LE_Set_Host_Channel_Classification_Command(
+                channel_map.to_bytes(5, 'little')
+            )
+        )
+        assert result.return_parameters.status == ErrorCode.SUCCESS
+        central.event_prepare()
+        central.lt_rx_empty()
+
+    central.lt_tx(
+        reject_ext_ind(Opcode.LL_CIS_REQ, ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
+    )
+    central.event_prepare()
+    update = central.lt_rx(Opcode.LL_CHANNEL_MAP_IND)
+    assert int.from_bytes(update[1:6], 'little') == 0x1F
 
 
 def test_chmu_central_loc_unacked_at_instant(central):
@@ -534,7 +587,7 @@ def test_min_used_waits_for_pending_instant(narrow):
     """
     controls = narrow.controls
     narrow.set_peer_features(0)
-    narrow.host_start('prepare_parameters', 40, 40, 0, 100, valid_ce_lengths=True)
+    narrow.host_start('prepare_parameters', 40, 40, 0, 100)
     update = narrow.lt_rx(Opcode.LL_CONNECTION_UPDATE_IND)
     narrow.lt_tx(min_used(PHY_1M, 4))
     narrow.lt_rx_q_is_empty()

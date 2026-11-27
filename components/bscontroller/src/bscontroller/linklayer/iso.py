@@ -1,7 +1,7 @@
 # Copyright 2026 Xiaomi Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared ISO data paths, Host fragment assembly and ISO test mode.
+"""Shared ISO data paths, SDU queues and ISO test mode.
 
 Stream transports register handles and supply their ISOAL geometry. This layer
 owns SDU queues and test counters, without depending on BIGs, connections, HCI
@@ -11,7 +11,7 @@ packet classes or the simulator (Core Vol 4, E, 5.4.5; Vol 6, B, 7).
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Protocol
 
 from bscontroller.errors import ErrorCode
@@ -35,6 +35,7 @@ UNSUPPORTED = ErrorCode.UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE_ERROR
 class IsoListener(Protocol):
     def on_iso_received(self, handle: int, sdu: IsoSdu) -> None: ...
     def on_iso_completed(self, handle: int, count: int) -> None: ...
+    def on_iso_tx_reset(self, handle: int) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -51,14 +52,6 @@ class IsoTestCounters:
     failed: int = 0
 
 
-@dataclass
-class IsoAssembly:
-    sequence_number: int
-    length: int
-    reference_us: int
-    data: bytearray = field(default_factory=bytearray)
-
-
 class IsoStream:
     def __init__(
         self,
@@ -70,13 +63,18 @@ class IsoStream:
     ):
         self.handle = handle
         self.transmit = transmit
-        self.parameters = parameters
         self.listener = listener
-        self.synchronization_delay_us = synchronization_delay_us
         self.configured = False
         self.controller_delay_us = 0
+        self.reset_transport(parameters, synchronization_delay_us)
+
+    def reset_transport(
+        self, parameters: IsoalParameters, synchronization_delay_us: int
+    ) -> None:
+        """Reset the ISO transport and retain the Host's HCI data path."""
+        self.parameters = parameters
+        self.synchronization_delay_us = synchronization_delay_us
         self.queue: deque[IsoSdu] = deque()
-        self.assembly: IsoAssembly | None = None
         self.pending_packets = 0
         self.deliveries: deque[IsoSdu] = deque()
         self.tx = IsoalTransmitter(parameters)
@@ -95,52 +93,15 @@ class IsoStream:
         self.deliveries.clear()
         self.pending_packets = 0
         self.pending_tx_sync.clear()
-        self.assembly = None
+        if self.transmit:
+            self.listener.on_iso_tx_reset(self.handle)
         self.tx = IsoalTransmitter(self.parameters)
         if packets:
             self.listener.on_iso_completed(self.handle, packets)
 
-    def accept(
-        self,
-        fragment: bytes,
-        pb_flag: int,
-        sequence_number: int | None,
-        length: int | None,
-        reference_us: int,
-    ) -> None:
-        """Release copied fragments; retain one Host credit per queued SDU."""
-        if not self.configured or not self.transmit or self.test_type is not None:
-            self.listener.on_iso_completed(self.handle, 1)
-            return
-        if pb_flag in (0, 2):
-            self.assembly = None
-            if (
-                sequence_number is not None
-                and length is not None
-                and 0 <= length <= self.parameters.max_sdu
-            ):
-                self.assembly = IsoAssembly(sequence_number, length, reference_us)
-        assembly = self.assembly
-        if assembly is None:
-            self.listener.on_iso_completed(self.handle, 1)
-            return
-        assembly.data.extend(fragment)
-        if len(assembly.data) > assembly.length or (
-            pb_flag in (2, 3) and len(assembly.data) != assembly.length
-        ):
-            self.listener.on_iso_completed(self.handle, 1)
-            self.assembly = None
-            return
-        if pb_flag in (2, 3):
-            sdu = IsoSdu(
-                assembly.sequence_number, bytes(assembly.data), assembly.reference_us
-            )
-            self.pending_packets += 1
-            self.queue.append(sdu)
-            self.assembly = None
-        else:
-            # The final fragment may need this buffer credit to reach us.
-            self.listener.on_iso_completed(self.handle, 1)
+    def enqueue_sdu(self, sdu: IsoSdu) -> None:
+        self.pending_packets += 1
+        self.queue.append(sdu)
 
     def burst(self, anchor_us: int, event_counter: int) -> IsoalBurst:
         parameters = self.parameters
@@ -282,6 +243,38 @@ class IsoDataPaths:
             handle, transmit, parameters, self.listener, synchronization_delay_us
         )
 
+    def configure_direction(
+        self,
+        handle: int,
+        transmit: bool,
+        parameters: IsoalParameters | None,
+        synchronization_delay_us: int,
+    ) -> None:
+        """Apply a CIS direction and return any credits its old transport held."""
+        directions = self.streams.get(handle, {})
+        stream = directions.get(transmit)
+        if stream is None:
+            if parameters is not None:
+                self.add(
+                    handle,
+                    transmit,
+                    parameters,
+                    synchronization_delay_us=synchronization_delay_us,
+                )
+            return
+        if parameters is None:
+            del directions[transmit]
+            if not directions:
+                del self.streams[handle]
+            stream.discard()
+        else:
+            packets = stream.pending_packets
+            if transmit:
+                self.listener.on_iso_tx_reset(handle)
+            stream.reset_transport(parameters, synchronization_delay_us)
+            if packets:
+                self.listener.on_iso_completed(handle, packets)
+
     def get_stream(self, handle: int, transmit: bool) -> IsoStream:
         return self.streams[handle][transmit]
 
@@ -386,32 +379,14 @@ class IsoDataPaths:
         stream.expected_test_sequence = None
         return SUCCESS
 
-    def input(
-        self,
-        handle: int,
-        fragment: bytes,
-        pb_flag: int,
-        sequence_number: int | None,
-        length: int | None,
-        timestamp_us: int | None,
-        now_us: int,
-    ) -> None:
-        directions = self.streams.get(handle)
-        if directions is None:
-            return
-        stream = directions.get(True)
-        if stream is None:
-            self.listener.on_iso_completed(handle, 1)
-            return
-        if timestamp_us is None:
-            reference_us = now_us - stream.controller_delay_us
-        else:
-            # HCI Time_Stamp wraps at 32 bits; resolve it around the current
-            # Controller clock before ISOAL computes a positive Time_Offset.
-            reference_us = (
-                now_us + ((timestamp_us - now_us + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)
-            )
-        stream.accept(fragment, pb_flag, sequence_number, length, reference_us)
+    def tx_limits(self, handle: int) -> tuple[int, int] | None:
+        stream = self.streams.get(handle, {}).get(True)
+        if stream is not None and stream.configured:
+            return stream.parameters.max_sdu, stream.controller_delay_us
+        return None
+
+    def enqueue_sdu(self, handle: int, sdu: IsoSdu) -> None:
+        self.get_stream(handle, True).enqueue_sdu(sdu)
 
     def read_tx_sync(self, handle: int) -> tuple[int, IsoTxSync | None]:
         directions = self.streams.get(handle)

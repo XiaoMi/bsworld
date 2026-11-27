@@ -6,7 +6,7 @@
 import pytest
 
 from bscontroller import hci
-from bscontroller.linklayer.advertising import AuxPtr, ExtendedPdu
+from bscontroller.linklayer.advertising_pdu import AuxPtr, ExtendedPdu
 from bscontroller.radio.base import Phy
 from tests.unit.linklayer.air.harness import PEER, adv_ind, scan_rsp
 

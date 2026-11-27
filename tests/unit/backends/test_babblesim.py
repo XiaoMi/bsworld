@@ -202,7 +202,7 @@ async def test_registration_connects_clock_before_waiting_for_all_device_locks(
     calls = []
 
     connect = AsyncMock(side_effect=lambda timeout: calls.append(("connect", timeout)))
-    backend.clock = SimpleNamespace(connection=SimpleNamespace(connect=connect))
+    backend.clock = SimpleNamespace(connect=connect)
     monkeypatch.setattr(
         babblesim,
         "wait_for_paths_async",
@@ -222,7 +222,7 @@ async def test_registration_does_not_wait_for_locks_after_clock_connection_failu
     backend.add_controller()
 
     connect = AsyncMock(side_effect=TimeoutError("clock connection failed"))
-    backend.clock = SimpleNamespace(connection=SimpleNamespace(connect=connect))
+    backend.clock = SimpleNamespace(connect=connect)
     wait_for_locks = AsyncMock()
     monkeypatch.setattr(babblesim, "wait_for_paths_async", wait_for_locks)
     with pytest.raises(TimeoutError, match="clock connection failed"):
@@ -245,7 +245,7 @@ async def test_registration_cancels_pending_connection_when_phy_exits(
         finally:
             cancelled.set()
 
-    backend.clock = SimpleNamespace(connection=SimpleNamespace(connect=connect))
+    backend.clock = SimpleNamespace(connect=connect)
     backend._phy_process = SimpleNamespace(alive=lambda: not connecting.is_set())
     wait_for_locks = AsyncMock()
     monkeypatch.setattr(babblesim, "wait_for_paths_async", wait_for_locks)
@@ -290,7 +290,7 @@ def test_finish_releases_clock_and_capture_before_removing_simulation_state(
             if failing_resource == "capture":
                 raise OSError("write failed")
 
-    backend.clock = SimpleNamespace(connection=Clock())
+    backend.clock = Clock()
     backend._ellisys_capture = Capture()
     monkeypatch.setattr(babblesim, "warn", warnings.append)
     monkeypatch.setattr(

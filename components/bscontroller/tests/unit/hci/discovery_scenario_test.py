@@ -18,6 +18,7 @@ from bscontroller import hci
 from bscontroller.config import ControllerConfig
 from bscontroller.hci import HCI_LE_ADV_DATA_SIZE_MAX
 from bscontroller.linklayer import LL_MAFS_US, LL_PERIODIC_INTERVAL_UNIT_US
+from bscontroller.linklayer.advertising_pdu import ExtendedPdu
 from bscontroller.linklayer.discovery import Advertising, PeriodicSync
 from bscontroller.linklayer.extended import advertising_time_us, periodic_time_us
 from bscontroller.linklayer.state import (
@@ -260,6 +261,38 @@ def test_random_address_record_selection(host):
         hci.HCI_LE_Set_Advertising_Set_Random_Address_Command(99, random),
         ErrorCode.UNKNOWN_ADVERTISING_IDENTIFIER_ERROR,
     )
+
+
+@pytest.mark.parametrize(
+    'own', [hci.OwnAddressType.PUBLIC, hci.OwnAddressType.RESOLVABLE_OR_PUBLIC]
+)
+def test_extended_advertising_uses_public_address_at_start(host, own):
+    """An enabled set keeps its address until the next disable and start."""
+    host.cmd(extended_parameters(own_address_type=own))
+    enable = hci.HCI_LE_Set_Extended_Advertising_Enable_Command(1, [0], [0], [0])
+    disable = hci.HCI_LE_Set_Extended_Advertising_Enable_Command(0, [0], [0], [0])
+    record = host.controller.advertising_sets[0]
+    first = hci.Address('F0:11:22:33:44:55/P')
+    second = hci.Address('F0:11:22:33:44:66/P')
+
+    def check_address(address):
+        assert record.address == address
+        offset = len(host.radio.sent)
+        host.loop.run_until_complete(host.link.advance_to_us(host.radio.now_us + 1000))
+        sent = [ExtendedPdu.decode(packet.pdu) for packet in host.radio.sent[offset:]]
+        assert [pdu.address for pdu in sent if pdu.address is not None] == [
+            bytes(address)
+        ]
+
+    host.controller.public_address = first
+    host.cmd(enable)
+    check_address(first)
+    host.controller.public_address = second
+    host.cmd(enable)
+    check_address(first)
+    host.cmd(disable)
+    host.cmd(enable)
+    check_address(second)
 
 
 def test_is_advertising_tracks_both_families(host):
@@ -679,6 +712,57 @@ def test_unchanged_data_requires_enabled_set_with_data(host):
     )
 
 
+def test_advertising_did_depends_on_controller_seed(host):
+    """Check the initial and renewed advertising DID (Vol 6, Part B, 4.4.2.11).
+
+    Steps:
+        Create an advertising set, update AdvData, then remove and recreate
+        the set with each of two seeds. Repeat the first seed.
+
+    Expected:
+        Both DIDs depend on the seed. Replaying a seed reproduces both values,
+        and the updated DID differs from the one it replaces.
+    """
+    pairs = []
+    for seed in (23, 91, 23):
+        host.link.random.seed(seed)
+        host.cmd(extended_parameters())
+        item = host.link.advertisers[0]
+        initial = item.did
+        host.cmd(data(0, Operation.COMPLETE_DATA, b'd'))
+        assert item.did != initial
+        pairs.append((initial, item.did))
+        host.cmd(hci.HCI_LE_Remove_Advertising_Set_Command(0))
+    assert pairs[0] == pairs[2]
+    assert all(first != second for first, second in zip(pairs[0], pairs[1]))
+
+
+def test_scan_response_rejects_reserved_operation(host):
+    """Operation 0x04 is reserved for scan responses (Vol 4, Part E, 7.8.55).
+
+    Steps:
+        Set scan response data, enable the set and send operation 0x04.
+
+    Expected:
+        The Host receives Invalid HCI Command Parameters and the data and DID
+        of the enabled set remain available for subsequent scan requests.
+    """
+    host.cmd(
+        extended_parameters(
+            advertising_event_properties=Properties.SCANNABLE_ADVERTISING
+        )
+    )
+    host.cmd(data(0, Operation.COMPLETE_DATA, b'rsp', field='scan'))
+    host.cmd(hci.HCI_LE_Set_Extended_Advertising_Enable_Command(1, [0], [0], [0]))
+    item = host.link.advertisers[0]
+    did = item.did
+    host.cmd(
+        data(0, Operation.UNCHANGED_DATA, b'', field='scan'),
+        ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    assert item.scan_response == b'rsp' and item.did == did
+
+
 def test_periodic_unchanged_data_renews_only_the_periodic_did(host):
     """Periodic UNCHANGED_DATA follows Vol 4, Part E, 7.8.62.
 
@@ -779,8 +863,8 @@ def test_periodic_did_is_random_and_never_repeats(host, monkeypatch):
         ranges.append(stop)
         return next(draws)
 
-    monkeypatch.setattr(host.link.random, 'randrange', randrange)
     host.cmd(extended_parameters(advertising_event_properties=0))
+    monkeypatch.setattr(host.link.random, 'randrange', randrange)
     for _ in range(2):
         host.cmd(hci.HCI_LE_Set_Periodic_Advertising_Parameters_Command(0, 80, 80, 0))
     item = host.link.advertisers[0]
@@ -1326,20 +1410,18 @@ def test_enable_rejects_data_that_cannot_fit_interval(host):
     )
 
 
-def test_high_duty_duration_is_bounded(host):
-    """A high-duty directed advertiser's timeout is bounded.
-
-    Purpose: Verify enabling high-duty-cycle directed connectable advertising
-    sets a bounded deadline regardless of a longer requested duration (Vol 4,
-    Part E, 7.8.56, 4.4.2).
+@pytest.mark.parametrize('duration', [0, 1, 128, 129])
+def test_high_duty_duration_validates_all_sets(host, duration):
+    """Check high-duty Duration in 10-ms units (Vol 4, Part E, 7.8.56).
 
     Steps:
-        1. Configure a high-duty directed connectable legacy set with a peer.
-        2. Enable it with a 500-unit duration.
+        Enable an ordinary and a high-duty directed set in one command.
 
     Expected:
-        - The advertiser's deadline is capped at 1_280_000 us.
+        Durations 1 and 128 start both sets with the requested deadline.
+        An invalid duration leaves both sets disabled.
     """
+    host.cmd(extended_parameters(advertising_handle=1))
     properties = (
         Properties.USE_LEGACY_ADVERTISING_PDUS
         | Properties.CONNECTABLE_ADVERTISING
@@ -1351,8 +1433,15 @@ def test_high_duty_duration_is_bounded(host):
             advertising_event_properties=properties, peer_address=PEERS[0]
         )
     )
-    host.cmd(hci.HCI_LE_Set_Extended_Advertising_Enable_Command(1, [0], [500], [0]))
-    assert host.link.advertisers[0].deadline_us == 1_280_000
+    valid = 1 <= duration <= 128
+    host.cmd(
+        hci.HCI_LE_Set_Extended_Advertising_Enable_Command(
+            1, [1, 0], [0, duration], [0, 0]
+        ),
+        ErrorCode.SUCCESS if valid else ErrorCode.INVALID_COMMAND_PARAMETERS_ERROR,
+    )
+    assert all(item.enabled == valid for item in host.link.advertisers.values())
+    assert host.link.advertisers[0].deadline_us == (duration * 10_000 if valid else 0)
 
 
 @pytest.mark.parametrize(
@@ -1463,7 +1552,7 @@ def test_tx_power_selection_rejects_unattainable_maximum(host):
 def report(host, data=b'data', properties=LEGACY, status=DataStatus.COMPLETE, **kw):
     host.notify(
         'on_advertisement',
-        PEER_ADDRESS,
+        kw.pop('address', PEER_ADDRESS),
         data,
         kw.pop('rssi', -45.4),
         AdvertisingReport(
@@ -1674,24 +1763,54 @@ def test_extended_report_of_legacy_pdu_has_no_secondary_phy(host):
 
 
 @pytest.mark.parametrize('extended', [False, True])
-def test_duplicate_filter_uses_whole_logical_report(host, extended):
-    """Duplicate filtering keys on the whole logical report.
+def test_duplicate_filter_without_adi_ignores_payload_changes(host, extended):
+    """A device retains one advertising record even as its payload changes.
 
-    Purpose: Verify that with duplicate filtering on, two identical reports
-    yield one event and a different report yields another, for legacy and
-    extended scanning (Vol 4, Part E, 7.8.10, 7.8.64).
-
-    Steps:
-        1. Enable scanning with duplicate filtering.
-        2. Raise reports with payloads 'same', 'same', 'other'.
-
-    Expected:
-        - Exactly two events are delivered.
+    Core Vol 6, Part B, 4.4.3.5 identifies reports without ADI by address
+    and processes advertising and scan-response reports separately.
     """
     enable_scan(host, extended=extended, duplicates=1)
-    for payload in (b'same', b'same', b'other'):
-        report(host, payload)
-    assert len(host.events) == 2
+    for index in range(1024):
+        report(host, index.to_bytes(2, 'little'))
+    report(host, b'first response', LEGACY | AdvertisingProperties.SCAN_RESPONSE)
+    report(host, b'new response', LEGACY | AdvertisingProperties.SCAN_RESPONSE)
+
+    assert [event.reports[0].data for event in host.events] == [
+        bytes(2),
+        b'first response',
+    ]
+    assert len(host.controller.le_procedures.duplicate_filter._reports) == 2
+
+
+def test_duplicate_filter_without_adi_allows_longer_partial_report(host):
+    """In extended scanning, a longer prefix and the complete report may follow."""
+    enable_scan(host, extended=True, duplicates=1)
+    properties = AdvertisingProperties(0)
+    report(host, b'a', properties, DataStatus.TRUNCATED)
+    report(host, b'b', properties, DataStatus.TRUNCATED)
+    report(host, b'abc', properties, DataStatus.TRUNCATED)
+    report(host, b'abcd', properties)
+    report(host, b'abcde', properties, DataStatus.TRUNCATED)
+    assert [event.reports[0].data for event in host.events] == [b'a', b'abc', b'abcd']
+
+
+@pytest.mark.parametrize('extended', [False, True])
+def test_duplicate_history_evicts_the_least_recent_report(configured, extended):
+    """A per-Controller limit bounds history and a recently seen entry stays."""
+    config = ControllerConfig.from_mapping(
+        {
+            'defaults': {'maxScanDuplicateEntries': 4},
+            'controllers': {'iut': {'max_scan_duplicate_entries': 2}},
+        },
+        'iut',
+    )
+    host = configured(config)
+    enable_scan(host, extended=extended, duplicates=1)
+    a, b, c = PEERS[:3]
+    for address in (a, b, a, c, a, b):
+        report(host, address=address)
+    assert [event.reports[0].address for event in host.events] == [a, b, c, b]
+    assert len(host.controller.le_procedures.duplicate_filter._reports) == 2
 
 
 def test_duplicate_history_resets_when_scanning_restarts(host):
@@ -2140,7 +2259,7 @@ def test_sync_events_content(host):
           80 and SCA 5; two report events reassemble 300 octets with data-status
           1 then 2 and clamped RSSI/Tx power; a Sync Lost event reports handle 3.
     """
-    from bscontroller.linklayer.advertising import SyncInfo
+    from bscontroller.linklayer.advertising_pdu import SyncInfo
 
     sync = PeriodicSync(
         PEER_ADDRESS,

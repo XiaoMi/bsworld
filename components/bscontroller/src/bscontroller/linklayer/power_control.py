@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
     LL_EVENT_COUNTER_MASK,
-    LL_RESPONSE_TIMEOUT_US,
     ControlOpcode,
 )
 from bscontroller.linklayer.features import LeFeatureMask
@@ -326,7 +325,7 @@ class PowerControl(LocalProcedure):
 
     def _indicate(self, phy: PowerPhy, level: int, delta: int) -> None:
         if self.peer_requested:
-            self.owner.enqueue(
+            self.connection.enqueue_control(
                 CHANGE.pack(
                     Opcode.LL_POWER_CHANGE_IND,
                     phy.mask,
@@ -473,12 +472,12 @@ class PowerControl(LocalProcedure):
             frozenset((Opcode.LL_POWER_CONTROL_RSP,)),
             self,
             host_initiated=host,
-            deadline_us=now + LL_RESPONSE_TIMEOUT_US,
+            response_timer=self.owner.response_timer,
         )
         tx_power = (
             self._local_power(phy) if phy in self.managed_phys else POWER_UNAVAILABLE
         )
-        self.owner.enqueue(
+        self.connection.enqueue_control(
             REQUEST.pack(Opcode.LL_POWER_CONTROL_REQ, phy.mask, delta, tx_power)
         )
 
