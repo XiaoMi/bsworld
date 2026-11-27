@@ -353,15 +353,6 @@ class ConnectionRateProcedure(LocalProcedure):
             self.context.phase = ProcedurePhase.WAIT_INSTANT
         return replace(update, instant=instant, rate=rate)
 
-    def acknowledge(self, payload: bytes) -> None:
-        if (
-            payload[0] == Opcode.LL_CONNECTION_RATE_REQ
-            and self.pending
-            and self.context.transmitted
-            and self.context.request == Opcode.LL_CONNECTION_RATE_REQ
-        ):
-            self.context.acknowledged = True
-
     def report(self, status: int) -> None:
         connection = self.connection
         current = connection.parameters

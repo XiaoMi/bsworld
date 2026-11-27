@@ -364,11 +364,18 @@ class ControlProcedures:
                 return
             self.active_transfer = source, service_data
             procedure = ProcedureContext(
-                payload[0], frozenset(), None, completion=ProcedureCompletion.SENT
+                payload[0],
+                frozenset(),
+                None,
+                completion=ProcedureCompletion.SENT,
+                on_sent=self._finish_transfer,
             )
             self.connection.llcp.send(procedure, payload)
 
         self.connection.llcp.initiate(DeferredProcedure('past', start, ready=ready))
+
+    def _finish_transfer(self, _payload: bytes) -> None:
+        self.active_transfer = None
 
     def prepare(self, payload: bytes) -> bytes:
         """Finalize a control PDU at its first transmission.
@@ -386,11 +393,6 @@ class ControlProcedures:
                     transfer_indication(train, self.connection, service_data) or payload
                 )
             return payload
-        if self.connection.role == Role.PERIPHERAL and payload[0] in (
-            Opcode.LL_PHY_REQ,
-            Opcode.LL_PHY_RSP,
-        ):
-            self.phy.mark_transmitted()
         update = self.pending
         if (
             update is None
@@ -420,8 +422,6 @@ class ControlProcedures:
         return update.encode()
 
     def acknowledge(self, payload: bytes) -> None:
-        self.subrating.acknowledged(payload)
-        self.rate.acknowledge(payload)
         update = self.pending
         if (
             update is not None
@@ -431,14 +431,6 @@ class ControlProcedures:
             and payload == update.encode()
         ):
             self._instant_acknowledged = True
-
-    def sent(self, payload: bytes) -> None:
-        self.subrating.sent(payload)
-        self.frame_space.sent(payload)
-        if payload[0] == Opcode.LL_PHY_UPDATE_IND:
-            self.phy.indication_sent(payload)
-        elif payload[0] in PAST_INDICATIONS:
-            self.active_transfer = None
 
     def send_version(self) -> None:
         """Send LL_VERSION_IND at most once per connection (Core Vol 6, Part B,
