@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING
 
 from bscontroller.linklayer import (
     LL_EVENT_COUNTER_MASK,
-    LL_IFS_US,
     PDU_ADV_CONNECT_SIZE,
     AdvertisingMode,
 )
@@ -195,10 +194,16 @@ async def pawr_accept(
     parameters = connection_request_parameters(link, pdu)
     if parameters is None:
         return
+    response = connect_response(own, peer)
+    start_us = link.interframe_slot(
+        channel, packet.end_us, packet.phy.airtime_us(len(response)), packet.phy
+    )
+    if start_us is None:
+        return
     await link.transmit(
         channel,
-        connect_response(own, peer),
-        start_us=packet.end_us + LL_IFS_US,
+        response,
+        start_us=start_us,
         access_address=sync.info.access_address,
         crc_init=sync.info.crc_init,
         phy=packet.phy,

@@ -12,11 +12,18 @@ from dataclasses import replace
 import pytest
 
 from bscontroller import hci
-from bscontroller.linklayer.advertising_pdu import ExtendedPdu, SyncInfo
+from bscontroller.linklayer import LL_IFS_US
+from bscontroller.linklayer.advertising_pdu import (
+    ExtendedPdu,
+    SyncInfo,
+    connect_request,
+    connect_response,
+)
 from bscontroller.linklayer.channel_selection import channel_selection_2
 from bscontroller.linklayer.discovery import Initiating, PeriodicSync
 from bscontroller.linklayer.initiating_radio import pawr_connect
 from bscontroller.linklayer.pawr import PawrSync, PawrTiming
+from bscontroller.radio.base import Phy
 from tests.unit.linklayer.air.advertising import configure_extended, enable_extended
 from tests.unit.linklayer.air.harness import (
     CONNECT_PARAMETERS,
@@ -620,6 +627,35 @@ def test_pawr_aux_connect_response_checks_target_address_type(iut, wrong_target_
         status=status if wrong_target_type else 0,
     )
     assert len(iut.link.connections) == int(not wrong_target_type)
+
+
+@pytest.mark.parametrize('spare_us', [-1, 0], ids=['overlap', 'fits'])
+def test_pawr_connect_reply_requires_reserved_airtime(iut, spare_us):
+    """Answer the request only when the complete response fits before the grant ends."""
+    sync = sync_setup(iut)
+    request = connect_request(PEER, IUT_ADDRESS, CONNECT_PARAMETERS)
+    response = connect_response(IUT_ADDRESS, PEER)
+    request_end = sync.next_us + Phy.LE_1M.airtime_us(len(request))
+    response_start = request_end + LL_IFS_US
+    iut.link.resource.deadline_us = (
+        response_start + Phy.LE_1M.airtime_us(len(response)) + spare_us
+    )
+    channel = channel_selection_2(sync.counter, INFO.access_address, INFO.channel_map)
+    iut.lt_tx(
+        request, at=sync.next_us, channel=channel, access_address=INFO.access_address
+    )
+    iut.call(iut.link.roles.synchronization.run_subevent(sync))
+    iut.lt_script_is_consumed()
+    if spare_us < 0:
+        assert not iut.link.connections
+        iut.lt_rx_q_is_empty()
+    else:
+        sent = iut.lt_rx(PduType.AUX_CONNECT_RSP)
+        assert (
+            sent.start_us == response_start
+            and sent.access_address == INFO.access_address
+        )
+        assert len(iut.link.connections) == 1
 
 
 @pytest.mark.parametrize('source', ['sync', 'advertiser'])
