@@ -13,6 +13,7 @@ from bscontroller.linklayer import (
     LL_DATA_CHANNEL_MAP_ALL,
     LL_EVENT_COUNTER_MASK,
     LL_INSTANT_MIN_LISTENING_EVENTS,
+    LL_RESPONSE_TIMEOUT_US,
 )
 from bscontroller.linklayer.control import valid_minimum_channels
 from bscontroller.linklayer.features import LeFeatureMask
@@ -653,30 +654,59 @@ def test_min_used_central_without_local_feature_is_unknown(narrow):
 # ---------------------------------------------------------------------------
 # Minimum Number Of Used Channels, Peripheral local
 # ---------------------------------------------------------------------------
-def test_min_used_periph_loc(peripheral):
-    """A Peripheral sends MIN_USED_CHANNELS_IND with no response expected.
+@pytest.mark.parametrize('acknowledged', [True, False], ids=['acknowledged', 'timeout'])
+def test_min_used_periph_loc(peripheral, acknowledged):
+    """A Peripheral serializes MIN_USED_CHANNELS_IND through the link-layer ACK.
 
     Purpose: Verify that a Peripheral whose peer supports the feature can request
-    a minimum number of used channels, transmitting MIN_USED_CHANNELS_IND with no
-    response timer and nothing further on air (Vol 6, Part B, 5.1.11).
+    a minimum number of used channels (Vol 6, Part B, 5, 5.1.11 and 5.2).
 
     Steps:
-        1. Cache peer features that include MIN_USED.
-        2. Request the minimum channels for 1M at the full channel count.
-        3. Lower Tester receives the indication and acknowledges.
+        1. Start a PHY Update and acknowledge its request.
+        2. Request the minimum channels while the PHY procedure awaits a reply.
+        3. Reject the PHY request, then receive the channel indication.
+        4. Request the peer's version before acknowledging the indication.
 
     Expected:
-        - The IUT transmits MIN_USED_CHANNELS_IND(PHY_1M, full count).
-        - No response timer is armed and nothing else is queued.
+        - The indication is transmitted after the PHY procedure ends.
+        - The response timer remains armed and Version Exchange waits for the ACK.
+        - If the ACK does not arrive, T_PRT expires and closes the ACL.
     """
     peripheral.set_peer_features(int(MIN_USED))
+    peripheral.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
+    peripheral.lt_rx(Opcode.LL_PHY_REQ)
+    peripheral.tx_ack()
     peripheral.controls.request_minimum_channels(PHY_1M, LL_DATA_CHANNEL_COUNT)
+    peripheral.lt_rx_empty()
+    peripheral.lt_tx(
+        reject_ext_ind(Opcode.LL_PHY_REQ, ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
+    )
+    peripheral.ut_rx(
+        hci.HCI_LE_PHY_Update_Complete_Event,
+        status=ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR,
+    )
+    peripheral.event_done()
+    peripheral.event_prepare()
+    llcp = peripheral.connection.llcp
+    assert llcp.next_deadline_us == peripheral.radio.now_us + LL_RESPONSE_TIMEOUT_US
     peripheral.lt_rx(
         Opcode.LL_MIN_USED_CHANNELS_IND, min_used(PHY_1M, LL_DATA_CHANNEL_COUNT)
     )
-    assert peripheral.controls.next_deadline_us == 0
+    peripheral.host_start('prepare_version')
+    peripheral.event_done()
+    peripheral.event_prepare()
+    assert llcp.local_procedure_busy and not peripheral.connection.event.queue
+    if not acknowledged:
+        assert peripheral.expire_response_timer()
+        peripheral.ut_rx(
+            DISCONNECTED, reason=ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR
+        )
+        return
     peripheral.tx_ack()
-    peripheral.lt_rx_q_is_empty()
+    assert llcp.next_deadline_us == 0
+    peripheral.event_done()
+    peripheral.event_prepare()
+    peripheral.lt_rx(Opcode.LL_VERSION_IND)
 
 
 @pytest.mark.parametrize(

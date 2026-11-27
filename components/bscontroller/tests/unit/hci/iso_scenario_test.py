@@ -709,6 +709,7 @@ def test_disconnected_cis_does_not_take_another_streams_credits(
             stream.parameters,
             iso=manager.iso,
         )
+        stream.event.start_supervision()
         stream.event.established = True
         host.in_loop(manager._report_established, stream.event)
         host.ut_rx(hci.HCI_LE_CIS_Established_Event, connection_handle=handle, status=0)

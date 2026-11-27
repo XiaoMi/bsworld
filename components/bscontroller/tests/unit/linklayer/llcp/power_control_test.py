@@ -12,7 +12,14 @@ from bscontroller.linklayer.power_control import (
     PathLossZone,
 )
 from bscontroller.radio.base import Phy, Received
-from tests.unit.linklayer.llcp.harness import Opcode, hci, pdu
+from tests.unit.linklayer.llcp.harness import (
+    PHY_2M,
+    ErrorCode,
+    Opcode,
+    hci,
+    pdu,
+    reject_ext_ind,
+)
 
 
 def test_power_request_changes_the_response_transmit_level(central):
@@ -74,16 +81,54 @@ def test_queued_power_indication_and_retry_use_their_reported_power(central):
     assert central.radio.sent[-1][3]['power_dbm'] == 5
     central.tx_ack()
 
+    central.event_done()
+    central.event_prepare()
     central.lt_rx(
         Opcode.LL_POWER_CHANGE_IND,
         pdu(Opcode.LL_POWER_CHANGE_IND, 1, 0, 0xF6, 0xFB),
     )
     assert central.radio.sent[-1][3]['power_dbm'] == -5
     central.tx_ack()
+    central.event_done()
+    central.event_prepare()
     central.lt_rx(
         Opcode.LL_POWER_CHANGE_IND, pdu(Opcode.LL_POWER_CHANGE_IND, 1, 0, 14, 9)
     )
     assert central.radio.sent[-1][3]['power_dbm'] == 9
+
+
+def test_power_change_waits_for_local_procedure_and_completes_on_send(central):
+    """Serialize a local power indication while still answering a peer request."""
+    central.lt_tx(pdu(Opcode.LL_POWER_CONTROL_REQ, 1, 0, 0))
+    central.lt_rx(Opcode.LL_POWER_CONTROL_RSP)
+    central.tx_ack()
+    central.host_start('prepare_phy', PHY_2M, PHY_2M, 0)
+    central.lt_rx(Opcode.LL_PHY_REQ)
+    central.tx_ack()
+    central.hci(hci.HCI_LE_Write_RF_Path_Compensation_Command(50, 0))
+    central.event_done()
+    central.event_prepare()
+    central.lt_rx_empty()
+    central.lt_tx(pdu(Opcode.LL_POWER_CONTROL_REQ, 1, 0, 0))
+    central.lt_rx(Opcode.LL_POWER_CONTROL_RSP)
+    central.tx_ack()
+
+    central.lt_tx(
+        reject_ext_ind(Opcode.LL_PHY_REQ, ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
+    )
+    central.event_done()
+    central.event_prepare()
+    llcp = central.connection.llcp
+    assert llcp.local_procedure_busy and llcp.next_deadline_us
+    central.lt_rx(
+        Opcode.LL_POWER_CHANGE_IND, pdu(Opcode.LL_POWER_CHANGE_IND, 1, 0, 5, 5)
+    )
+    assert not llcp.local_procedure_busy and llcp.next_deadline_us == 0
+
+    central.host_start('prepare_version')
+    central.lt_rx(Opcode.LL_POWER_CHANGE_IND)
+    central.tx_ack()
+    central.lt_rx(Opcode.LL_VERSION_IND)
 
 
 def test_path_loss_requires_hysteresis_and_dwell_across_counter_wrap():

@@ -364,7 +364,7 @@ class ControlProcedures:
             & feature
         ):
             raise ValueError('minimum used channels requires negotiated peer support')
-        self.connection.enqueue_control(
+        self.connection.llcp.schedule_indication(
             bytes([Opcode.LL_MIN_USED_CHANNELS_IND, phys, minimum])
         )
 

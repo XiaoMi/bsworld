@@ -93,14 +93,15 @@ class LlcpCoordinator:
         self.controls = ControlProcedures(connection, self.response_timer)
         self.encryption = Encryption(connection)
         self.local_exchanges: dict[int, ProcedureContext] = {}
-        # Vol 6, Part B, 5 permits only one local procedure per ACL. Host
-        # commands accepted during a different exchange wait for that slot.
+        self._local_indication: Opcode | None = None
+        # Vol 6, Part B, 5 permits only one locally initiated procedure per ACL.
         self.deferred: deque[DeferredProcedure] = deque()
 
     @property
     def local_procedure_busy(self) -> bool:
         return (
-            self.controls.busy
+            self._local_indication is not None
+            or self.controls.busy
             or self.encryption.busy
             or self.encryption.ping_pending
             or self.cig.busy(self.connection)
@@ -118,6 +119,21 @@ class LlcpCoordinator:
             self._schedule(
                 DeferredProcedure('channel_map', self.controls.update_channel_map)
             )
+
+    def schedule_cis_termination(self, start: Callable[[], None]) -> None:
+        self._schedule(DeferredProcedure('cis_termination', start))
+
+    def schedule_indication(self, payload: bytes) -> None:
+        opcode = Opcode(payload[0])
+        assert opcode in (Opcode.LL_MIN_USED_CHANNELS_IND, Opcode.LL_POWER_CHANGE_IND)
+
+        def start() -> None:
+            if self.connection.termination_deadline_us:
+                return
+            self._local_indication = opcode
+            self.connection.enqueue_control(payload)
+
+        self._schedule(DeferredProcedure(opcode.name, start))
 
     def _prepare(self, procedure: DeferredProcedure) -> PreparedProcedure:
         if self._duplicate(procedure.kind):
@@ -161,7 +177,7 @@ class LlcpCoordinator:
         )
 
     def start_deferred(self) -> None:
-        """Start the next queued Host procedure once the link is idle."""
+        """Start the next queued local procedure once the link is idle."""
         if (
             self.deferred
             and not self.local_procedure_busy
@@ -176,10 +192,17 @@ class LlcpCoordinator:
             for value in (
                 self.controls.next_deadline_us,
                 self.encryption.next_deadline_us,
+                self._indication_deadline_us,
             )
             if value
         ]
         return min(deadlines, default=0)
+
+    @property
+    def _indication_deadline_us(self) -> int:
+        return (
+            self.response_timer.deadline_us if self._local_indication is not None else 0
+        )
 
     def packet_limits(self) -> PacketLimits:
         """Publish packet limits without exposing the negotiation machinery."""
@@ -249,6 +272,9 @@ class LlcpCoordinator:
 
     def _control_sent(self, payload: bytes, *, first: bool) -> None:
         if first:
+            if payload[0] == self._local_indication == Opcode.LL_POWER_CHANGE_IND:
+                # Power Change Indication completes on first transmission (6.B.5.1.18).
+                self._local_indication = None
             contexts = (*self.controls.local_contexts(), self.encryption.ping_context)
             for context in contexts:
                 if (
@@ -273,6 +299,9 @@ class LlcpCoordinator:
             self._prune_exchanges()
 
     def acknowledged(self, payload: bytes) -> int | None:
+        if payload[0] == self._local_indication == Opcode.LL_MIN_USED_CHANNELS_IND:
+            # Minimum Number Of Used Channels completes on acknowledgment (6.B.5.1.11).
+            self._local_indication = None
         self.controls.acknowledge(payload)
         self.encryption.acknowledged(payload)
         self.cig.acknowledged(self.connection, payload)
@@ -401,10 +430,17 @@ class LlcpCoordinator:
         self.controls.power.close(reason)
         self.controls.clock_accuracy.close(reason)
         self.local_exchanges.clear()
+        self._local_indication = None
         self.controls.stop_instant_timer()
 
     def check_timeout(self) -> bool:
-        return self.controls.check_timeout() or self.encryption.check_timeout()
+        if self.controls.check_timeout() or self.encryption.check_timeout():
+            return True
+        deadline = self._indication_deadline_us
+        if deadline and self.connection.radio.now_us >= deadline:
+            self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
+            return True
+        return False
 
     def control(self, payload: bytes) -> None:
         """Route control PDUs after packet validation; termination remains always
