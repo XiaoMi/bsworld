@@ -109,10 +109,6 @@ class Encryption:
     def busy(self) -> bool:
         return self.state != State.IDLE
 
-    @property
-    def deadline_us(self) -> int | None:
-        return self.connection.llcp.deadline_for(self.procedure)
-
     def _stop_procedure(self) -> None:
         if self.procedure is not None:
             self.procedure.finish()

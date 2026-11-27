@@ -94,7 +94,9 @@ def test_loc(iut, role):
     dut = iut(role)
     assert lengths(dut).effective() == INITIAL
     assert dut.host('set_data_length', 200, 1700) == ErrorCode.SUCCESS
-    assert lengths(dut).deadline_us == LL_RESPONSE_TIMEOUT_US
+    assert (
+        dut.connection.llcp.deadline_for(lengths(dut).context) == LL_RESPONSE_TIMEOUT_US
+    )
     dut.event_prepare()
     sent = dut.lt_rx(Opcode.LL_LENGTH_REQ)
     assert struct.unpack('<HHHH', sent[1:]) == (MAX, MAX_TIME, 200, 1700)
@@ -110,7 +112,10 @@ def test_loc(iut, role):
         max_rx_time=1500,
     )
     dut.ut_rx_q_is_empty()
-    assert not lengths(dut).pending and lengths(dut).deadline_us is None
+    assert (
+        not lengths(dut).pending
+        and dut.connection.llcp.deadline_for(lengths(dut).context) is None
+    )
     # No new event when nothing changes.
     lengths(dut).refresh()
     dut.ut_rx_q_is_empty()
@@ -363,7 +368,7 @@ def test_rem(iut, role):
     assert lengths(dut).effective().rx_octets == MAX
     dut.ut_rx(CHANGED, max_rx_octets=MAX, max_tx_octets=MIN)
     dut.ut_rx_q_is_empty()
-    assert lengths(dut).deadline_us is None
+    assert dut.connection.llcp.deadline_for(lengths(dut).context) is None
 
 
 @pytest.mark.parametrize(
@@ -430,7 +435,7 @@ def test_wrong_length_is_unknown_and_preserves_state(central, opcode, pending, s
         procedure.remote,
         procedure.reported,
         procedure.pending,
-        procedure.deadline_us,
+        central.connection.llcp.deadline_for(procedure.context),
     )
     central.event_prepare()
     central.lt_tx(bytes([opcode]) + bytes(size))
@@ -442,7 +447,7 @@ def test_wrong_length_is_unknown_and_preserves_state(central, opcode, pending, s
         procedure.remote,
         procedure.reported,
         procedure.pending,
-        procedure.deadline_us,
+        central.connection.llcp.deadline_for(procedure.context),
     ) == before
     central.ut_rx_q_is_empty()
 
@@ -503,7 +508,10 @@ def test_collision_loc_and_rem(iut, role):
     dut.lt_rx(Opcode.LL_LENGTH_REQ)
     dut.lt_tx(length(Opcode.LL_LENGTH_RSP, MAX, MAX_TIME, MAX, MAX_TIME))
     dut.event_done()
-    assert not lengths(dut).pending and lengths(dut).deadline_us is None
+    assert (
+        not lengths(dut).pending
+        and dut.connection.llcp.deadline_for(lengths(dut).context) is None
+    )
 
 
 # ---------------------------------------------------------------------------

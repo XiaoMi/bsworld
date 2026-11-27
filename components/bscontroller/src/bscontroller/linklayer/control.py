@@ -112,10 +112,6 @@ class ControlProcedures:
         self.active_transfer: tuple[TrainSource, int] | None = None
 
     @property
-    def feature_request(self) -> bool:
-        return self.features.pending
-
-    @property
     def version_request(self) -> bool:
         return self.version_context is not None and self.version_context.active
 
@@ -134,7 +130,7 @@ class ControlProcedures:
             or self.connection_parameters.remote_pending
             or self.phy.remote_phy_request is not None
             or self.data_length.pending
-            or self.feature_request
+            or self.features.pending
             or (
                 not allow_local_collision
                 and self.connection_parameters.parameter_request
@@ -309,8 +305,6 @@ class ControlProcedures:
 
     def update_channel_map(self) -> None:
         connection = self.connection
-        if connection.role != Role.CENTRAL or connection.closed:
-            return
         channel_map = self.selected_channel_map()
         if channel_map == connection.parameters.channel_map:
             return
@@ -325,23 +319,6 @@ class ControlProcedures:
             completion=ProcedureCompletion.ACKNOWLEDGED,
         )
         connection.llcp.send(indication, update.encode(), timed=False)
-
-    def request_minimum_channels(self, phys: int, minimum: int) -> None:
-        """Queue a Peripheral indication after Feature Exchange, on its radio thread."""
-        feature = LeFeatureMask.MINIMUM_NUMBER_OF_USED_CHANNELS_PROCEDURE
-        if self.connection.closed or self.connection.role != Role.PERIPHERAL:
-            raise ValueError('minimum used channels requires a live Peripheral link')
-        if not valid_minimum_channels(phys, minimum):
-            raise ValueError('invalid PHY mask or minimum used channel count')
-        if not (
-            self.connection.link.features
-            & (self.connection.peer_features or 0)
-            & feature
-        ):
-            raise ValueError('minimum used channels requires negotiated peer support')
-        self.connection.llcp.schedule_indication(
-            bytes([Opcode.LL_MIN_USED_CHANNELS_IND, phys, minimum])
-        )
 
     def transfer(self, source: TrainSource, service_data: int) -> None:
         """Queue LL_PERIODIC_SYNC_IND for ``source``'s train.

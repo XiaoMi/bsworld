@@ -907,7 +907,7 @@ class CigManager:
         self.listener.on_cis_established(CisEstablished(stream.handle), CANCELLED)
         self.listener.on_cis_disconnected(stream.handle, LOCAL_TERMINATED)
 
-    def _expire(self, stream: Cis, deadline: int) -> None:
+    def _expire(self, stream: Cis) -> None:
         if stream.stage == Setup.HOST:
             stream.connection.controls.reject(
                 Opcode.LL_CIS_REQ, ErrorCode.CONNECTION_ACCEPT_TIMEOUT_ERROR
@@ -992,7 +992,7 @@ class CigManager:
             )
             if deadline is not None:
                 if deadline <= self.radio.now_us:
-                    self._expire(stream, deadline)
+                    self._expire(stream)
                     continue
                 operations.append(
                     PendingOperation(

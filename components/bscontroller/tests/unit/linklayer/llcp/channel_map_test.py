@@ -13,7 +13,6 @@ from bscontroller.linklayer import (
     LL_DATA_CHANNEL_MAP_ALL,
     LL_EVENT_COUNTER_MASK,
     LL_INSTANT_MIN_LISTENING_EVENTS,
-    LL_RESPONSE_TIMEOUT_US,
 )
 from bscontroller.linklayer.control import valid_minimum_channels
 from bscontroller.linklayer.features import LeFeatureMask
@@ -649,120 +648,6 @@ def test_min_used_central_without_local_feature_is_unknown(narrow):
     narrow.link.features &= ~int(MIN_USED)
     narrow.lt_tx(min_used(PHY_1M, 2))
     narrow.lt_rx(Opcode.LL_UNKNOWN_RSP, unknown_rsp(Opcode.LL_MIN_USED_CHANNELS_IND))
-
-
-# ---------------------------------------------------------------------------
-# Minimum Number Of Used Channels, Peripheral local
-# ---------------------------------------------------------------------------
-@pytest.mark.parametrize('acknowledged', [True, False], ids=['acknowledged', 'timeout'])
-def test_min_used_periph_loc(peripheral, acknowledged):
-    """A Peripheral serializes MIN_USED_CHANNELS_IND through the link-layer ACK.
-
-    Purpose: Verify that a Peripheral whose peer supports the feature can request
-    a minimum number of used channels (Vol 6, Part B, 5, 5.1.11 and 5.2).
-
-    Steps:
-        1. Start a PHY Update and acknowledge its request.
-        2. Request the minimum channels while the PHY procedure awaits a reply.
-        3. Reject the PHY request, then receive the channel indication.
-        4. Request the peer's version before acknowledging the indication.
-
-    Expected:
-        - The indication is transmitted after the PHY procedure ends.
-        - The response timer remains armed and Version Exchange waits for the ACK.
-        - If the ACK does not arrive, T_PRT expires and closes the ACL.
-    """
-    peripheral.set_peer_features(int(MIN_USED))
-    peripheral.host_start('request_phy', PHY_2M, PHY_2M, 0)
-    peripheral.lt_rx(Opcode.LL_PHY_REQ)
-    peripheral.tx_ack()
-    peripheral.controls.request_minimum_channels(PHY_1M, LL_DATA_CHANNEL_COUNT)
-    peripheral.lt_rx_empty()
-    peripheral.lt_tx(
-        reject_ext_ind(Opcode.LL_PHY_REQ, ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
-    )
-    peripheral.ut_rx(
-        hci.HCI_LE_PHY_Update_Complete_Event,
-        status=ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR,
-    )
-    peripheral.event_done()
-    peripheral.event_prepare()
-    llcp = peripheral.connection.llcp
-    assert llcp.next_deadline_us == peripheral.radio.now_us + LL_RESPONSE_TIMEOUT_US
-    peripheral.lt_rx(
-        Opcode.LL_MIN_USED_CHANNELS_IND, min_used(PHY_1M, LL_DATA_CHANNEL_COUNT)
-    )
-    peripheral.host_start('read_remote_version')
-    peripheral.event_done()
-    peripheral.event_prepare()
-    assert llcp.local_procedure_busy and not peripheral.connection.event.queue
-    if not acknowledged:
-        assert peripheral.expire_response_timer()
-        peripheral.ut_rx(
-            DISCONNECTED, reason=ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR
-        )
-        return
-    peripheral.tx_ack()
-    assert llcp.next_deadline_us is None
-    peripheral.event_done()
-    peripheral.event_prepare()
-    peripheral.lt_rx(Opcode.LL_VERSION_IND)
-
-
-@pytest.mark.parametrize(
-    'setup,match',
-    [
-        ('no-peer-feature', 'negotiated peer support'),
-        ('no-local-feature', 'negotiated peer support'),
-        ('central', 'live Peripheral'),
-        ('closed', 'live Peripheral'),
-    ],
-)
-def test_min_used_periph_loc_admission(peripheral, setup, match):
-    """Requesting a minimum is refused unless role and support allow it.
-
-    Purpose: Verify that a Peripheral refuses to request minimum used channels
-    without negotiated peer support, without the local feature, when acting as a
-    Central, or on a closed connection, for each setup case.
-
-    Steps:
-        1. Configure the refusal condition (missing feature, role or closed).
-        2. Call request_minimum_channels(PHY_1M, 2).
-
-    Expected:
-        - The call raises ValueError whose message matches the expected reason.
-        - Nothing is queued for the air.
-    """
-    peripheral.set_peer_features(None if setup == 'no-peer-feature' else int(MIN_USED))
-    if setup == 'no-local-feature':
-        peripheral.link.features &= ~int(MIN_USED)
-    elif setup == 'central':
-        peripheral.connection.role = CENTRAL
-    elif setup == 'closed':
-        peripheral.connection.closed = True
-    with pytest.raises(ValueError, match=match):
-        peripheral.controls.request_minimum_channels(PHY_1M, 2)
-    assert not peripheral.connection.event.queue
-
-
-@pytest.mark.parametrize('phys,minimum', [(0, 2), (1, 1), (1, 38), (8, 2)])
-def test_min_used_periph_loc_invalid_arguments(peripheral, phys, minimum):
-    """Invalid arguments to request_minimum_channels are rejected.
-
-    Purpose: Verify that an empty or RFU PHY mask, or an out-of-range minimum,
-    is rejected with an invalid-PHY-mask ValueError even when peer support is
-    present, across several invalid pairs.
-
-    Steps:
-        1. Cache peer features that include MIN_USED.
-        2. Call request_minimum_channels(phys, minimum).
-
-    Expected:
-        - The call raises ValueError whose message mentions 'invalid PHY mask'.
-    """
-    peripheral.set_peer_features(int(MIN_USED))
-    with pytest.raises(ValueError, match='invalid PHY mask'):
-        peripheral.controls.request_minimum_channels(phys, minimum)
 
 
 def test_min_used_received_by_peripheral_is_unknown(peripheral):

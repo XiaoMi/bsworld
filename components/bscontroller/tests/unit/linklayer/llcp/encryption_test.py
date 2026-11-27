@@ -77,7 +77,9 @@ def central_start(dut, *, refresh=False):
     dut.event_prepare()
     request = dut.lt_rx(Opcode.LL_ENC_REQ)
     assert request[1:9] == RAND and request[9:11] == EDIV.to_bytes(2, 'little')
-    assert dut.data_paused() and dut.encryption.deadline_us
+    assert dut.data_paused() and dut.connection.llcp.deadline_for(
+        dut.encryption.procedure
+    )
     dut.lt_tx(enc_rsp())
     dut.event_done()
     assert encrypted(dut) == (False, False)
@@ -122,7 +124,7 @@ def test_central_loc_start(central):
     )
     central.ut_rx_q_is_empty()
     assert not central.data_paused() and central.encryption.enabled
-    assert central.encryption.deadline_us is None
+    assert central.connection.llcp.deadline_for(central.encryption.procedure) is None
     # Data now flows, encrypted, and the peer can read it.
     assert central.lt_rx_data().payload == b'before'
     central.tx_ack()
@@ -481,7 +483,9 @@ def peripheral_key_request(dut, *, extended=False):
     dut.lt_rx(Opcode.LL_ENC_RSP)
     dut.tx_ack()
     dut.event_done()
-    assert dut.encryption.state == State.KEY and dut.encryption.deadline_us
+    assert dut.encryption.state == State.KEY and dut.connection.llcp.deadline_for(
+        dut.encryption.procedure
+    )
 
 
 def test_periph_rem_start(peripheral):
@@ -516,7 +520,11 @@ def test_periph_rem_start(peripheral):
     peripheral.lt_tx(pdu(Opcode.LL_START_ENC_RSP))
     assert encrypted(peripheral) == (True, True)
     peripheral.ut_rx(CHANGED, status=0, encryption_enabled=ON)
-    assert not peripheral.data_paused() and peripheral.encryption.deadline_us is None
+    assert (
+        not peripheral.data_paused()
+        and peripheral.connection.llcp.deadline_for(peripheral.encryption.procedure)
+        is None
+    )
     peripheral.lt_rx(Opcode.LL_START_ENC_RSP)
     first_wire = peripheral.radio.sent[-1][2]
     peripheral.lt_rx(Opcode.LL_START_ENC_RSP)
@@ -561,7 +569,9 @@ def test_periph_rem_start_key_missing(peripheral, extended):
     peripheral.tx_ack()
     peripheral.event_done()
     assert not peripheral.data_paused() and not peripheral.connection.closed
-    assert peripheral.encryption.deadline_us is None
+    assert (
+        peripheral.connection.llcp.deadline_for(peripheral.encryption.procedure) is None
+    )
     assert peripheral.lt_rx_data().payload == b'queued'
     peripheral.ut_rx_q_is_empty()
 
@@ -647,9 +657,12 @@ def test_periph_rem_key_missing_rejection_keeps_response_timer(peripheral):
     peripheral_key_request(peripheral)
     peripheral.elapse(1000)
     peripheral.host('supply_key', None)
-    deadline = peripheral.encryption.deadline_us
+    deadline = peripheral.connection.llcp.deadline_for(peripheral.encryption.procedure)
     peripheral.lt_rx(Opcode.LL_REJECT_IND)
-    assert peripheral.encryption.deadline_us == deadline
+    assert (
+        peripheral.connection.llcp.deadline_for(peripheral.encryption.procedure)
+        == deadline
+    )
     assert not peripheral.expire_response_timer(early_us=1)
     assert peripheral.elapse(1)
     peripheral.ut_rx(DISCONNECTED, reason=ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
@@ -873,7 +886,9 @@ def test_periph_rem_refresh_key_missing_terminates(peripheral, acknowledged):
     peripheral.ut_rx(LTK_REQUEST)
     peripheral.lt_rx(Opcode.LL_ENC_RSP)
     peripheral.tx_ack()
-    procedure_deadline = peripheral.encryption.deadline_us
+    procedure_deadline = peripheral.connection.llcp.deadline_for(
+        peripheral.encryption.procedure
+    )
     # Answer late, so the old T_PRT would expire before T_terminate does.
     peripheral.elapse(procedure_deadline - 500_000 - peripheral.radio.now_us)
     peripheral.connection.enqueue_acl(False, b'must not escape')
@@ -881,7 +896,9 @@ def test_periph_rem_refresh_key_missing_terminates(peripheral, acknowledged):
     # After a pause, a missing key ends the link via ACL Termination.
     termination = pdu(Opcode.LL_TERMINATE_IND, KEY_MISSING)
     peripheral.lt_rx(Opcode.LL_TERMINATE_IND, termination)
-    assert peripheral.encryption.deadline_us is None
+    assert (
+        peripheral.connection.llcp.deadline_for(peripheral.encryption.procedure) is None
+    )
     # The aborted encryption timer cannot win against T_terminate.
     peripheral.elapse(procedure_deadline - peripheral.radio.now_us)
     assert not peripheral.connection.closed
@@ -937,14 +954,17 @@ def test_delayed_feature_unknown_rsp_survives_ignored_page(peripheral, wrong_pag
     peripheral.lt_tx(enc_req())
     peripheral.ut_rx(LTK_REQUEST)
     peripheral.lt_rx(Opcode.LL_ENC_RSP)
-    deadline = peripheral.encryption.deadline_us
+    deadline = peripheral.connection.llcp.deadline_for(peripheral.encryption.procedure)
     peripheral.lt_tx(unknown_rsp(Opcode.LL_FEATURE_EXT_REQ))
     peripheral.ut_rx(
         hci.HCI_LE_Read_All_Remote_Features_Complete_Event,
         status=ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR,
     )
     assert not peripheral.connection.closed
-    assert peripheral.encryption.deadline_us == deadline
+    assert (
+        peripheral.connection.llcp.deadline_for(peripheral.encryption.procedure)
+        == deadline
+    )
     peripheral.connection.enqueue_acl(False, b'queued')
     peripheral.host('supply_key', None)
     peripheral.lt_rx(Opcode.LL_REJECT_IND)
@@ -986,11 +1006,14 @@ def test_delayed_unknown_rsp_survives_key_rejection(peripheral, extended, when):
     peripheral.lt_rx(Opcode.LL_ENC_RSP)
     if when == 'after-enc-rsp':
         peripheral.host('supply_key', None)
-    deadline = peripheral.encryption.deadline_us
+    deadline = peripheral.connection.llcp.deadline_for(peripheral.encryption.procedure)
     # The Central acknowledges ENC_RSP while answering the earlier PHY_REQ.
     peripheral.lt_tx(unknown_rsp(Opcode.LL_PHY_REQ))
     assert not peripheral.connection.closed and peripheral.encryption.busy
-    assert peripheral.encryption.deadline_us == deadline
+    assert (
+        peripheral.connection.llcp.deadline_for(peripheral.encryption.procedure)
+        == deadline
+    )
     peripheral.ut_rx(
         hci.HCI_LE_PHY_Update_Complete_Event,
         status=ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR,
@@ -1184,12 +1207,12 @@ def test_queued_pdu_restarts_timer_but_retransmission_does_not(central, state, o
     encryption.state = state
     central.elapse(100)
     encryption._send(opcode)
-    deadline = encryption.deadline_us
+    deadline = central.connection.llcp.deadline_for(encryption.procedure)
     assert deadline == central.radio.now_us + 40_000_000
     central.elapse(100)
     encryption.sent(bytes([opcode]))
     encryption.sent(bytes([opcode]))
-    assert encryption.deadline_us == deadline
+    assert central.connection.llcp.deadline_for(encryption.procedure) == deadline
 
 
 # ---------------------------------------------------------------------------
