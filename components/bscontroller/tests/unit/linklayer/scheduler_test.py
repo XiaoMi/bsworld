@@ -139,7 +139,7 @@ def test_reservations_include_active_windows_and_roll_at_the_exclusive_end(
 def test_one_shot_reservation_blocks_gaps_until_its_exclusive_end():
     """An active one-shot window expires at its end and has no later occurrence."""
     reservation = RadioReservation(10, 5)
-    assert reservation.max_interval_us is None
+    assert reservation.interval_us is None
     assert reservation.window_after(0) == (10, 15)
     assert reservation.window_after(14) == (10, 15)
     assert reservation.window_after(15) is None

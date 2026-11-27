@@ -182,9 +182,10 @@ def test_reservation_skips_idle_anchors_and_carries_fraction_across_wrap(central
     assert connection.event_counter == 5
     assert connection.anchor_us == anchor + expected_offset
     assert next_window == connection_window(connection)
-    assert (
-        next_window.max_interval_us
-        == interval + (interval * 250 + 999_999) // 1_000_000
+    adjustment, fraction = divmod(interval * 250, 1_000_000)
+    assert (next_window.interval_us, next_window.interval_fraction) == (
+        interval + adjustment,
+        fraction,
     )
 
 
