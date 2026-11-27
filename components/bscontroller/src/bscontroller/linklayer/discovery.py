@@ -121,6 +121,12 @@ class Advertising:
     decision_adi: bool = False
     decision_flags: int = 0
     decision_data: bytes = b''
+    _event_airtime: tuple[tuple, int] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _periodic_airtime: tuple[tuple, int] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         # Live advertising payloads use mutable buffers.

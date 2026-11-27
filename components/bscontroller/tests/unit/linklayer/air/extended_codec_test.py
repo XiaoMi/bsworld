@@ -21,10 +21,24 @@ import pytest
 
 from bscontroller import hci
 from bscontroller.hci import HCI_LE_ADV_DATA_SIZE_MAX
-from bscontroller.linklayer import LL_MAFS_US, PDU_ADV_ADDRESS_SIZE, AdvertisingMode
-from bscontroller.linklayer.advertising_event import advertising_time_us, fragments
+from bscontroller.linklayer import (
+    LL_DATA_CHANNEL_MAP_ALL,
+    LL_MAFS_US,
+    PDU_ADV_ADDRESS_SIZE,
+    AdvertisingMode,
+)
+from bscontroller.linklayer.advertiser import (
+    periodic_transmit_window,
+    subevent_transmit_window,
+)
+from bscontroller.linklayer.advertising_event import (
+    advertising_event_time_us,
+    advertising_time_us,
+    fragments,
+)
 from bscontroller.linklayer.advertising_pdu import ExtendedPdu
 from bscontroller.linklayer.discovery import Advertising
+from bscontroller.linklayer.pawr import PawrAdvertiser, PawrTiming, SubeventData
 from bscontroller.radio.base import Phy
 
 ADDRESS = bytes(PDU_ADV_ADDRESS_SIZE)
@@ -204,3 +218,54 @@ def test_event_budget_covers_primary_packets_and_chain(phy):
     item.data = b''
     assert full > advertising_time_us(item)
     assert advertising_time_us(Advertising(item.address, handle=0)) == 0
+
+
+@pytest.mark.parametrize('kind', ['extended', 'periodic', 'pawr'])
+def test_reservation_reencodes_only_when_its_layout_changes(kind, monkeypatch):
+    """Reuse reservation airtime until the payload or header size changes."""
+    item = Advertising(
+        hci.Address('F0:F1:F2:F3:F4:01'),
+        handle=0,
+        extended=True,
+        data=bytes(300),
+        periodic_data=bytes(300),
+        periodic_interval=80,
+    )
+    if kind == 'pawr':
+        item.pawr = PawrTiming(2, 16, 4, 10)
+        item.pawr_state = PawrAdvertiser(0x12345678)
+        item.pawr_state.data[0] = SubeventData(b'first', 0, 0)
+
+    def duration():
+        if kind == 'extended':
+            return advertising_event_time_us(item)
+        if kind == 'periodic':
+            return periodic_transmit_window(item).duration_us
+        return subevent_transmit_window(item, False).duration_us
+
+    encode = ExtendedPdu.encode
+    encoded = []
+
+    def record(pdu):
+        encoded.append(pdu.kind)
+        return encode(pdu)
+
+    monkeypatch.setattr(ExtendedPdu, 'encode', record)
+    original = duration()
+    assert encoded
+    encoded.clear()
+    item.did += 1
+    item.periodic_did += 1
+    item.periodic_next_us += 100_000
+    item.data[0] = 1
+    assert duration() == original
+    assert not encoded
+
+    if kind == 'extended':
+        item.data.extend(bytes(20))
+    elif kind == 'periodic':
+        item.periodic_channel_update = (6, LL_DATA_CHANNEL_MAP_ALL)
+    else:
+        item.pawr_state.data[0] = SubeventData(b'longer subevent', 0, 0)
+    assert duration() > original
+    assert encoded
