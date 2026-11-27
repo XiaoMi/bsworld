@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
+    LL_RESPONSE_TIMEOUT_US,
     PDU_CONTROL_PAYLOAD_SIZE_INITIAL_MAX,
     PDU_CONTROL_TERMINATE_SIZE,
     PDU_CONTROL_UNKNOWN_RSP_SIZE,
@@ -35,7 +36,6 @@ from bscontroller.linklayer.procedure import (
     ProcedureCompletion,
     ProcedureContext,
     ProcedureOrigin,
-    ProcedureResponseTimer,
 )
 from bscontroller.linklayer.state import Role
 from bscontroller.radio.base import Received
@@ -82,7 +82,7 @@ class LlcpCoordinator:
     def __init__(self, connection: Connection, cig: CigManager):
         self.connection = connection
         self.cig = cig
-        self._response_timer = ProcedureResponseTimer()
+        self._response_deadline_us: int | None = None
         self.controls = ControlProcedures(connection)
         self.encryption = Encryption(connection)
         self._procedures: dict[ProcedureContext, None] = {}
@@ -123,8 +123,8 @@ class LlcpCoordinator:
     def start_response_timer(self, procedure: ProcedureContext) -> None:
         """Register a procedure waiting on the peer or Host without an outgoing PDU."""
         self.register(procedure)
-        procedure.response_timer = self._response_timer
-        self._response_timer.restart(self.connection.radio.now_us)
+        procedure.timed = True
+        self._restart_response_timer()
 
     def send(
         self,
@@ -137,7 +137,7 @@ class LlcpCoordinator:
         """Continue an admitted procedure and attach it to the ACL transmission."""
         self.register(procedure)
         if timed:
-            procedure.response_timer = self._response_timer
+            procedure.timed = True
         return self._enqueue(payload, priority=priority, procedure=procedure)
 
     def respond(self, payload: bytes, *, priority: bool = False) -> Outbound:
@@ -155,9 +155,14 @@ class LlcpCoordinator:
         procedure: ProcedureContext | None = None,
     ) -> Outbound:
         # New control PDUs reset T_PRT (6.B.5.2). ARQ retries reuse the same PDU.
-        self._response_timer.restart(self.connection.radio.now_us)
+        self._restart_response_timer()
         return self.connection.event._enqueue_control(
             payload, priority=priority, procedure=procedure
+        )
+
+    def _restart_response_timer(self) -> None:
+        self._response_deadline_us = (
+            self.connection.radio.now_us + LL_RESPONSE_TIMEOUT_US
         )
 
     def schedule_channel_map(self) -> None:
@@ -210,8 +215,13 @@ class LlcpCoordinator:
 
     @property
     def response_deadline_us(self) -> int | None:
-        if any(procedure.deadline_us is not None for procedure in self._procedures):
-            return self._response_timer.deadline_us
+        if any(procedure.timed and procedure.active for procedure in self._procedures):
+            return self._response_deadline_us
+        return None
+
+    def deadline_for(self, procedure: ProcedureContext | None) -> int | None:
+        if procedure is not None and procedure.timed and procedure.active:
+            return self._response_deadline_us
         return None
 
     @property
