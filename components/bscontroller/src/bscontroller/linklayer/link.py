@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import random
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
 
 from bscontroller.address import Address
@@ -106,7 +106,7 @@ class RadioLink:
 
     # Internal LL views; managers retain ownership of active contexts.
     @property
-    def advertisers(self) -> dict[int, Advertising]:
+    def advertisers(self) -> Mapping[int, Advertising]:
         return self.roles.advertising.contexts
 
     @property

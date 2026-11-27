@@ -179,7 +179,7 @@ async def advertising_request(
         # Vol 4, Part E, 7.7.65.19 covers SCAN_REQ as well as AUX_SCAN_REQ, so a
         # legacy-PDU set configured with notifications reports it here too.
         if item.notify_scan_request:
-            link.listener.on_scan_request(item, identity)
+            advertising.report_scan_request(item, identity)
             if not advertising.event_is_current(item):
                 return False
         payload = bytes(item.address) + item.scan_response

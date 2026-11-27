@@ -500,7 +500,7 @@ async def respond_to_aux_request(
         ):
             return False
         if item.notify_scan_request:
-            link.listener.on_scan_request(item, identity)
+            advertising.report_scan_request(item, identity)
         await transmit_chain(
             advertising,
             channel,

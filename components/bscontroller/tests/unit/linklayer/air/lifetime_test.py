@@ -53,6 +53,7 @@ from bscontroller.linklayer import (
     advertiser,
 )
 from bscontroller.linklayer.advertising_pdu import ExtendedPdu, SyncInfo
+from bscontroller.linklayer.api import advertising_snapshot
 from bscontroller.linklayer.bitstream import generate_access_address
 from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.discovery import (
@@ -162,8 +163,8 @@ def test_commit_stops_advertiser_and_assigns_handles(link):
         - The second connection gets handle 2.
         - After deleting the first, the next allocated handle is 1 again.
     """
-    item = Advertising(SELF, enabled=True, events=7)
-    link.roles.advertising.publish(4, item)
+    item = Advertising(SELF, handle=4, enabled=True, events=7)
+    link.roles.advertising.publish(item)
     first = link.roles.accepted(accepted(advertiser=item))
     assert first.handle == 1 and not item.enabled
     assert (first.advertising_handle, first.advertising_events) == (4, 7)
@@ -193,8 +194,8 @@ def test_released_advertiser_cannot_commit(link, action):
 
     Parameters range over the advertiser being disabled and removed.
     """
-    item = Advertising(SELF, enabled=True)
-    link.roles.advertising.publish(4, item)
+    item = Advertising(SELF, handle=4, enabled=True)
+    link.roles.advertising.publish(item)
     if action == 'disabled':
         item.enabled = False
     else:
@@ -373,12 +374,13 @@ def test_duplicate_connect_request_from_existing_peer_is_ignored(link, extended)
     link.listener.events.clear()
     item = Advertising(
         SELF,
+        handle=0,
         enabled=True,
         extended=extended,
         mode=AdvertisingMode.CONNECTABLE,
         pdu_type=AdvertisingPduType.ADV_IND,
     )
-    link.advertisers[0] = item
+    link.roles.advertising.publish(item)
     packet = Received(connect_ind(PEER, SELF), -40, 100, 500, True)
     result = run(
         link,
@@ -439,6 +441,7 @@ def test_event_limit_ends_advertising_but_not_periodic_train(link):
     """
     item = Advertising(
         SELF,
+        handle=1,
         enabled=True,
         events=3,
         max_events=3,
@@ -446,13 +449,16 @@ def test_event_limit_ends_advertising_but_not_periodic_train(link):
         periodic_interval=80,
         periodic_next_us=10_000,
     )
-    link.roles.advertising.publish(1, item)
+    link.roles.advertising.publish(item)
     operations = link.roles.advertising.prepare()
     assert [operation.priority for operation in operations] == [
         RadioPriority.PERIODIC_TX
     ]
     assert link.listener.events == [
-        ('on_advertising_ended', (item, ErrorCode.LIMIT_REACHED_ERROR))
+        (
+            'on_advertising_ended',
+            (advertising_snapshot(item), ErrorCode.LIMIT_REACHED_ERROR),
+        )
     ]
     link.roles.advertising.prepare()
     assert len(link.listener.events) == 1 and item.periodic_enabled
@@ -480,10 +486,10 @@ def test_completion_callback_cannot_prepare_released_context(link, action):
     Parameters range over reset and remove in the callback.
     """
     manager = link.roles.advertising
-    first = Advertising(SELF, enabled=True, deadline_us=10)
-    second = replace(first, periodic_enabled=True, periodic_interval=80)
-    manager.publish(1, first)
-    manager.publish(2, second)
+    first = Advertising(SELF, handle=1, enabled=True, deadline_us=10)
+    second = replace(first, handle=2, periodic_enabled=True, periodic_interval=80)
+    manager.publish(first)
+    manager.publish(second)
     link.radio.now_us = 10
     seen = []
 
@@ -496,9 +502,35 @@ def test_completion_callback_cannot_prepare_released_context(link, action):
 
     link.listener.on_advertising_ended = ended
     assert not manager.prepare()
-    assert seen == [first]
+    assert seen == [advertising_snapshot(first)]
     manager.expire(second, ErrorCode.ADVERTISING_TIMEOUT_ERROR)
-    assert seen == [first]
+    assert seen == [advertising_snapshot(first)]
+
+
+def test_queued_radio_work_cannot_transmit_after_advertising_handle_reuse(link):
+    """Primary and periodic work keep the identity of the set that queued them."""
+    manager = link.roles.advertising
+    original = Advertising(
+        SELF,
+        handle=3,
+        enabled=True,
+        periodic_enabled=True,
+        periodic_interval=80,
+        periodic_next_us=100_000,
+    )
+    manager.publish(original)
+    primary, periodic = manager.prepare()
+    assert (primary.owner, periodic.owner) == (original, original)
+
+    replacement = replace(original)
+    manager.remove(original.handle)
+    manager.publish(replacement)
+    for operation in (primary, periodic):
+        run(link, operation.run())
+
+    assert not link.radio.sent
+    assert manager.owns(replacement)
+    assert original.events == original.periodic_counter == 0
 
 
 def test_advertising_event_waits_for_a_free_radio_gap(link):
@@ -517,8 +549,8 @@ def test_advertising_event_waits_for_a_free_radio_gap(link):
         - Nothing was transmitted and the next event is rescheduled past now.
         - The event count is still zero.
     """
-    item = Advertising(SELF, enabled=True, interval_us=100_000)
-    link.roles.advertising.publish(0, item)
+    item = Advertising(SELF, handle=0, enabled=True, interval_us=100_000)
+    link.roles.advertising.publish(item)
     link.roles.reservations = lambda exclude=None: [
         RadioReservation(link.radio.now_us + 1, 5_000, 20_000)
     ]
@@ -535,6 +567,7 @@ def test_one_shot_reservation_does_not_extend_advertising_search(
     """Use a finite search horizon while still avoiding the one-shot window."""
     item = Advertising(
         SELF,
+        handle=0,
         enabled=True,
         interval_us=100_000,
         pdu_type=AdvertisingPduType.ADV_IND,
@@ -542,7 +575,7 @@ def test_one_shot_reservation_does_not_extend_advertising_search(
         scan_response=bytearray(31),
     )
     manager = link.roles.advertising
-    manager.publish(0, item)
+    manager.publish(item)
     start = link.radio.earliest_start_us(37, item.primary_phy, transmit=True)
     one_shot = RadioReservation(
         start, 80, ONE_SHOT_INTERVAL_US, RadioPriority.PERIODIC_RX
@@ -869,8 +902,14 @@ def test_periodic_rx_yields_without_refreshing_timeout(link, winner):
         connection.established = True
         link.connections[connection.handle] = connection
     else:
-        link.advertisers[0] = Advertising(
-            PEER, periodic_enabled=True, periodic_next_us=10_100, periodic_interval=40
+        link.roles.advertising.publish(
+            Advertising(
+                PEER,
+                handle=0,
+                periodic_enabled=True,
+                periodic_next_us=10_100,
+                periodic_interval=40,
+            )
         )
     run(link, link.roles.synchronization.run_periodic(sync))
     assert link.radio.now_us == 9999 and not link.radio.listens
@@ -930,14 +969,15 @@ def test_periodic_tx_yields_and_skips_counter(link):
     link.radio.now_us = 9999
     item = Advertising(
         SELF,
+        handle=0,
         periodic_enabled=True,
         periodic_next_us=10_000,
         periodic_interval=160,
         periodic_counter=LL_EVENT_COUNTER_MASK,
         periodic_data=bytes(200),
     )
-    link.advertisers[0] = item
-    run(link, link.roles.advertising.run_periodic(item, 0))
+    link.roles.advertising.publish(item)
+    run(link, link.roles.advertising.run_periodic(item))
     assert not link.radio.sent
     assert item.periodic_next_us == 10_000 + 160 * LL_PERIODIC_INTERVAL_UNIT_US
     assert item.periodic_counter == 0
@@ -1037,8 +1077,10 @@ def test_access_address_allocation_excludes_live_owners(link, monkeypatch):
     """
     connection = Connection(link, PARAMETERS, PEER, Role.CENTRAL, 0)
     link.connections[connection.handle] = connection
-    periodic = Advertising(PEER, periodic_enabled=True, periodic_aa=0x456789AB)
-    link.advertisers[0] = periodic
+    periodic = Advertising(
+        PEER, handle=0, periodic_enabled=True, periodic_aa=0x456789AB
+    )
+    link.roles.advertising.publish(periodic)
     candidates = iter([PARAMETERS.access_address, periodic.periodic_aa, 0x12345678])
     monkeypatch.setattr(link.random, 'getrandbits', lambda width: next(candidates))
     assert link.new_access_address() == 0x12345678
@@ -1275,8 +1317,10 @@ def test_txadd_identity_is_part_of_connect_peer(link):
         - The committed connection's peer is the public-typed address.
         - The connection interval matches the CONNECT_IND LLData.
     """
-    item = Advertising(SELF, enabled=True, pdu_type=AdvertisingPduType.ADV_IND)
-    link.advertisers[0] = item
+    item = Advertising(
+        SELF, handle=0, enabled=True, pdu_type=AdvertisingPduType.ADV_IND
+    )
+    link.roles.advertising.publish(item)
     public = Address(bytes(PEER), 0)
     pdu = bytearray(connect_ind(PEER, SELF))
     pdu[0] &= ~PDU_ADV_TXADD_MASK
@@ -1311,8 +1355,8 @@ def test_periodic_enable_without_free_phase_keeps_nominal_anchor(link):
           valid access address.
         - Re-enabling leaves the next anchor unchanged.
     """
-    item = Advertising(SELF, extended=True, periodic_interval=80)
-    link.roles.advertising.publish(0, item)
+    item = Advertising(SELF, handle=0, extended=True, periodic_interval=80)
+    link.roles.advertising.publish(item)
     link.roles.reservations = lambda exclude=None: [RadioReservation(0, 10**9, 10**9)]
     link.resource = RadioResourceManager(lambda: link.now_us, link.roles.reservations)
     link.radio.now_us = 1000

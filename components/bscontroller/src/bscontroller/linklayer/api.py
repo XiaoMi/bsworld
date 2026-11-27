@@ -122,9 +122,9 @@ class AdvertisingSnapshot:
     events: int
 
 
-def advertising_snapshot(handle: int, item: Advertising) -> AdvertisingSnapshot:
+def advertising_snapshot(item: Advertising) -> AdvertisingSnapshot:
     return AdvertisingSnapshot(
-        handle,
+        item.handle,
         AddressSnapshot(item.address),
         address_snapshot(item.random_address),
         bytes(item.data),

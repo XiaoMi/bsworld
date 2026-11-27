@@ -10,6 +10,7 @@ LL Control Procedure behaviour is specified by the scenario matrix in llcp/.
 import inspect
 import subprocess
 import sys
+from collections import deque
 from dataclasses import FrozenInstanceError, replace
 from types import SimpleNamespace
 from unittest.mock import create_autospec
@@ -25,12 +26,19 @@ from bscontroller.linklayer.api import (
     AdvertisingConfig,
     ConnectionSnapshot,
     PeriodicSyncConfig,
+    advertising_snapshot,
 )
 from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.discovery import Advertising, PeriodicSync
 from bscontroller.linklayer.link import RadioLink
 from bscontroller.linklayer.listener import Listener
 from bscontroller.linklayer.notifications import NotificationAdapter, NotificationSink
+from bscontroller.linklayer.pawr import (
+    PawrAdvertiser,
+    PawrTiming,
+    SlotResponse,
+    SubeventResponses,
+)
 from bscontroller.linklayer.service import LinkLayerService
 from bscontroller.linklayer.state import Role
 from tests.unit.helpers import PARAMETERS, FakeRadio
@@ -226,8 +234,8 @@ def test_ll_rejects_reconfiguration_of_an_active_advertiser(controller):
         - The live advertiser is the same object with its original data.
     """
     service = controller.le_procedures.ll.advertising
-    original = Advertising(Address.ANY, enabled=True, data=b'original')
-    service.link.advertisers[0] = original
+    original = Advertising(Address.ANY, handle=0, enabled=True, data=b'original')
+    service.link.roles.advertising.publish(original)
     candidate = AdvertisingConfig(Address.ANY)
     assert service.configure(0, candidate) == ErrorCode.COMMAND_DISALLOWED_ERROR
     assert service.link.advertisers[0] is original and original.data == b'original'
@@ -358,7 +366,7 @@ def test_advertising_configuration_cannot_replace_runtime_state(controller):
     assert service.snapshot(0).data == b'payload'
     assert service.snapshot(0).tx_power_dbm == -8
     with pytest.raises(TypeError, match='must not contain live state'):
-        service.configure(0, Advertising(controller.public_address))
+        service.configure(0, Advertising(controller.public_address, handle=0))
     with pytest.raises(FrozenInstanceError):
         config.address.address_type = hci.AddressType.RANDOM_DEVICE
 
@@ -513,18 +521,22 @@ def test_released_advertiser_cannot_notify_the_host_after_handle_reuse(connectio
     """Delayed scan, PAwR and termination notifications belong to their original set."""
     sink = create_autospec(NotificationSink, instance=True, spec_set=True)
     manager = connection.link.roles.advertising
-    adapter = NotificationAdapter(sink)
-    adapter.bind_advertising(manager.handle_of)
-    old, current = Advertising(connection.peer), Advertising(connection.peer)
-    manager.publish(7, old)
-    manager.remove(7)
-    manager.publish(7, current)
+    connection.link.listener = NotificationAdapter(sink)
+    old = Advertising(
+        connection.peer, handle=7, enabled=True, pawr=PawrTiming(1, 8, 1, 2)
+    )
+    current = replace(old)
+    manager.publish(old)
+    manager.remove(old.handle)
+    manager.publish(current)
 
     for item in (old, current):
-        adapter.on_scan_request(item, connection.peer)
-        adapter.on_subevent_data_request(item, 0, 1)
-        adapter.on_response_report(item, 0, 0, [])
-        adapter.on_advertising_ended(item, 0)
+        responses = SubeventResponses(0, 0, 0, deque([0]), True)
+        item.pawr_state = PawrAdvertiser(0x12345678, listening=deque([responses]))
+        manager.report_scan_request(item, connection.peer)
+        manager.request_subevent_data(item, 0)
+        manager.slot_completed(item, responses, SlotResponse(0, None))
+        manager.expire(item, ErrorCode.ADVERTISING_TIMEOUT_ERROR)
         if item is old:
             assert not sink.mock_calls
 
@@ -545,10 +557,8 @@ def test_notification_contract_reaches_the_hci_receiver(connection):
     """
     sink = create_autospec(NotificationSink, instance=True, spec_set=True)
     adapter = NotificationAdapter(sink)
-    adapter.bind_advertising(connection.link.roles.advertising.handle_of)
     address = connection.peer
-    item = Advertising(address)
-    connection.link.advertisers[0] = item
+    item = advertising_snapshot(Advertising(address, handle=0))
     values = dict(
         connection=connection,
         item=item,
