@@ -8,29 +8,20 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from bscontroller.address import Address, AddressType
 from bscontroller.errors import ErrorCode
-from bscontroller.linklayer import (
-    LL_CONN_AUX_WINDOW_DELAY_CODED_US,
-    LL_CONN_AUX_WINDOW_DELAY_UNCODED_US,
-    LL_IFS_US,
-    PDU_ADV_ADDRESS_OFFSET,
-    PDU_ADV_ADDRESSES_END,
-    PDU_ADV_AUX_CONNECT_RSP_SIZE,
-    PDU_ADV_CONNECT_PAYLOAD_SIZE,
-    PDU_ADV_CONNECT_SIZE,
-    PDU_ADV_RXADD_MASK,
-    PDU_ADV_SECOND_ADDRESS_OFFSET,
-    PDU_ADV_TXADD_MASK,
-    AdvertisingPduType,
+from bscontroller.linklayer import LL_IFS_US, PDU_ADV_CONNECT_SIZE
+from bscontroller.linklayer.advertising_pdu import (
+    advertising_request_peer,
+    connect_response,
 )
-from bscontroller.linklayer.advertising_pdu import ExtendedPdu
-from bscontroller.linklayer.extended import connect_request, connect_response_matches
-from bscontroller.linklayer.parameters import Parameters
+from bscontroller.linklayer.advertising_requests import connection_request_parameters
+from bscontroller.linklayer.auxiliary_connection import (
+    AuxiliaryConnectionFailure,
+    request_auxiliary_connection,
+)
 from bscontroller.linklayer.results import ConnectionAccepted
-from bscontroller.linklayer.scheduler import RadioPriority
 from bscontroller.linklayer.state import Role
-from bscontroller.radio.base import RADIO_SWITCH_TIME_US, Phy
+from bscontroller.linklayer.timing import auxiliary_window_delay_us
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.discovery import Advertising, Initiating, PeriodicSync
@@ -51,84 +42,22 @@ async def pawr_connect(
     Without that response the request is discarded, once, and the Host
     learns that the connection failed (Vol 4, Part E, 7.7.65.10).
     """
-    peer, phy = initiating.peer, item.secondary_phy
-    state = item.pawr_state
-    coding = item.secondary_coding.factor()
-    initiating.address, generated = link.privacy.select_local_address(
-        initiating.own_address_type,
-        initiating.identity_address or initiating.address,
-        link.privacy.identity(peer),
+    result = await request_auxiliary_connection(
+        link,
+        initiating,
+        initiating.peer,
+        channel,
+        start_us,
+        item.secondary_phy,
+        pawr_advertiser=item,
     )
-    local_rpa = initiating.address if generated else None
-    window_delay = (
-        LL_CONN_AUX_WINDOW_DELAY_CODED_US
-        if phy == Phy.LE_CODED
-        else LL_CONN_AUX_WINDOW_DELAY_UNCODED_US
-    )
-    request_end = start_us + phy.airtime_us(PDU_ADV_CONNECT_SIZE, coding)
-    parameters = link.connection_parameters(
-        (initiating.phy_parameters or {}).get(phy, initiating.parameters),
-        request_end,
-        window_delay,
-        phy,
-    )
-    response = None
-    if (
-        parameters is not None
-        and link.roles.connections.can_accept(peer)
-        and link.resource.admit(
-            item,
-            start_us - RADIO_SWITCH_TIME_US,
-            request_end + LL_IFS_US + phy.airtime_us(PDU_ADV_AUX_CONNECT_RSP_SIZE),
-            RadioPriority.PERIODIC_TX,
-            earliest_us=link.radio.earliest_start_us(channel, phy, transmit=True)
-            - RADIO_SWITCH_TIME_US,
+    if isinstance(result, ConnectionAccepted):
+        link.roles.accepted(result)
+    elif result != AuxiliaryConnectionFailure.CANCELLED:
+        link.roles.scanning.cancel_initiating()
+        link.listener.on_connect_failed(
+            initiating.peer, ErrorCode.CONNECTION_FAILED_TO_BE_ESTABLISHED_ERROR
         )
-    ):
-        train = {
-            'access_address': item.periodic_aa,
-            'crc_init': item.periodic_crc,
-        }
-        request_end = await link.transmit(
-            channel,
-            connect_request(initiating.address, peer, parameters),
-            start_us=start_us,
-            phy=phy,
-            coding=coding,
-            power_dbm=item.tx_power_dbm,
-            **train,
-        )
-        if link.initiating is not initiating or item.pawr_state is not state:
-            return
-        response = await link.receive_response(channel, request_end, phy, **train)
-    if link.initiating is not initiating or item.pawr_state is not state:
-        return
-    try:
-        rsp = ExtendedPdu.decode(response.pdu) if response is not None else None
-    except ValueError:
-        rsp = None
-    if rsp is not None and connect_response_matches(rsp, peer, initiating.address):
-        assert parameters is not None
-        link.roles.accepted(
-            ConnectionAccepted(
-                parameters,
-                peer,
-                Role.CENTRAL,
-                request_end,
-                csa2=True,
-                self_address=initiating.address,
-                local_rpa=local_rpa,
-                window_delay_us=window_delay,
-                phy=phy,
-                initiator=initiating,
-                pawr_advertiser=item,
-            )
-        )
-        return
-    link.roles.scanning.cancel_initiating()
-    link.listener.on_connect_failed(
-        peer, ErrorCode.CONNECTION_FAILED_TO_BE_ESTABLISHED_ERROR
-    )
 
 
 async def pawr_accept(
@@ -140,43 +69,21 @@ async def pawr_accept(
     AdvA must be one of this device's addresses; InitA becomes the peer.
     """
     pdu = packet.pdu
-    if (
-        len(pdu) != PDU_ADV_CONNECT_SIZE
-        or pdu[1] != PDU_ADV_CONNECT_PAYLOAD_SIZE
-        or sync.info is None
-    ):
+    if len(pdu) != PDU_ADV_CONNECT_SIZE or sync.info is None:
         return
-    initiator = Address(
-        pdu[PDU_ADV_ADDRESS_OFFSET:PDU_ADV_SECOND_ADDRESS_OFFSET],
-        AddressType(bool(pdu[0] & PDU_ADV_TXADD_MASK)),
-    )
-    target = pdu[PDU_ADV_SECOND_ADDRESS_OFFSET:PDU_ADV_ADDRESSES_END]
-    own = next(
-        (
-            address
-            for address in (link.public_address, link.random_address)
-            if address is not None
-            and bytes(address) == target
-            and address.is_random == bool(pdu[0] & PDU_ADV_RXADD_MASK)
-        ),
-        None,
-    )
-    if own is None or not link.roles.connections.can_accept(initiator):
+    for own in (link.public_address, link.random_address):
+        if own is not None and (peer := advertising_request_peer(pdu, own)) is not None:
+            break
+    else:
         return
-    try:
-        parameters = Parameters.decode(pdu[PDU_ADV_ADDRESSES_END:])
-    except ValueError:
+    if not link.roles.connections.can_accept(peer):
         return
-    response = ExtendedPdu(
-        kind=AdvertisingPduType.AUX_CONNECT_RSP,
-        address=bytes(own),
-        random_address=own.is_random,
-        target=bytes(initiator),
-        random_target=initiator.is_random,
-    )
+    parameters = connection_request_parameters(link, pdu)
+    if parameters is None:
+        return
     await link.transmit(
         channel,
-        response.encode(),
+        connect_response(own, peer),
         start_us=packet.end_us + LL_IFS_US,
         access_address=sync.info.access_address,
         crc_init=sync.info.crc_init,
@@ -185,16 +92,12 @@ async def pawr_accept(
     link.roles.accepted(
         ConnectionAccepted(
             parameters,
-            initiator,
+            peer,
             Role.PERIPHERAL,
             packet.end_us,
             csa2=True,
             self_address=own,
-            window_delay_us=(
-                LL_CONN_AUX_WINDOW_DELAY_CODED_US
-                if packet.phy == Phy.LE_CODED
-                else LL_CONN_AUX_WINDOW_DELAY_UNCODED_US
-            ),
+            window_delay_us=auxiliary_window_delay_us(packet.phy),
             phy=packet.phy,
             pawr_sync=sync,
         )

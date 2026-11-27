@@ -28,6 +28,7 @@ from bscontroller.linklayer import (
     PDU_ADV_AUX_OFFSET_PHY_SIZE,
     PDU_ADV_AUX_OFFSET_UNITS_MASK,
     PDU_ADV_AUX_PTR_SIZE,
+    PDU_ADV_CONNECT_PAYLOAD_SIZE,
     PDU_ADV_CTE_INFO_SIZE,
     PDU_ADV_DECISION_DATA_SIZE_MAX,
     PDU_ADV_DECISION_EXT_FLAGS_MASK,
@@ -71,7 +72,7 @@ from bscontroller.linklayer import (
     AdvertisingMode,
     AdvertisingPduType,
 )
-from bscontroller.linklayer.parameters import valid_channel_map
+from bscontroller.linklayer.parameters import Parameters, valid_channel_map
 from bscontroller.radio.base import PHY_CODED_S2_FACTOR, PHY_CODED_S8_FACTOR, Phy
 
 
@@ -91,9 +92,7 @@ class AdvertisingCoding(IntEnum):
         return PHY_CODED_S8_FACTOR
 
 
-def advertising_request_peer(
-    pdu: bytes, advertiser: Address, target: Address | None
-) -> Address | None:
+def advertising_request_peer(pdu: bytes, advertiser: Address) -> Address | None:
     """Validate the common SCAN_REQ/CONNECT_IND addresses before interpreting LLData."""
     if (
         len(pdu) < PDU_ADV_SCAN_REQ_SIZE
@@ -102,11 +101,29 @@ def advertising_request_peer(
         or bool(pdu[0] & PDU_ADV_RXADD_MASK) != advertiser.is_random
     ):
         return None
-    peer = Address(
+    return Address(
         pdu[PDU_ADV_ADDRESS_OFFSET:PDU_ADV_SECOND_ADDRESS_OFFSET],
         AddressType(bool(pdu[0] & PDU_ADV_TXADD_MASK)),
     )
-    return peer if target is None or peer == target else None
+
+
+def connect_request(
+    initiator: Address, advertiser: Address, parameters: Parameters
+) -> bytes:
+    """Encode AUX_CONNECT_REQ (Core Vol 6, Part B, 2.3.3.1)."""
+    return (
+        bytes(
+            [
+                AdvertisingPduType.AUX_CONNECT_REQ
+                | (PDU_ADV_TXADD_MASK if initiator.is_random else 0)
+                | (PDU_ADV_RXADD_MASK if advertiser.is_random else 0),
+                PDU_ADV_CONNECT_PAYLOAD_SIZE,
+            ]
+        )
+        + bytes(initiator)
+        + bytes(advertiser)
+        + parameters.encode()
+    )
 
 
 def scan_request(scanner: Address, advertiser: Address) -> bytes:
@@ -511,3 +528,14 @@ class ExtendedPdu:
             acad=pdu[offset : PDU_ADV_EXT_HEADER_OFFSET + size],
             decision_flags=decision_flags,
         )
+
+
+def connect_response(advertiser: Address, initiator: Address) -> bytes:
+    """Encode AUX_CONNECT_RSP (Core Vol 6, Part B, 2.3.3.2)."""
+    return ExtendedPdu(
+        kind=AdvertisingPduType.AUX_CONNECT_RSP,
+        address=bytes(advertiser),
+        random_address=advertiser.is_random,
+        target=bytes(initiator),
+        random_target=initiator.is_random,
+    ).encode()

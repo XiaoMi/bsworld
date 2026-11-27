@@ -11,8 +11,6 @@ from typing import TYPE_CHECKING
 
 from bscontroller.address import Address, AddressType, OwnAddressType
 from bscontroller.linklayer import (
-    LL_CONN_AUX_WINDOW_DELAY_CODED_US,
-    LL_CONN_AUX_WINDOW_DELAY_UNCODED_US,
     PDU_ADV_ADDRESS_SIZE,
     PDU_ADV_ADI_DID_BITS,
     PDU_ADV_AUX_CONNECT_RSP_SIZE,
@@ -24,7 +22,10 @@ from bscontroller.linklayer import (
     AdvertisingPduType,
 )
 from bscontroller.linklayer.advertising_pdu import ExtendedPdu, scan_request
-from bscontroller.linklayer.extended import connect_request
+from bscontroller.linklayer.auxiliary_connection import (
+    AuxiliaryConnectionFailure,
+    request_auxiliary_connection,
+)
 from bscontroller.linklayer.extended_receive import collect_chain, follow_auxiliary
 from bscontroller.linklayer.filtering import (
     DecisionMode,
@@ -33,7 +34,7 @@ from bscontroller.linklayer.filtering import (
     scanning_decision_mode,
 )
 from bscontroller.linklayer.results import ConnectionAccepted, SyncInfoReceived
-from bscontroller.linklayer.state import AdvertisingProperties, AdvertisingReport, Role
+from bscontroller.linklayer.state import AdvertisingProperties, AdvertisingReport
 from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
@@ -372,10 +373,10 @@ async def _request_scan_response(
     return None
 
 
-async def initiate_extended(link: RadioLink, item, channel, packet, address):
-    """AUX_CONNECT_REQ / AUX_CONNECT_RSP exchange on the secondary channel (Core Vol
-    6, Part B, 4.4.4.2).
-    """
+async def initiate_extended(
+    link: RadioLink, item: Initiating, channel: int, packet: Received, address: Address
+) -> None:
+    """Start an AUX_CONNECT exchange and back off on an unanswered request."""
     if not link.roles.connections.can_accept(address):
         return
     slot = link.interframe_slot(
@@ -385,87 +386,14 @@ async def initiate_extended(link: RadioLink, item, channel, packet, address):
         packet.phy,
         response_size=PDU_ADV_AUX_CONNECT_RSP_SIZE,
     )
-    # 4.4.4.2 reuses the scanner backoff after an unanswered AUX_CONNECT_REQ.
+    # Core Vol 6, Part B, 4.4.4.2 reuses the scanner backoff.
     if slot is None or not item.backoff.permit():
         return
-    start_us, request_end = slot
-    item.address, generated = link.privacy.select_local_address(
-        item.own_address_type,
-        item.identity_address or item.address,
-        link.privacy.identity(address),
+    result = await request_auxiliary_connection(
+        link, item, address, channel, slot[0], packet.phy
     )
-    local_rpa = item.address if generated else None
-    # Core Vol 4, Part E, 7.8.66 permits a supplied PHY's parameters as fallback.
-    parameters = (item.phy_parameters or {}).get(packet.phy, item.parameters)
-    window_delay = (
-        LL_CONN_AUX_WINDOW_DELAY_CODED_US
-        if packet.phy == Phy.LE_CODED
-        else LL_CONN_AUX_WINDOW_DELAY_UNCODED_US
-    )
-    parameters = link.connection_parameters(
-        parameters, request_end, window_delay, packet.phy
-    )
-    if parameters is None:
-        return
-    request = connect_request(item.address, address, parameters)
-    request_end = await link.transmit(
-        channel, request, start_us=start_us, phy=packet.phy
-    )
-    if link.initiating is not item:
-        return
-    response = await link.receive_response(
-        channel, request_end, packet.phy, deadline_us=link.resource.deadline_us
-    )
-    if link.initiating is not item:
-        return
-    if response is None:
+    if isinstance(result, ConnectionAccepted):
+        item.backoff.complete(True, link.random)
+        link.roles.accepted(result)
+    elif result == AuxiliaryConnectionFailure.NO_RESPONSE:
         item.backoff.complete(False, link.random)
-        return
-    try:
-        rsp = ExtendedPdu.decode(response.pdu)
-    except ValueError:
-        item.backoff.complete(False, link.random)
-        return
-    response_address = (
-        Address(rsp.address, AddressType(rsp.random_address))
-        if rsp.address is not None
-        else None
-    )
-    # Device privacy permits a peer to rotate its RPA before responding.
-    # Bind a changed AdvA to the same resolving record, then retain the most
-    # recent wire address for Enhanced Connection Complete (7.7.65.10).
-    same_peer = response_address == address or (
-        link.privacy.enabled
-        and response_address is not None
-        and response_address.is_resolvable
-        and (resolved := link.privacy.identity(response_address)) is not None
-        and resolved.address_type
-        in (AddressType.PUBLIC_IDENTITY, AddressType.RANDOM_IDENTITY)
-        and resolved == link.privacy.identity(address)
-    )
-    if (
-        rsp.kind != AdvertisingPduType.AUX_CONNECT_RSP
-        or rsp.mode
-        or not same_peer
-        or rsp.target != bytes(item.address)
-        or rsp.random_target != item.address.is_random
-    ):
-        item.backoff.complete(False, link.random)
-        return
-    # Keep the attempt pending on a missing or mismatched response. Only the
-    # confirmed AUX_CONNECT_RSP lets us commit this connection.
-    item.backoff.complete(True, link.random)
-    link.roles.accepted(
-        ConnectionAccepted(
-            parameters,
-            response_address,
-            Role.CENTRAL,
-            request_end,
-            csa2=True,
-            self_address=item.address,
-            local_rpa=local_rpa,
-            window_delay_us=window_delay,
-            phy=packet.phy,
-            initiator=item,
-        )
-    )

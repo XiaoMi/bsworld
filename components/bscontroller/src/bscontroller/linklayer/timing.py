@@ -3,8 +3,14 @@
 
 """LE timing and receive-window widening (Core 6.3, Vol 6, Part B, 4.2/4.5)."""
 
-from bscontroller.linklayer import LL_EVENT_COUNTER_MASK, LL_SCA_50_PPM, LL_SCA_PPM
-from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND
+from bscontroller.linklayer import (
+    LL_CONN_AUX_WINDOW_DELAY_CODED_US,
+    LL_CONN_AUX_WINDOW_DELAY_UNCODED_US,
+    LL_EVENT_COUNTER_MASK,
+    LL_SCA_50_PPM,
+    LL_SCA_PPM,
+)
+from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND, Phy
 
 
 def window_widening(
@@ -46,6 +52,14 @@ LL_INSTANT_PAST_THRESHOLD = 0x7FFF
 
 # Default authenticated payload supervision period, in Link Layer time units.
 LL_AUTHENTICATED_PAYLOAD_TIMEOUT_DEFAULT_US = 30_000_000
+
+
+def auxiliary_window_delay_us(phy: Phy) -> int:
+    return (
+        LL_CONN_AUX_WINDOW_DELAY_CODED_US
+        if phy == Phy.LE_CODED
+        else LL_CONN_AUX_WINDOW_DELAY_UNCODED_US
+    )
 
 
 def counter_distance(target: int, reference: int) -> int:
