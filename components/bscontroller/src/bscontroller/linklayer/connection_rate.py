@@ -223,8 +223,7 @@ class ConnectionRateProcedure(LocalProcedure):
 
     def validate(self, parameters: ConnectionRateParameters) -> int:
         if (
-            self.owner.connection_parameters.request_pending
-            or self.owner.subrating.pending
+            self.owner.subrating.pending
             or self.owner.subrating.peer_request is not None
         ):
             return DISALLOWED

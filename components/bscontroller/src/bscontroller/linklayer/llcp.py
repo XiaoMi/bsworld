@@ -539,12 +539,12 @@ class LlcpCoordinator:
         rate = self.controls.rate
         if status := rate.validate(parameters):
             return status
-        return self._request(
+        self.initiate(
             DeferredProcedure(
                 'connection_rate', lambda: rate.request(parameters), rate.report
-            ),
-            active=rate.in_progress,
+            )
         )
+        return SUCCESS
 
     def request_frame_space(self, request: FrameSpaceRequest) -> int:
         frame_space = self.controls.frame_space
@@ -613,12 +613,15 @@ class LlcpCoordinator:
         )
 
     @property
-    def parameter_update_pending(self) -> bool:
+    def timing_update_pending(self) -> bool:
+        update = self.controls.pending
         return (
-            self.controls.connection_parameters.parameter_request
+            self.controls.connection_parameters.request_pending
+            or (update is not None and update.parameters is not None)
             or self.controls.rate.in_progress
             or self.has_pending('parameters')
             or self.has_pending('connection_rate')
+            or self.has_pending('peer_rate')
         )
 
     def request_connection_update(
