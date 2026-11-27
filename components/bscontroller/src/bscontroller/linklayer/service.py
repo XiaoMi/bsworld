@@ -761,6 +761,8 @@ class LinkLayerService:
         connection = self._connection(handle)
         if connection is None or not connection.established:
             return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
+        if connection.llcp.timing_update_pending:
+            return DISALLOWED
         return connection.llcp.request_connection_rate(parameters)
 
     def request_frame_space(
@@ -827,7 +829,7 @@ class LinkLayerService:
         connection = self._connection(handle)
         if connection is None:
             return ErrorCode.UNKNOWN_CONNECTION_IDENTIFIER_ERROR
-        if connection.llcp.parameter_update_pending:
+        if connection.llcp.timing_update_pending:
             return DISALLOWED
         if min_ce_length > max_ce_length:
             return INVALID

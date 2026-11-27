@@ -345,6 +345,24 @@ def test_rate_hci_command_is_disallowed_while_peer_connection_update_is_pending(
     )
 
 
+@pytest.mark.parametrize('rate_first', [False, True])
+def test_host_timing_update_commands_exclude_each_other_while_queued(
+    central, rate_first
+):
+    enable_rate(central)
+    # Hold the local slot so the first timing command is queued without a PDU.
+    central.host_start('read_remote_version')
+    legacy = hci.HCI_LE_Connection_Update_Command(central.handle, 8, 8, 0, 100, 0, 0)
+    rate = RateRequest(central.handle, *host_parameters(10))
+    first, second = (rate, legacy) if rate_first else (legacy, rate)
+    for command, status in (
+        (first, ErrorCode.SUCCESS),
+        (second, ErrorCode.COMMAND_DISALLOWED_ERROR),
+    ):
+        central.hci(command)
+        central.ut_rx(hci.HCI_Command_Status_Event, status=status)
+
+
 def test_rate_request_response_timer_starts_at_enqueue(peripheral):
     enable_rate(peripheral)
     request_rate(peripheral, 10)
