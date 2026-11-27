@@ -47,6 +47,7 @@ from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.discovery import Initiating, PeriodicSync, Scanning
+    from bscontroller.linklayer.extended_receive import ChainFragment
     from bscontroller.linklayer.link import RadioLink
     from bscontroller.linklayer.results import ScanEvent
     from bscontroller.radio.base import Received
@@ -61,6 +62,7 @@ class _Observation:
     address: Address
     identity: Address
     sid: int | None
+    primary_tx_power: int | None
 
 
 async def receive_scan_event(link: RadioLink, event: ScanEvent) -> None:
@@ -354,7 +356,9 @@ async def scan_extended(
     ):
         return
 
-    observation = _Observation(packet, received, ext, channel, address, identity, sid)
+    observation = _Observation(
+        packet, received, ext, channel, address, identity, sid, primary.tx_power
+    )
     await _report_advertisement(link, scan, observation, target, target_matches)
 
 
@@ -398,6 +402,10 @@ def _decode_primary(
         adi=primary.adi if primary.aux_ptr is not None else None,
         sync_info=None,
         cte=None,
+        # TxPower with AuxPtr is RFU on a Coded primary (Tables 2.4 and 2.10).
+        tx_power=None
+        if primary.aux_ptr and packet.phy == Phy.LE_CODED
+        else primary.tx_power,
         acad=b'',
         data=b'',
     )
@@ -455,8 +463,13 @@ async def _report_advertisement(
     def scanning():
         return link.scan is scan
 
-    data, status, power = await collect_chain(
-        link.radio, link.resource, observed.packet, ext, is_current=scanning
+    advertisement = await collect_chain(
+        link.radio,
+        link.resource,
+        observed.packet,
+        ext,
+        is_current=scanning,
+        primary_tx_power=observed.primary_tx_power,
     )
     if not scanning():
         return
@@ -468,27 +481,27 @@ async def _report_advertisement(
     if target is not None:
         flags |= AdvertisingProperties.DIRECTED_ADVERTISING
 
-    def report(packet, data, status, power, *, response=False):
+    def report(packet: Received, data: ChainFragment, *, response=False):
         link.listener.on_advertisement(
             observed.identity,
-            data,
-            packet.rssi,
+            data.data,
+            data.rssi,
             AdvertisingReport(
                 flags | AdvertisingProperties.SCAN_RESPONSE if response else flags,
-                status,
+                data.status,
                 primary_coding=observed.primary.coding,
                 secondary_coding=packet.coding if channel is not None else 0,
                 adi=ext.adi,
             ),
             observed.sid,
             ext.sync_info.interval if ext.sync_info and not response else 0,
-            power,
+            data.tx_power,
             target=target,
             primary_phy=observed.primary.phy,
             secondary_phy=observed.packet.phy if channel is not None else 0,
         )
 
-    report(observed.packet, data, status, power)
+    report(observed.packet, advertisement)
     if (
         not scanning()
         or not scan.active
@@ -502,11 +515,11 @@ async def _report_advertisement(
     )
     if result is not None:
         packet, response = result
-        data, status, power = await collect_chain(
+        response_data = await collect_chain(
             link.radio, link.resource, packet, response, is_current=scanning
         )
         if scanning():
-            report(packet, data, status, power, response=True)
+            report(packet, response_data, response=True)
 
 
 async def _request_scan_response(
