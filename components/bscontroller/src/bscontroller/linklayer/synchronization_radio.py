@@ -26,7 +26,7 @@ from bscontroller.linklayer.pawr import RESPONSE_TX_POWER_DBM
 from bscontroller.linklayer.results import ConnectionAccepted, PeriodicPacketReceived
 from bscontroller.linklayer.scheduler import RadioPriority
 from bscontroller.linklayer.state import Role
-from bscontroller.linklayer.timing import auxiliary_window_delay_us, window_widening
+from bscontroller.linklayer.timing import auxiliary_window_delay_us
 from bscontroller.radio.base import RADIO_SWITCH_TIME_US
 
 if TYPE_CHECKING:
@@ -52,25 +52,22 @@ async def periodic_receive(
     sync.apply_channel_map()
     info = sync.info
     assert info is not None
-    widening = (
-        window_widening(sync.next_us - sync.last_rx_us, info.sca)
-        + sync.transfer_widening_us
+    widening = sync.receive_window_widening(
+        sync.next_us, local_sca=link.sleep_clock_accuracy
     )
     # Search on both sides of the predicted anchor, allowing for clock drift,
     # SyncInfo offset quantization and time needed to recognize the Access Address.
+    start = max(link.now_us + 1, sync.next_us - widening)
     window_end = sync.next_us + widening + info.unit_us + sync.phy.address_us
     if window_end <= link.now_us or not link.resource.admit(
-        sync,
-        max(link.now_us + 1, sync.next_us - widening),
-        window_end,
-        RadioPriority.PERIODIC_RX,
+        sync, start, window_end, RadioPriority.PERIODIC_RX
     ):
         synchronization.completed(sync, missed_until_us=window_end)
         return
     packet = await link.radio.receive(
         channel_selection_2(sync.counter, info.access_address, info.channel_map),
         window_end,
-        start_us=max(link.now_us + 1, sync.next_us - widening),
+        start_us=start,
         access_address=info.access_address,
         crc_init=info.crc_init,
         phy=sync.phy,
@@ -114,14 +111,14 @@ async def subevent_receive(
     resource: RadioResourceManager,
     sync: PeriodicSync,
     subevent: int,
+    *,
+    local_sca: int,
 ) -> tuple[Received, int] | None:
     """Listen in a synchronized subevent (Core Vol 6, Part B, 4.4.5.1.2)."""
     pawr, info = sync.pawr, sync.info
     assert pawr is not None and info is not None
     target = sync.next_us + pawr.timing.subevent_offset_us(subevent)
-    widening = (
-        window_widening(target - sync.last_rx_us, info.sca) + sync.transfer_widening_us
-    )
+    widening = sync.receive_window_widening(target, local_sca=local_sca)
     window_end = target + widening + info.unit_us + sync.phy.address_us
     start = max(radio.now_us + 1, target - widening)
     if window_end <= radio.now_us or not resource.admit(

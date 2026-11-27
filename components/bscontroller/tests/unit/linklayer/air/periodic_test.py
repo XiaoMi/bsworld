@@ -775,6 +775,25 @@ def test_sync_reports_chain_in_fragments(iut):
     iut.ut_rx(PERIODIC_REPORT, data=b'tail', data_status=0, rssi=-69)
 
 
+def test_periodic_receive_window_follows_the_current_sleep_clock_accuracy(iut):
+    """Receive a periodic packet early by 50 us after switching to 500 ppm
+    (Vol 6, Part B, 4.2.4 and 4.4.5.1).
+    """
+    train = Train(iut)
+    establish(iut, train)
+    drain_periodic(iut)
+    iut.ut(hci.HCI_LE_Modify_Sleep_Clock_Accuracy_Command(1))
+
+    anchor = train.anchor_us
+    train.anchor_us -= 50
+    train.send(b'early')
+    iut.run_until(anchor + 2_000)
+
+    iut.ut_rx(PERIODIC_REPORT, data=b'early')
+    # 100 ms at 50 ppm peer + 500 ppm local, plus 16 us of jitter.
+    assert iut.radio.listens[-1][0] == anchor - 71
+
+
 @pytest.mark.parametrize('skip', [0, 2])
 def test_skip_is_applied_only_after_establishment(iut, skip):
     """Periodic skip reduces listens only after the sync is established.
