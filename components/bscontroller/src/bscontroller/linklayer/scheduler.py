@@ -33,12 +33,6 @@ class RadioReservation:
     interval_fraction: int = 0
     start_fraction: int = 0
 
-    @property
-    def max_interval_us(self) -> int | None:
-        if self.interval_us is None:
-            return None
-        return self.interval_us + bool(self.interval_fraction)
-
     def window_after(self, time_us: int) -> tuple[int, int] | None:
         """Return the active or next window, or None after a one-shot window ends."""
         if self.interval_us is None:

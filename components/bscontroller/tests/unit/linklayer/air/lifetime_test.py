@@ -563,10 +563,8 @@ def test_advertising_event_waits_for_a_free_radio_gap(link):
 
 
 @pytest.mark.parametrize('recurring', [True, False], ids=['no-gap', 'one-shot-only'])
-def test_one_shot_reservation_does_not_extend_advertising_search(
-    link, monkeypatch, recurring
-):
-    """Use a finite search horizon while still avoiding the one-shot window."""
+def test_reservations_do_not_extend_advertising_search(link, monkeypatch, recurring):
+    """Use one advertising interval even with long periodic reservations."""
     item = Advertising(
         SELF,
         handle=0,
@@ -581,14 +579,18 @@ def test_one_shot_reservation_does_not_extend_advertising_search(
     start = link.radio.earliest_start_us(37, item.primary_phy, transmit=True)
     one_shot = RadioReservation(start, 80, priority=RadioPriority.PERIODIC_RX)
     reservations = [one_shot]
-    period = 7_500
     if recurring:
-        reservations.append(RadioReservation(start, 6_000, period))
+        reservations.extend(
+            (
+                RadioReservation(start, 6_000, 7_500),
+                RadioReservation(start, 80, 41_000_000_000, RadioPriority.PERIODIC_RX),
+            )
+        )
     link.resource = RadioResourceManager(lambda: link.now_us, lambda _: reservations)
 
     def bounded_gap(reserved, start_us, duration_us, latest_us):
         # Check the bound before running the search so a regression fails promptly.
-        assert latest_us - start_us == (period if recurring else item.interval_us)
+        assert latest_us - start_us == item.interval_us
         return first_radio_gap(reserved, start_us, duration_us, latest_us)
 
     monkeypatch.setattr(advertiser, 'first_radio_gap', bounded_gap)
