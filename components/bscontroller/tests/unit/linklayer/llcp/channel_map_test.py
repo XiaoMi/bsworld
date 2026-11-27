@@ -424,7 +424,7 @@ def test_min_used_central_rem(narrow, rx_phy, phys):
         narrow.lt_rx_q_is_empty()
     assert connection.parameters.channel_map == 0x03
     # Indication only; no response timer and no Host event.
-    assert narrow.controls.deadline_us == 0
+    assert narrow.controls.next_deadline_us == 0
     narrow.ut_rx_q_is_empty()
 
 
@@ -674,7 +674,7 @@ def test_min_used_periph_loc(peripheral):
     peripheral.lt_rx(
         Opcode.LL_MIN_USED_CHANNELS_IND, min_used(PHY_1M, LL_DATA_CHANNEL_COUNT)
     )
-    assert peripheral.controls.deadline_us == 0
+    assert peripheral.controls.next_deadline_us == 0
     peripheral.tx_ack()
     peripheral.lt_rx_q_is_empty()
 

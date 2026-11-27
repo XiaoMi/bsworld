@@ -377,7 +377,6 @@ class Encryption:
                     self.last_authenticated_us = self.connection.radio.now_us
                     self.stop_ping()
                 return plaintext
-        wire, authenticated = payload, self.security.rx_enabled
         if self.security.rx_enabled:
             assert self.security.cipher is not None
             try:

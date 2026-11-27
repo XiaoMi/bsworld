@@ -240,7 +240,7 @@ def test_set_info_transfer_waits_for_the_first_aux_sync_ind(iut, role, local_sca
     item = periodic_set(dut)
     dut.set_peer_features(RECIPIENT)
     assert set_info_transfer(dut) == ErrorCode.SUCCESS
-    assert dut.controls.deadline_us == 0
+    assert dut.controls.next_deadline_us == 0
     first_us = item.periodic_next_us
     while dut.connection.anchor_us <= first_us:
         dut.run_events(1)
