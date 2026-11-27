@@ -17,6 +17,7 @@ import pytest
 
 from bscontroller.linklayer import (
     LL_RESPONSE_TIMEOUT_US,
+    PDU_DATA_MIC_SIZE,
     PDU_DATA_PAYLOAD_SIZE_MAX,
     PDU_DATA_PAYLOAD_SIZE_MIN,
     PDU_DATA_PAYLOAD_TIME_CODED_MAX_US,
@@ -33,7 +34,12 @@ from bscontroller.linklayer.data_length import (
 )
 from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.instant import InstantUpdate
-from bscontroller.radio.base import Phy, Received
+from bscontroller.radio.base import (
+    PHY_CODED_S2_FACTOR,
+    PHY_CODED_S8_FACTOR,
+    Phy,
+    Received,
+)
 from tests.unit.linklayer.llcp.harness import (
     CENTRAL,
     PHY_1M,
@@ -67,6 +73,46 @@ def negotiate(dut, *, rx=MAX, rx_time=MAX_TIME, tx=MAX, tx_time=MAX_TIME):
     dut.lt_tx(length(Opcode.LL_LENGTH_RSP, rx, rx_time, tx, tx_time))
     dut.event_done()
     return lengths(dut)
+
+
+@pytest.mark.parametrize('encrypted', [False, True])
+@pytest.mark.parametrize(
+    'phy,coding',
+    [
+        (Phy.LE_1M, PHY_CODED_S8_FACTOR),
+        (Phy.LE_2M, PHY_CODED_S8_FACTOR),
+        (Phy.LE_CODED, PHY_CODED_S2_FACTOR),
+        (Phy.LE_CODED, PHY_CODED_S8_FACTOR),
+    ],
+)
+def test_packet_limit_matches_on_air_byte_boundaries(central, phy, coding, encrypted):
+    """Check both sides of payload boundaries, including the MIC on nonempty PDUs."""
+    procedure = lengths(central)
+    airtimes = [
+        phy.airtime_us(
+            PDU_HEADER_SIZE + count + (PDU_DATA_MIC_SIZE if encrypted and count else 0),
+            coding,
+        )
+        for count in range(MAX + 1)
+    ]
+    for cap in (0, 1, MIN, MAX):
+        for count in (0, 1, MIN, MAX - 1, MAX):
+            for limit_us in (airtimes[count] - 1, airtimes[count], airtimes[count] + 1):
+                if limit_us < airtimes[0]:
+                    with pytest.raises(StopIteration):
+                        procedure.packet_limit(
+                            phy, limit_us, cap, coding, encrypted=encrypted
+                        )
+                else:
+                    expected = max(
+                        size for size in range(cap + 1) if airtimes[size] <= limit_us
+                    )
+                    assert (
+                        procedure.packet_limit(
+                            phy, limit_us, cap, coding, encrypted=encrypted
+                        )
+                        == expected
+                    )
 
 
 # ---------------------------------------------------------------------------

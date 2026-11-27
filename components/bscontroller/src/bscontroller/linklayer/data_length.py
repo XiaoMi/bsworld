@@ -166,17 +166,18 @@ class DataLengthProcedure(LocalProcedure):
         """Largest payload that fits the effective packet time on a PHY (Core Vol 6,
         Part B, 4.5.10).
         """
-        return next(
-            size
-            for size in range(octets, -1, -1)
-            if phy.airtime_us(
-                PDU_HEADER_SIZE
-                + size
-                + (PDU_DATA_MIC_SIZE if encrypted and size else 0),
-                coding,
-            )
-            <= time_us
-        )
+        if octets < 0:
+            raise StopIteration
+        mic_size = PDU_DATA_MIC_SIZE if encrypted and octets else 0
+        if phy.airtime_us(PDU_HEADER_SIZE + octets + mic_size, coding) <= time_us:
+            return octets
+        empty_time_us = phy.airtime_us(PDU_HEADER_SIZE, coding)
+        if time_us < empty_time_us:
+            raise StopIteration
+        # Airtime grows by a fixed amount per byte on each PHY and coding.
+        # An empty data PDU fits without a MIC, including on encrypted links.
+        octet_time_us = phy.airtime_us(PDU_HEADER_SIZE + 1, coding) - empty_time_us
+        return max(0, (time_us - empty_time_us) // octet_time_us - mic_size)
 
     def tx_payload_limit(self) -> int:
         """Payload limit during pending PHY or interval changes (Core Vol 6, Part B,
