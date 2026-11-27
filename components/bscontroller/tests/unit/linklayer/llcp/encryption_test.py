@@ -19,7 +19,7 @@ from struct import pack
 
 import pytest
 
-from bscontroller.linklayer import LL_CONN_INTERVAL_UNIT_US
+from bscontroller.linklayer import LL_CONN_INTERVAL_UNIT_US, LL_RESPONSE_TIMEOUT_US
 from bscontroller.linklayer.encryption import State
 from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.packet_control import ReceiveContext
@@ -1116,7 +1116,7 @@ def test_other_control_waits_for_encryption(central, payload):
         - After IDLE the queued control PDU is transmitted.
     """
     central.host_start('prepare_encryption', RAND, EDIV, LTK)
-    central.connection.enqueue_control(payload)
+    central.connection.llcp.respond(payload)
     central.event_prepare()
     central.lt_rx(Opcode.LL_ENC_REQ)
     central.tx_ack()
@@ -1149,7 +1149,7 @@ def test_phy_update_completes_before_encryption(central):
     central.tx_ack()
     central.ut_rx(hci.HCI_LE_PHY_Update_Complete_Event, status=0)
     # A completed exchange cannot later authorize a delayed UNKNOWN_RSP.
-    assert not central.connection.llcp.local_exchanges
+    assert not central.connection.llcp.local_procedure_busy
 
 
 @pytest.mark.parametrize(
@@ -1183,7 +1183,7 @@ def test_queued_pdu_restarts_timer_but_retransmission_does_not(central, state, o
     encryption = central.encryption
     encryption.state = state
     central.elapse(100)
-    encryption.enqueue(opcode)
+    encryption._send(opcode)
     deadline = encryption.deadline_us
     assert deadline == central.radio.now_us + 40_000_000
     central.elapse(100)
@@ -1204,9 +1204,8 @@ def test_ping_loc_before_authenticated_payload_timeout(central):
     """LE Ping fires before the authenticated payload timeout and then restarts it.
 
     Purpose: Verify that on an encrypted link an LE Ping is scheduled one ping
-    reserve before the Authenticated Payload Timeout, the ping itself carries no
-    response timer, and any authenticated packet restarts the payload timer and
-    clears the pending ping (5.1.8, 5.4).
+    reserve before the Authenticated Payload Timeout. LL_PING_RSP completes
+    the procedure and its valid MIC restarts the payload timer (5.1.8, 5.2, 5.4).
 
     Steps:
         1. Start on an encrypted link; read the authenticated timeout.
@@ -1215,7 +1214,7 @@ def test_ping_loc_before_authenticated_payload_timeout(central):
 
     Expected:
         - Nothing goes out before the scheduled time.
-        - The ping has no response timer of its own (deadline 0).
+        - Queuing LL_PING_REQ starts T_PRT.
         - After the response the ping is no longer pending and the payload timer
           is rescheduled one ping reserve before the next timeout; the Host sees
           nothing.
@@ -1226,13 +1225,14 @@ def test_ping_loc_before_authenticated_payload_timeout(central):
     assert not central.elapse(timeout - ping_reserve(central) - 1)
     central.lt_rx_q_is_empty()
     central.elapse(1)
-    # The ping request has no response timer of its own.
-    assert central.encryption.deadline_us == 0
+    assert central.connection.llcp.response_deadline_us == (
+        central.radio.now_us + LL_RESPONSE_TIMEOUT_US
+    )
     central.event_prepare()
     central.lt_rx(Opcode.LL_PING_REQ)
     central.lt_tx(pdu(Opcode.LL_PING_RSP))
     central.event_done()
-    # Any authenticated packet restarts the payload timer and ends the ping.
+    assert central.connection.llcp.response_deadline_us == 0
     assert not central.encryption.ping_pending
     assert central.encryption.next_deadline_us == (
         central.radio.now_us + timeout - ping_reserve(central)
@@ -1254,7 +1254,7 @@ def test_ping_unanswered_reports_timeout_and_keeps_link(central):
 
     Expected:
         - Host gets Authenticated Payload Timeout Expired for the handle.
-        - The link is not closed and no ping stays pending.
+        - The link stays open and awaits LL_PING_RSP until T_PRT expires.
     """
     central.enable_encryption()
     central.expire_response_timer()
@@ -1267,7 +1267,13 @@ def test_ping_unanswered_reports_timeout_and_keeps_link(central):
         hci.HCI_Authenticated_Payload_Timeout_Expired_Event,
         connection_handle=central.handle,
     )
-    assert not central.connection.closed and not central.encryption.ping_pending
+    assert not central.connection.closed and central.encryption.ping_pending
+    deadline = central.connection.llcp.response_deadline_us
+    assert central.elapse(deadline - central.radio.now_us)
+    central.ut_rx(
+        hci.HCI_Disconnection_Complete_Event,
+        reason=ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR,
+    )
 
 
 @pytest.mark.parametrize('encrypt', [True, False], ids=['encrypted', 'plain'])

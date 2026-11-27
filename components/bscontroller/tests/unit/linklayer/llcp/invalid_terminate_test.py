@@ -98,7 +98,7 @@ def test_unsupported_and_undefined_rem(iut, role, opcode):
     dut.tx_ack()
     dut.event_done()
     dut.ut_rx_q_is_empty()
-    assert not dut.connection.closed and not dut.controls.busy
+    assert not dut.connection.closed and not dut.connection.llcp.local_procedure_busy
 
 
 @pytest.mark.parametrize('role', ROLES)
@@ -223,7 +223,10 @@ def test_wrong_length_is_unknown_and_keeps_link(central, payload):
     """
     central.lt_tx(payload)
     central.lt_rx(Opcode.LL_UNKNOWN_RSP, unknown_rsp(payload[0]))
-    assert not central.connection.closed and not central.controls.busy
+    assert (
+        not central.connection.closed
+        and not central.connection.llcp.local_procedure_busy
+    )
 
 
 def test_empty_control_pdu_is_dropped(central):
@@ -428,8 +431,8 @@ def test_terminate_rem_during_procedure(iut, role):
     dut.ut_rx(hci.HCI_LE_Read_Remote_Features_Complete_Event, status=REMOTE)
     dut.ut_rx(DISCONNECTED, reason=REMOTE)
     assert not dut.controls.feature_request
-    assert dut.controls.next_deadline_us == 0
-    assert not dut.connection.llcp.local_exchanges
+    assert dut.connection.llcp.response_deadline_us == 0
+    assert not dut.connection.llcp.local_procedure_busy
 
 
 @pytest.mark.parametrize('more', [False, True])

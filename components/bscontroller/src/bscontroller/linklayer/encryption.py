@@ -23,14 +23,19 @@ from bscontroller.linklayer import (
 )
 from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.packet_security import PacketCipher
-from bscontroller.linklayer.procedure import PROCEDURE_COLLISION, ProcedureContext
+from bscontroller.linklayer.procedure import (
+    PROCEDURE_COLLISION,
+    DeferredProcedure,
+    ProcedureContext,
+    ProcedureOrigin,
+)
 from bscontroller.linklayer.state import Role
 from bscontroller.linklayer.timing import LL_AUTHENTICATED_PAYLOAD_TIMEOUT_DEFAULT_US
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.connection import Connection
+    from bscontroller.linklayer.connection_event import Outbound
     from bscontroller.linklayer.listener import EncryptionListener
-    from bscontroller.linklayer.procedure import ProcedureResponseTimer
 
 Opcode = ControlOpcode
 ENC_REQUEST = struct.Struct(
@@ -71,7 +76,7 @@ class Encryption:
         self.security = connection.packet_security
         self.enabled = False
         self.refresh = False
-        self.response_timer: ProcedureResponseTimer | None = None
+        self.procedure: ProcedureContext | None = None
         self.ltk = b''
         self.rand = b''
         self.ediv = 0
@@ -79,14 +84,16 @@ class Encryption:
         self.auth_timeout_us = LL_AUTHENTICATED_PAYLOAD_TIMEOUT_DEFAULT_US
         self.last_authenticated_us = 0
         self.ping_context: ProcedureContext | None = None
+        self.ping_packet: Outbound | None = None
 
     @property
     def ping_pending(self) -> bool:
         return self.ping_context is not None and self.ping_context.active
 
-    def stop_ping(self) -> None:
+    def _finish_ping(self) -> None:
         if self.ping_context is not None:
             self.ping_context.finish()
+        self.ping_packet = None
 
     def set_authenticated_timeout(self, timeout_us: int) -> None:
         """A Host write restarts the running timer (Core Vol 6, Part B, 5.4)."""
@@ -104,12 +111,22 @@ class Encryption:
 
     @property
     def deadline_us(self) -> int:
-        return self.response_timer.deadline_us if self.response_timer is not None else 0
+        return self.procedure.deadline_us if self.procedure is not None else 0
 
-    def enqueue(self, opcode: int, payload: bytes = b'') -> None:
-        if self.busy:
-            self.response_timer = self.connection.llcp.response_timer
-        self.connection.enqueue_control(bytes([opcode]) + payload)
+    def _stop_procedure(self) -> None:
+        if self.procedure is not None:
+            self.procedure.finish()
+            self.procedure = None
+
+    def _send(self, opcode: int, payload: bytes = b'') -> None:
+        if self.procedure is None:
+            origin = (
+                ProcedureOrigin.LOCAL
+                if self.connection.role == Role.CENTRAL
+                else ProcedureOrigin.REMOTE
+            )
+            self.procedure = ProcedureContext(opcode, frozenset(), None, origin=origin)
+        self.connection.llcp.send(self.procedure, bytes([opcode]) + payload)
 
     def start(self, rand: bytes, ediv: int, ltk: bytes) -> None:
         """Host-requested encryption start, or refresh via the Encryption Pause
@@ -117,10 +134,10 @@ class Encryption:
         """
         self.rand, self.ediv, self.ltk = rand, ediv, ltk
         self.refresh = self.enabled
-        self.response_timer = None
+        self._stop_procedure()
         if self.refresh:
             self.state = State.PAUSE_RSP
-            self.enqueue(Opcode.LL_PAUSE_ENC_REQ)
+            self._send(Opcode.LL_PAUSE_ENC_REQ)
         else:
             self.request()
 
@@ -132,8 +149,8 @@ class Encryption:
         self.skd_c = generator.randbytes(LL_ENCRYPTION_SKD_HALF_SIZE)
         self.iv_c = generator.randbytes(LL_ENCRYPTION_IV_HALF_SIZE)
         self.state = State.ENC_RSP
-        self.response_timer = None
-        self.enqueue(
+        self._stop_procedure()
+        self._send(
             Opcode.LL_ENC_REQ,
             ENC_REQUEST.pack(self.rand, self.ediv, self.skd_c, self.iv_c),
         )
@@ -159,7 +176,7 @@ class Encryption:
             self.state = State.REJECT
             # T_terminate now owns this failure; the aborted encryption timer must not
             # win.
-            self.response_timer = None
+            self._stop_procedure()
             self.connection.terminate(
                 ErrorCode.PIN_OR_KEY_MISSING_ERROR,
                 status=ErrorCode.PIN_OR_KEY_MISSING_ERROR,
@@ -171,7 +188,7 @@ class Encryption:
             )
             payload = bytes([Opcode.LL_ENC_REQ]) if extended else b''
             self.state = State.REJECT
-            self.enqueue(
+            self._send(
                 Opcode.LL_REJECT_EXT_IND if extended else Opcode.LL_REJECT_IND,
                 payload + bytes([ErrorCode.PIN_OR_KEY_MISSING_ERROR]),
             )
@@ -179,17 +196,17 @@ class Encryption:
         self.ltk = ltk
         self.install()
         self.state = State.START_RSP
-        self.enqueue(Opcode.LL_START_ENC_REQ)
+        self._send(Opcode.LL_START_ENC_REQ)
 
     def finish(self, status: int = ErrorCode.SUCCESS) -> None:
         """Complete the procedure and report Encryption Change or Key Refresh Complete
         (Vol 4, Part E, 7.7.8, 7.7.39).
         """
         self.state = State.IDLE
-        self.response_timer = None
+        self._stop_procedure()
         self.enabled = not status
         self.last_authenticated_us = self.connection.radio.now_us
-        self.stop_ping()
+        self._finish_ping()
         if status and self.connection.peer_rpa is not None:
             self.connection.link.privacy.encryption_failed(self.connection.peer)
         self.listener.on_encryption_changed(self.connection, status, self.refresh)
@@ -218,7 +235,7 @@ class Encryption:
                 )
                 return True
             if self.state not in (State.IDLE, State.RESTART):
-                self.connection.enqueue_control(
+                self.connection.llcp.respond(
                     bytes([Opcode.LL_REJECT_EXT_IND, opcode, PROCEDURE_COLLISION])
                 )
                 return True
@@ -231,7 +248,7 @@ class Encryption:
             self.state = State.KEY
             # ENC_RSP starts T_PRT while the Host resolves the LTK. User ACL stays
             # queued in KEY even if the peer continues sending Empty keepalive PDUs.
-            self.enqueue(Opcode.LL_ENC_RSP, ENC_RESPONSE.pack(self.skd_p, self.iv_p))
+            self._send(Opcode.LL_ENC_RSP, ENC_RESPONSE.pack(self.skd_p, self.iv_p))
             self.listener.on_long_term_key_request(
                 self.connection, self.rand, self.ediv
             )
@@ -256,7 +273,7 @@ class Encryption:
         ):
             self.security.tx_enabled = self.security.rx_enabled = True
             self.state = State.START_RSP
-            self.enqueue(Opcode.LL_START_ENC_RSP)
+            self._send(Opcode.LL_START_ENC_RSP)
             return True
         if (
             opcode == Opcode.LL_START_ENC_RSP
@@ -267,7 +284,7 @@ class Encryption:
                 # Queue the final encrypted response ahead of the resumed ACL data.
                 # ARQ retains its ciphertext through retries (Vol 6, Part B, 4.5.9).
                 self.security.tx_enabled = True
-                self.connection.enqueue_control(
+                self.connection.llcp.respond(
                     bytes([Opcode.LL_START_ENC_RSP]), priority=True
                 )
             self.finish()
@@ -281,7 +298,7 @@ class Encryption:
         ):
             self.refresh = True
             self.state = State.PAUSE_ACK
-            self.enqueue(Opcode.LL_PAUSE_ENC_RSP)
+            self._send(Opcode.LL_PAUSE_ENC_RSP)
             return True
         if opcode == Opcode.LL_PAUSE_ENC_RSP and not data:
             if central and self.state == State.PAUSE_RSP:
@@ -289,7 +306,7 @@ class Encryption:
                 # changes RX mode after sending its own response to accept that step.
                 self.security.tx_enabled = self.security.rx_enabled = False
                 self.state = State.PAUSE_ACK
-                self.enqueue(Opcode.LL_PAUSE_ENC_RSP)
+                self._send(Opcode.LL_PAUSE_ENC_RSP)
                 return True
             if not central and self.state == State.PAUSE_ACK:
                 self.security.tx_enabled = self.security.rx_enabled = False
@@ -315,9 +332,23 @@ class Encryption:
                 self.finish(data[-1])
                 return True
         if opcode == Opcode.LL_PING_REQ and not data:
-            self.enqueue(Opcode.LL_PING_RSP)
+            self.connection.llcp.respond(bytes([Opcode.LL_PING_RSP]))
             return True
-        return opcode == Opcode.LL_PING_RSP and not data
+        if opcode == Opcode.LL_PING_RSP and not data:
+            self._finish_ping()
+            return True
+        if (
+            self.ping_pending
+            and self.ping_context.transmitted
+            and (
+                payload == bytes([Opcode.LL_UNKNOWN_RSP, Opcode.LL_PING_REQ])
+                or len(payload) == 3
+                and payload[:2] == bytes([Opcode.LL_REJECT_EXT_IND, Opcode.LL_PING_REQ])
+            )
+        ):
+            self._finish_ping()
+            return True
+        return False
 
     def sent(self, payload: bytes) -> None:
         if payload[0] == Opcode.LL_ENC_RSP and self.connection.role == Role.PERIPHERAL:
@@ -343,13 +374,20 @@ class Encryption:
             # Core Vol 6, Part B, 5.1.3.1: keep Host ACL paused until rejection is
             # acknowledged.
             self.state = State.IDLE
-            self.response_timer = None
+            self._stop_procedure()
         elif (
             payload == bytes([Opcode.LL_PAUSE_ENC_RSP])
             and self.connection.role == Role.CENTRAL
             and self.state == State.PAUSE_ACK
         ):
             self.request()
+
+    def _authenticated_packet_received(self) -> None:
+        self.last_authenticated_us = self.connection.radio.now_us
+        if self.ping_packet is not None and self.connection.llcp.cancel_queued(
+            self.ping_packet
+        ):
+            self._finish_ping()
 
     def decrypt(self, header: int, payload: bytes, *, duplicate: bool) -> bytes | None:
         """Authenticate without committing ACK or procedure state (Core Vol 6, Part E,
@@ -374,8 +412,7 @@ class Encryption:
                 )
             ):
                 if authenticated:
-                    self.last_authenticated_us = self.connection.radio.now_us
-                    self.stop_ping()
+                    self._authenticated_packet_received()
                 return plaintext
         if self.security.rx_enabled:
             assert self.security.cipher is not None
@@ -388,8 +425,7 @@ class Encryption:
                     ErrorCode.CONNECTION_TERMINATED_DUE_TO_MIC_FAILURE_ERROR
                 )
                 return None
-            self.last_authenticated_us = self.connection.radio.now_us
-            self.stop_ping()
+            self._authenticated_packet_received()
         return payload
 
     @property
@@ -397,12 +433,11 @@ class Encryption:
         """Send LL_PING_REQ early enough for a reply within authenticatedPayloadTO (Core
         Vol 6, Part B, 5.1.8, 5.4).
         """
-        if self.busy:
-            return self.deadline_us
-        if not self.enabled:
+        if self.busy or not self.enabled:
             return 0
         timeout_us = self.auth_timeout_us
-        if self.ping_pending or self.connection.controls.busy:
+        llcp = self.connection.llcp
+        if llcp.local_procedure_busy or llcp.has_pending('ping'):
             return self.last_authenticated_us + timeout_us
         reserve_us = min(
             timeout_us // 2,
@@ -412,22 +447,23 @@ class Encryption:
         )
         return self.last_authenticated_us + timeout_us - reserve_us
 
-    def check_timeout(self) -> bool:
-        """T_PRT for encryption procedures, then the authenticated payload timeout (Core
-        Vol 6, Part B, 5.2, 5.4).
-        """
+    def check_authenticated_timeout(self) -> None:
+        """Notify the Host at authenticatedPayloadTO (Core Vol 6, Part B, 5.4)."""
         now = self.connection.radio.now_us
-        if self.busy and self.deadline_us and now >= self.deadline_us:
-            self.connection.complete(ErrorCode.LMP_OR_LL_RESPONSE_TIMEOUT_ERROR)
-            return True
-        if self.enabled and not self.busy and now >= self.next_deadline_us:
-            if self.ping_pending or self.connection.controls.busy:
-                self.listener.on_authenticated_payload_timeout(self.connection)
-                self.last_authenticated_us = now
-                self.stop_ping()
-            else:
-                self.enqueue(Opcode.LL_PING_REQ)
-                self.ping_context = ProcedureContext(
-                    Opcode.LL_PING_REQ, frozenset((Opcode.LL_PING_RSP,)), self
-                )
-        return False
+        if self.busy or not self.enabled or now < self.next_deadline_us:
+            return
+        if now >= self.last_authenticated_us + self.auth_timeout_us:
+            self.listener.on_authenticated_payload_timeout(self.connection)
+            self.last_authenticated_us = now
+        else:
+            self.connection.llcp.initiate(DeferredProcedure('ping', self._start_ping))
+
+    def _start_ping(self) -> None:
+        if not self.enabled or self.connection.radio.now_us < self.next_deadline_us:
+            return
+        self.ping_context = ProcedureContext(
+            Opcode.LL_PING_REQ, frozenset((Opcode.LL_PING_RSP,)), self.control
+        )
+        self.ping_packet = self.connection.llcp.send(
+            self.ping_context, bytes([Opcode.LL_PING_REQ])
+        )

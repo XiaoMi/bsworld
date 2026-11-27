@@ -582,7 +582,7 @@ def test_empty_start_does_not_relabel_queued_or_control(central):
     connection = central.connection
     connection.enqueue_acl(False, b'older')
     connection.enqueue_acl(False, b'')
-    connection.enqueue_control(bytes([Opcode.LL_PING_REQ]))
+    connection.llcp.respond(bytes([Opcode.LL_PING_REQ]))
     connection.enqueue_acl(True, b'new')
     assert [(item.llid, item.payload) for item in connection.event.queue] == [
         (LlId.START, b'older'),
@@ -677,8 +677,8 @@ def test_cancel_with_identical_control_pdus(central):
     """
     connection = central.connection
     payload = bytes([Opcode.LL_PING_RSP])
-    first = connection.enqueue_control(payload)
-    second = connection.enqueue_control(payload)
+    first = connection.llcp.respond(payload)
+    second = connection.llcp.respond(payload)
     assert connection.event.cancel_queued_control(second)
     assert list(connection.event.queue) == [first]
     central.lt_rx(Opcode.LL_PING_RSP)

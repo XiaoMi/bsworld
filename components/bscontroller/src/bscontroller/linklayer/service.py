@@ -602,7 +602,7 @@ class LinkLayerService:
         clock = connection.controls.clock_accuracy
         if not clock.peer_supports_update:
             return PreparedProcedure(ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
-        if clock.pending or clock.queued is not None:
+        if clock.pending or connection.llcp.has_pending('clock_accuracy'):
             return PreparedProcedure(DISALLOWED)
         return PreparedProcedure(SUCCESS, clock.queue_read)
 
@@ -620,7 +620,11 @@ class LinkLayerService:
             return SUCCESS
         connection = next(iter(connections.values()))
         clock = connection.controls.clock_accuracy
-        if not connection.established or clock.pending or clock.queued is not None:
+        if (
+            not connection.established
+            or clock.pending
+            or connection.llcp.has_pending('clock_accuracy')
+        ):
             return ErrorCode.CONTROLLER_BUSY_ERROR
         if action == 1 and not clock.peer_supports_update:
             return DISALLOWED

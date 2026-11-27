@@ -36,6 +36,8 @@ from bscontroller.linklayer.scheduler import RadioReservation
 from bscontroller.linklayer.state import Role
 from bscontroller.radio.base import PHY_TIME_UNITS_PER_SECOND, Phy, Received
 
+from .llcp.harness import LlcpHarness
+
 HANDLE = 1
 INTERVAL_US = 10_000
 ANCHOR_US = 2000
@@ -284,6 +286,10 @@ def test_interleaved_cig_keeps_every_subevent_within_iso_interval():
 
 @pytest.fixture
 def pending_cis(connection):
+    return start_cis_creation(connection)
+
+
+def start_cis_creation(connection):
     connection.role = Role.CENTRAL
     connection.peer_features = LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM_PERIPHERAL
     connection.link.features |= LeFeatureMask.CONNECTED_ISOCHRONOUS_STREAM
@@ -303,26 +309,59 @@ def pending_cis(connection):
     assert status == ErrorCode.SUCCESS
     pair = ((handle, connection.handle),)
     assert manager.create_cis(pair) == ErrorCode.SUCCESS
-    manager.start_pending(connection)
+    connection.llcp.start_deferred()
     return manager, handle
 
 
-def check_queued_setup_timeout(connection, manager):
+def transmit_control(connection):
+    packet = connection.event.queue.popleft()
+    connection.llcp.sent(
+        packet.payload,
+        length=len(packet.payload),
+        first=True,
+        procedure=packet.procedure,
+    )
+    return packet
+
+
+def test_authenticated_payload_timeout_waits_behind_cis_creation(controller):
+    """Keep LE Ping behind the Central's active CIS Creation (Core 6.B.5, 5.4)."""
+    central = LlcpHarness(controller, Role.CENTRAL)
+    central.enable_encryption()
+    manager, _ = start_cis_creation(central.connection)
+    central.lt_rx(ControlOpcode.LL_CIS_REQ)
+    central.tx_ack()
+    assert manager.busy(central.connection)
+
+    encryption = central.encryption
+    expires = encryption.last_authenticated_us + encryption.auth_timeout_us
+    earliest_ping = expires - 2 * central.connection.listening_interval_us
+    assert not central.elapse(earliest_ping - central.radio.now_us)
+    central.lt_rx_q_is_empty()
+    assert not central.elapse(expires - central.radio.now_us)
+    central.ut_rx(
+        hci.HCI_Authenticated_Payload_Timeout_Expired_Event,
+        connection_handle=central.handle,
+    )
+    central.lt_rx_q_is_empty()
+    assert manager.busy(central.connection)
+
+
+def check_queued_setup_timeout(connection):
     deadline = connection.radio.now_us + LL_RESPONSE_TIMEOUT_US
     connection.radio.now_us += 2000
-    manager.sent(connection, connection.event.queue.popleft().payload)
+    transmit_control(connection)
     connection.radio.now_us = deadline - 1
-    manager.prepare()
+    assert not connection.llcp.check_timeout()
     assert not connection.closed
     connection.radio.now_us = deadline
-    manager.prepare()
+    assert connection.llcp.check_timeout()
     assert connection.closed
 
 
 def test_cis_request_timeout_starts_in_the_acl_queue(connection, pending_cis):
     """Run T_PRT from enqueue through a delayed first LL_CIS_REQ (Core 6.B.5.2)."""
-    manager, _ = pending_cis
-    check_queued_setup_timeout(connection, manager)
+    check_queued_setup_timeout(connection)
 
 
 def test_cis_response_timeout_starts_at_host_acceptance(connection, controller):
@@ -336,7 +375,7 @@ def test_cis_response_timeout_starts_at_host_acceptance(connection, controller):
     assert isinstance(event, hci.HCI_LE_CIS_Request_Event)
     connection.radio.now_us += 1000
     assert manager.accept_cis(event.cis_connection_handle) == ErrorCode.SUCCESS
-    check_queued_setup_timeout(connection, manager)
+    check_queued_setup_timeout(connection)
 
 
 @pytest.mark.asyncio
@@ -348,16 +387,14 @@ async def test_central_waits_for_first_cis_pdu_before_channel_map_update(
     """
     manager, handle = pending_cis
     queue = connection.event.queue
-    request = queue.popleft().payload
-    manager.sent(connection, request)
+    request = transmit_control(connection).payload
     connection.controls.request_channel_map(0x1F)
     connection.control(
         bytes([ControlOpcode.LL_CIS_RSP]) + CisRequest.decode(request).window.encode()
     )
-    indication = queue.popleft().payload
-    assert indication[0] == ControlOpcode.LL_CIS_IND
-    manager.sent(connection, indication)
-    manager.acknowledged(connection, indication)
+    indication = transmit_control(connection)
+    assert indication.opcode == ControlOpcode.LL_CIS_IND
+    connection.llcp.acknowledged(indication.payload, indication.procedure)
     connection.llcp.start_deferred()
     assert not queue
 
@@ -407,18 +444,14 @@ def test_cancel_pending_cis(connection, controller, pending_cis, request_sent):
     manager, handle = pending_cis
     request = CisRequest.decode(connection.event.queue[0].payload)
     if request_sent:
-        sent = connection.event.queue.popleft().payload
-        manager.sent(connection, sent)
+        transmit_control(connection)
 
     reason = ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR
     assert manager.disconnect(handle, reason) == ErrorCode.SUCCESS
     manager.prepare()
     if request_sent:
         assert not controller.events
-        manager.control(
-            connection,
-            bytes([ControlOpcode.LL_CIS_RSP]) + request.window.encode(),
-        )
+        connection.control(bytes([ControlOpcode.LL_CIS_RSP]) + request.window.encode())
         assert [item.payload for item in connection.event.queue] == [
             bytes(
                 [
@@ -466,22 +499,18 @@ def test_cis_termination_waits_for_local_procedure(
     manager, handle = pending_cis
     llcp = connection.llcp
     queue = connection.event.queue
-    request = queue.popleft().payload
-    manager.sent(connection, request)
+    request = transmit_control(connection).payload
     connection.control(
         bytes([ControlOpcode.LL_CIS_RSP]) + CisRequest.decode(request).window.encode()
     )
-    indication = queue.popleft().payload
-    manager.sent(connection, indication)
-    llcp.acknowledged(indication)
+    indication = transmit_control(connection)
+    llcp.acknowledged(indication.payload, indication.procedure)
     event = manager.event_for_handle(handle)
     if established:
         event.established = True
         manager._report_established(event)
         llcp.prepare_phy(hci.PhyBit.LE_2M, hci.PhyBit.LE_2M, 0).start()
-        request = queue.popleft().payload
-        assert request[0] == ControlOpcode.LL_PHY_REQ
-        llcp.sent(request, length=len(request), first=True)
+        assert transmit_control(connection).opcode == ControlOpcode.LL_PHY_REQ
 
     reason = ErrorCode.REMOTE_USER_TERMINATED_CONNECTION_ERROR
     assert manager.disconnect(handle, reason) == ErrorCode.SUCCESS
@@ -514,7 +543,8 @@ def test_cis_termination_waits_for_local_procedure(
     llcp.prepare_version().start()
     llcp.start_deferred()
     assert list(queue) == [termination] and not controller.events
-    llcp.acknowledged(queue.popleft().payload)
+    queue.popleft()
+    llcp.acknowledged(termination.payload, termination.procedure)
     (disconnected,) = controller.events
     assert isinstance(disconnected, hci.HCI_Disconnection_Complete_Event)
     assert disconnected.connection_handle == handle
@@ -533,13 +563,9 @@ def test_cis_creation_collides_with_frame_space(
     an incompatible new procedure closes the ACL.
     """
     manager, handle = pending_cis
-    sent = connection.event.queue.popleft().payload
-    request = CisRequest.decode(sent)
-    manager.sent(connection, sent)
+    request = CisRequest.decode(transmit_control(connection).payload)
     if peer_responded:
-        manager.control(
-            connection, bytes([ControlOpcode.LL_CIS_RSP]) + request.window.encode()
-        )
+        connection.control(bytes([ControlOpcode.LL_CIS_RSP]) + request.window.encode())
     frame_space = (
         bytes([ControlOpcode.LL_FRAME_SPACE_REQ])
         + FrameSpaceRequest(80, 1000, 1, 1).pack()

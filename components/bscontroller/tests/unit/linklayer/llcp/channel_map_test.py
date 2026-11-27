@@ -91,7 +91,7 @@ def test_chmu_central_loc(central):
     assert central.connection.parameters.channel_map == 0x1F
     # No Host notification for Channel Map Update.
     central.ut_rx_q_is_empty()
-    assert not central.controls.busy
+    assert not central.connection.llcp.local_procedure_busy
 
 
 def test_chmu_waits_for_cis_creation(iut, controller):
@@ -425,7 +425,7 @@ def test_min_used_central_rem(narrow, rx_phy, phys):
         narrow.lt_rx_q_is_empty()
     assert connection.parameters.channel_map == 0x03
     # Indication only; no response timer and no Host event.
-    assert narrow.controls.next_deadline_us == 0
+    assert narrow.connection.llcp.response_deadline_us == 0
     narrow.ut_rx_q_is_empty()
 
 

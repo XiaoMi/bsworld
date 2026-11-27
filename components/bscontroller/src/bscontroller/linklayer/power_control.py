@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import struct
 from bisect import bisect_left
-from collections import deque
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import TYPE_CHECKING
@@ -18,7 +17,11 @@ from bscontroller.linklayer import (
     ControlOpcode,
 )
 from bscontroller.linklayer.features import LeFeatureMask
-from bscontroller.linklayer.procedure import LocalProcedure, ProcedureContext
+from bscontroller.linklayer.procedure import (
+    DeferredProcedure,
+    LocalProcedure,
+    ProcedureContext,
+)
 from bscontroller.radio.base import (
     PHY_CODED_S2_FACTOR,
     PHY_TIME_UNITS_PER_SECOND,
@@ -248,7 +251,6 @@ class PowerControl(LocalProcedure):
         self.next_request_us = 0
         self.context: ProcedureContext | None = None
         self.request_phy = self.active_phy
-        self.host_reads: deque[PowerPhy] = deque()
 
     @property
     def connection(self):
@@ -297,7 +299,18 @@ class PowerControl(LocalProcedure):
         return level, self._radiative(TX_POWER_LEVELS_DBM[-1])
 
     def queue_read(self, phy: PowerPhy) -> None:
-        self.host_reads.append(phy)
+        def fail(status: int) -> None:
+            self._report(PowerReport.REMOTE_READ, phy, POWER_UNAVAILABLE, 0, 0, status)
+
+        def start() -> None:
+            if self.peer_supports_request:
+                self._request(phy, 0, host=True)
+            else:
+                fail(ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR)
+
+        self.connection.llcp.initiate(
+            DeferredProcedure('power_read', start, fail), defer=True
+        )
 
     def _report(
         self,
@@ -397,40 +410,33 @@ class PowerControl(LocalProcedure):
         if zone is not None:
             self.owner.listener.on_path_loss_threshold(self.connection, loss, zone)
 
-    def request_if_needed(self) -> None:
-        """Start one local exchange without occupying another procedure's slot."""
-        if self.connection.llcp.local_procedure_busy:
-            return
+    @property
+    def peer_supports_request(self) -> bool:
         features = self.connection.peer_features
-        support = features is None or bool(
+        return features is None or bool(
             features
             & (
                 LeFeatureMask.LE_POWER_CONTROL_REQUEST
                 | LeFeatureMask.LE_POWER_CONTROL_REQUEST_DUP
             )
         )
-        if self.host_reads:
-            phy = self.host_reads.popleft()
-            if support:
-                self._request(phy, 0, host=True)
-            else:
-                self._report(
-                    PowerReport.REMOTE_READ,
-                    phy,
-                    POWER_UNAVAILABLE,
-                    0,
-                    0,
-                    ErrorCode.UNSUPPORTED_REMOTE_FEATURE_ERROR,
-                )
+
+    def request_if_needed(self) -> None:
+        llcp = self.connection.llcp
+        if (
+            llcp.local_procedure_busy
+            or llcp.has_pending('power_adjustment')
+            or not self.peer_supports_request
+            or self.connection.radio.now_us < self.next_request_us
+        ):
             return
-        if not support or self.connection.radio.now_us < self.next_request_us:
-            return
+        features = self.connection.peer_features
         phy = self.rx_phy
         peer_power = self.remote_levels.get(phy, NOT_MANAGED)
         if (self.report_remote and not self.requested) or (
             self.path_loss.enabled and peer_power == NOT_MANAGED
         ):
-            self._request(phy, 0)
+            self._schedule_adjustment(phy, 0)
             return
         candidates = tuple(
             dict.fromkeys((phy, *(event.rx_power_phy for event in self._iso_events())))
@@ -448,8 +454,13 @@ class PowerControl(LocalProcedure):
                     and self.path_loss.enabled
                     and peer_power == POWER_UNAVAILABLE
                 ):
-                    self._request(candidate, delta)
+                    self._schedule_adjustment(candidate, delta)
                     return
+
+    def _schedule_adjustment(self, phy: PowerPhy, delta: int) -> None:
+        self.connection.llcp.initiate(
+            DeferredProcedure('power_adjustment', lambda: self._request(phy, delta))
+        )
 
     def _peer_adjustment(self, phy: PowerPhy) -> int:
         rssi = self.rssi.get(phy)
@@ -470,15 +481,15 @@ class PowerControl(LocalProcedure):
         self.context = ProcedureContext(
             Opcode.LL_POWER_CONTROL_REQ,
             frozenset((Opcode.LL_POWER_CONTROL_RSP,)),
-            self,
+            self.control,
             host_initiated=host,
-            response_timer=self.owner.response_timer,
         )
         tx_power = (
             self._local_power(phy) if phy in self.managed_phys else POWER_UNAVAILABLE
         )
-        self.connection.enqueue_control(
-            REQUEST.pack(Opcode.LL_POWER_CONTROL_REQ, phy.mask, delta, tx_power)
+        self.connection.llcp.send(
+            self.context,
+            REQUEST.pack(Opcode.LL_POWER_CONTROL_REQ, phy.mask, delta, tx_power),
         )
 
     def _peer_changed(
@@ -533,9 +544,6 @@ class PowerControl(LocalProcedure):
 
     def close(self, reason: int) -> None:
         self.finish(reason)
-        while self.host_reads:
-            phy = self.host_reads.popleft()
-            self._report(PowerReport.REMOTE_READ, phy, POWER_UNAVAILABLE, 0, 0, reason)
 
     def _receive_request(self, payload: bytes) -> None:
         _, mask, requested, peer_power = REQUEST.unpack(payload)
@@ -590,7 +598,7 @@ class PowerControl(LocalProcedure):
                 Opcode.LL_POWER_CONTROL_RSP, self._flags(level), delta, level, apr
             )
             self._local_changed(phy, level, delta)
-        self.connection.enqueue_control(response, priority=True)
+        self.connection.llcp.respond(response, priority=True)
 
     def control(self, payload: bytes) -> bool:
         opcode = payload[0]

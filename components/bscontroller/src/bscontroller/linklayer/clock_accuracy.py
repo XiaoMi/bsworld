@@ -14,7 +14,11 @@ from bscontroller.linklayer import (
     ControlOpcode,
 )
 from bscontroller.linklayer.features import LeFeatureMask
-from bscontroller.linklayer.procedure import LocalProcedure, ProcedureContext
+from bscontroller.linklayer.procedure import (
+    DeferredProcedure,
+    LocalProcedure,
+    ProcedureContext,
+)
 from bscontroller.linklayer.state import Role
 
 if TYPE_CHECKING:
@@ -33,7 +37,6 @@ class ClockAccuracyProcedure(LocalProcedure):
             else LL_SCA_500_PPM
         )
         self.context: ProcedureContext | None = None
-        self.queued: tuple[bool, int | None] | None = None
         self.target: int | None = None
         self.reannounce = False
         self.peer_rejected_update = False
@@ -47,20 +50,28 @@ class ClockAccuracyProcedure(LocalProcedure):
         )
 
     def queue_read(self) -> None:
-        self.queued = True, None
+        self.owner.connection.llcp.initiate(
+            DeferredProcedure(
+                'clock_accuracy', lambda: self._start(None), self._report
+            ),
+            defer=True,
+        )
 
     def queue_change(self, accuracy: int) -> None:
-        self.queued = False, accuracy
-
-    def start_if_needed(self) -> None:
         connection = self.owner.connection
-        if self.queued is None or connection.llcp.local_procedure_busy:
-            return
-        host_read, target = self.queued
-        if not host_read and not connection.link.can_change_sleep_clock_accuracy:
-            return
+        connection.llcp.initiate(
+            DeferredProcedure(
+                'clock_accuracy',
+                lambda: self._start(accuracy),
+                ready=lambda: connection.link.can_change_sleep_clock_accuracy,
+            ),
+            defer=True,
+        )
+
+    def _start(self, target: int | None) -> None:
+        connection = self.owner.connection
+        host_read = target is None
         self.target = target
-        self.queued = None
         local = connection.link.sleep_clock_accuracy
         advertised = local if target is None else target
         if advertised > local:
@@ -73,11 +84,12 @@ class ClockAccuracyProcedure(LocalProcedure):
         self.context = ProcedureContext(
             Opcode.LL_CLOCK_ACCURACY_REQ,
             frozenset((Opcode.LL_CLOCK_ACCURACY_RSP,)),
-            self,
+            self.control,
             host_initiated=host_read,
-            response_timer=self.owner.response_timer,
         )
-        connection.enqueue_control(bytes([Opcode.LL_CLOCK_ACCURACY_REQ, advertised]))
+        connection.llcp.send(
+            self.context, bytes([Opcode.LL_CLOCK_ACCURACY_REQ, advertised])
+        )
 
     def _report(self, status: int) -> None:
         self.owner.listener.on_peer_sca(
@@ -102,9 +114,6 @@ class ClockAccuracyProcedure(LocalProcedure):
 
     def close(self, reason: int) -> None:
         self.finish(reason)
-        if self.queued is not None and self.queued[0]:
-            self._report(reason)
-        self.queued = None
 
     def control(self, payload: bytes) -> bool:
         opcode = payload[0]
@@ -114,7 +123,7 @@ class ClockAccuracyProcedure(LocalProcedure):
             local = connection.link.sleep_clock_accuracy
             if self.pending and self.context.transmitted and self.target is not None:
                 self.reannounce = self.target < local
-            connection.enqueue_control(
+            connection.llcp.respond(
                 bytes([Opcode.LL_CLOCK_ACCURACY_RSP, local]), priority=True
             )
         elif opcode == Opcode.LL_CLOCK_ACCURACY_RSP and len(payload) == 2:

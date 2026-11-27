@@ -10,9 +10,9 @@ opcode-to-boolean liveness rules is needed in the coordinator.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Protocol
 
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import LL_RESPONSE_TIMEOUT_US
@@ -23,8 +23,12 @@ PROCEDURE_COLLISION = (
 DIFFERENT_TRANSACTION_COLLISION = ErrorCode.DIFFERENT_TRANSACTION_COLLISION_ERROR
 
 
-class ProcedureHandler(Protocol):
-    def control(self, payload: bytes) -> bool: ...
+@dataclass(frozen=True, eq=False)
+class DeferredProcedure:
+    kind: str
+    start: Callable[[], None]
+    cancel: Callable[[int], None] | None = None
+    ready: Callable[[], bool] | None = None
 
 
 class ProcedureOrigin(Enum):
@@ -39,16 +43,27 @@ class ProcedurePhase(Enum):
     COMPLETE = auto()
 
 
+class ProcedureCompletion(Enum):
+    EXPLICIT = auto()
+    SENT = auto()
+    ACKNOWLEDGED = auto()
+
+
 @dataclass(eq=False)
 class ProcedureContext:
     request: int
     responses: frozenset[int]
-    owner: ProcedureHandler
+    receive: Callable[[bytes], bool] | None
     origin: ProcedureOrigin = ProcedureOrigin.LOCAL
     phase: ProcedurePhase = ProcedurePhase.WAIT_RESPONSE
     host_initiated: bool = False
     transmitted: bool = False
     response_timer: ProcedureResponseTimer | None = None
+    # Some peer exchanges also reserve this endpoint's local procedure slot.
+    blocks_local: bool = False
+    completion: ProcedureCompletion = ProcedureCompletion.EXPLICIT
+    on_sent: Callable[[bytes], None] | None = None
+    on_acknowledged: Callable[[bytes], None] | None = None
 
     @property
     def active(self) -> bool:
@@ -61,6 +76,9 @@ class ProcedureContext:
             if self.response_timer and self.active
             else 0
         )
+
+    def stop_response_timer(self) -> None:
+        self.response_timer = None
 
     def finish(self) -> None:
         self.phase = ProcedurePhase.COMPLETE

@@ -78,7 +78,10 @@ def unpack_param(payload):
 
 
 def assert_idle(iut):
-    assert not iut.controls.busy and iut.controls.next_deadline_us == 0
+    assert (
+        not iut.connection.llcp.local_procedure_busy
+        and iut.connection.llcp.response_deadline_us == 0
+    )
     iut.lt_rx_q_is_empty()
 
 
@@ -283,7 +286,7 @@ def test_central_loc_known_unsupported_peer_uses_update_directly(central):
     central.event_prepare()
     update = central.lt_rx(Opcode.LL_CONNECTION_UPDATE_IND)
     assert unpack_update(update)[2] == 50
-    assert central.controls.next_deadline_us == 0
+    assert central.connection.llcp.response_deadline_us == 0
     central.tx_ack()
     central.event_done()
     complete_update_at_instant(central, update)
@@ -337,7 +340,7 @@ def test_loc_param_req_rejected(iut, role, response, status):
     dut.ut_rx(UPDATE_DONE, status=status, connection_interval=24)
     dut.ut_rx_q_is_empty()
     assert_idle(dut)
-    assert not dut.connection.llcp.local_exchanges
+    assert not dut.connection.llcp.local_procedure_busy
 
 
 def test_loc_rejection_for_other_procedure_is_not_ours(central):
@@ -357,7 +360,7 @@ def test_loc_rejection_for_other_procedure_is_not_ours(central):
         - The parameter request is still pending with the same deadline.
     """
     request(central, 30)
-    deadline = central.controls.next_deadline_us
+    deadline = central.connection.llcp.response_deadline_us
     central.event_prepare()
     central.lt_rx(Opcode.LL_CONNECTION_PARAM_REQ)
     central.lt_tx(
@@ -368,7 +371,7 @@ def test_loc_rejection_for_other_procedure_is_not_ours(central):
     central.event_done()
     central.ut_rx_q_is_empty()
     assert central.controls.connection_parameters.parameter_request
-    assert central.controls.next_deadline_us == deadline
+    assert central.connection.llcp.response_deadline_us == deadline
 
 
 @pytest.mark.parametrize('role', [CENTRAL, PERIPHERAL])
@@ -551,7 +554,7 @@ def test_periph_loc(peripheral):
     peripheral.lt_tx(connection_update_ind(36, instant, timeout=200))
     peripheral.event_done()
     # The procedure completes only once the Instant has passed (5.1.7.2).
-    assert peripheral.controls.next_deadline_us
+    assert peripheral.connection.llcp.response_deadline_us
     peripheral.wait_instant(instant)
     peripheral.event_prepare()
     assert peripheral.connection.parameters.interval == 36
@@ -619,7 +622,7 @@ def test_central_rem_host_accepts(central):
     central.ut_rx(
         REMOTE_REQUEST, interval_min=30, interval_max=40, max_latency=1, timeout=200
     )
-    assert central.controls.next_deadline_us
+    assert central.connection.llcp.response_deadline_us
     assert central.host('reply_parameters', 34, 40, 1, 200) == ErrorCode.SUCCESS
     central.event_prepare()
     update = central.lt_rx(Opcode.LL_CONNECTION_UPDATE_IND)
@@ -982,12 +985,12 @@ def test_periph_rem_param_req(peripheral):
     assert unpack_param(response)[:5] == (30, 40, 0, 100, 10)
     peripheral.tx_ack()
     peripheral.event_done()
-    assert peripheral.controls.next_deadline_us
+    assert peripheral.connection.llcp.response_deadline_us
     instant = peripheral.event_counter + 6
     peripheral.event_prepare()
     peripheral.lt_tx(connection_update_ind(40, instant))
     peripheral.event_done()
-    assert peripheral.controls.next_deadline_us
+    assert peripheral.connection.llcp.response_deadline_us
     peripheral.wait_instant(instant)
     peripheral.event_prepare()
     peripheral.ut_rx(UPDATE_DONE, status=0, connection_interval=40)

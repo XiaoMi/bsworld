@@ -23,6 +23,7 @@ from bscontroller.linklayer.features import LeFeatureMask
 from bscontroller.linklayer.procedure import (
     DIFFERENT_TRANSACTION_COLLISION,
     PROCEDURE_COLLISION,
+    DeferredProcedure,
     LocalProcedure,
     ProcedureContext,
 )
@@ -224,14 +225,13 @@ class Subrating(LocalProcedure):
         self.context = SubrateContext(
             opcode,
             frozenset(responses),
-            self,
+            self.control,
             host_initiated=host,
             parameters=parameters,
         )
 
     def _enqueue(self, opcode: int, body: bytes) -> None:
-        self.context.response_timer = self.owner.response_timer
-        self.connection.enqueue_control(bytes([opcode]) + body)
+        self.connection.llcp.send(self.context, bytes([opcode]) + body)
 
     def request(self, request: SubrateRequest) -> None:
         connection = self.connection
@@ -279,9 +279,7 @@ class Subrating(LocalProcedure):
         )
         self._enqueue(Opcode.LL_SUBRATE_IND, self.update.pack())
 
-    def start_peer_request(self) -> None:
-        if self.peer_request is None or self.connection.llcp.local_procedure_busy:
-            return
+    def _start_peer_request(self) -> None:
         request, self.peer_request = self.peer_request, None
         limits = self.limits
         interval_us = self.connection.parameters.interval_us
@@ -442,7 +440,9 @@ class Subrating(LocalProcedure):
                     self.peer_request = SubrateRequest(
                         *PARAMETERS.unpack_from(payload, 1)
                     )
-                    self.start_peer_request()
+                    self.connection.llcp.initiate(
+                        DeferredProcedure('peer_subrate', self._start_peer_request)
+                    )
             else:
                 self._receive_update(payload)
             return True

@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from bscontroller.linklayer.connection import Connection
+    from bscontroller.linklayer.procedure import ProcedureContext
 
 
 @dataclass(eq=False)
@@ -59,6 +60,7 @@ class Outbound:
     payload: bytes
     host_packet: bool = False
     flush: AclFlush | None = None
+    procedure: ProcedureContext | None = None
 
     @property
     def opcode(self) -> int | None:
@@ -150,8 +152,14 @@ class ConnectionEvent:
         if completed:
             self.connection.listener.on_acl_completed(self.connection, completed)
 
-    def enqueue_control(self, payload: bytes, *, priority: bool = False) -> Outbound:
-        item = Outbound(LlId.CONTROL, payload)
+    def _enqueue_control(
+        self,
+        payload: bytes,
+        *,
+        priority: bool = False,
+        procedure: ProcedureContext | None = None,
+    ) -> Outbound:
+        item = Outbound(LlId.CONTROL, payload, procedure=procedure)
         if priority:
             self.queue.appendleft(item)
         else:
@@ -225,7 +233,9 @@ class ConnectionEvent:
             self.tx_sn ^= 1
             terminate_reason = None
             if acknowledged.llid == LlId.CONTROL:
-                terminate_reason = self.control.acknowledged(acknowledged.payload)
+                terminate_reason = self.control.acknowledged(
+                    acknowledged.payload, acknowledged.procedure
+                )
             if acknowledged.host_packet:
                 self.connection.listener.on_acl_completed(self.connection)
             if terminate_reason is not None:
@@ -327,7 +337,7 @@ class ConnectionEvent:
         if item.llid == LlId.CONTROL and not self.sent_pending:
             # Finalize the Instant just before first TX to account for queueing delay.
             # Retries retain the already transmitted value.
-            item = Outbound(LlId.CONTROL, self.control.prepare(item.payload))
+            item = replace(item, payload=self.control.prepare(item.payload))
             self.pending = item
         # Paused Host data must not keep an otherwise idle event open.
         more = any(self._sendable(entry, transmission.start_us) for entry in self.queue)
@@ -366,6 +376,7 @@ class ConnectionEvent:
         self.control.sent(
             item.payload if item.llid == LlId.CONTROL else None,
             first=not self.sent_pending,
+            procedure=item.procedure,
             length=len(self.pending_wire),
         )
         self.sent_pending = True

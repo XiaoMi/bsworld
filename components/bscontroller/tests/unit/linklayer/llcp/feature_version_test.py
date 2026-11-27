@@ -130,7 +130,10 @@ def test_feature_loc(iut, role):
     event = dut.ut_rx(FEATURES_DONE, status=0, connection_handle=dut.handle)
     assert le_features(event) == PEER_FEATURES
     dut.ut_rx_q_is_empty()
-    assert not dut.controls.feature_request and dut.controls.next_deadline_us == 0
+    assert (
+        not dut.controls.feature_request
+        and dut.connection.llcp.response_deadline_us == 0
+    )
     # The second request is served from the cache, without air traffic.
     dut.host_start('prepare_features')
     dut.ut_rx(FEATURES_DONE, status=0)
@@ -541,7 +544,7 @@ def test_version_rem(iut, role):
     dut.run_events(1)
     assert dut.controls.peer_version == (9, 1, 1)
     # The reply was not tracked as a local request awaiting an answer.
-    assert not dut.connection.llcp.local_exchanges
+    assert not dut.connection.llcp.local_procedure_busy
 
 
 @pytest.mark.parametrize('role', ROLES)
@@ -639,12 +642,12 @@ def test_version_timer_starts_after_feature_exchange(central):
     central.elapse(1000)
     central.host_start('prepare_version')
     assert central.controls.version_deadline_us == 0
-    assert central.controls.next_deadline_us == first
+    assert central.connection.llcp.response_deadline_us == first
     central.controls.features.finish(ErrorCode.SUCCESS)
     central.elapse(1000)
     central.event_prepare()
     assert central.controls.version_deadline_us == first + 2000
-    assert central.controls.next_deadline_us == first + 2000
+    assert central.connection.llcp.response_deadline_us == first + 2000
 
 
 @pytest.mark.parametrize('role', ROLES)

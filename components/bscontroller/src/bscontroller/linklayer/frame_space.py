@@ -296,13 +296,12 @@ class FrameSpaceProcedure(LocalProcedure):
         self.context = ProcedureContext(
             Opcode.LL_FRAME_SPACE_REQ,
             frozenset((Opcode.LL_FRAME_SPACE_RSP,)),
-            self,
+            self.control,
             host_initiated=True,
-            response_timer=self.owner.response_timer,
         )
         self.collision = False
-        self.connection.enqueue_control(
-            bytes([Opcode.LL_FRAME_SPACE_REQ]) + self.local_request.pack()
+        self.connection.llcp.send(
+            self.context, bytes([Opcode.LL_FRAME_SPACE_REQ]) + self.local_request.pack()
         )
 
     def _report(
@@ -407,7 +406,7 @@ class FrameSpaceProcedure(LocalProcedure):
                 changed_phys |= phy_bit(phy)
                 changed_spacings |= direction
         self.response = FrameSpaceChange(space, changed_phys, changed_spacings)
-        self.connection.enqueue_control(
+        self.connection.llcp.respond(
             bytes([Opcode.LL_FRAME_SPACE_RSP]) + self.response.pack(),
             priority=reply_first,
         )
