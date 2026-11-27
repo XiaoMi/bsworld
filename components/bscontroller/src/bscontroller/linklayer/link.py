@@ -252,26 +252,16 @@ class RadioLink:
         self,
         channel: int,
         received_end_us: int,
-        pdu_size: int,
+        duration_us: int,
         phy: Phy = Phy.LE_1M,
-        *,
-        response_size: int = 0,
-    ) -> tuple[int, int] | None:
+    ) -> int | None:
         """Return the T_IFS transmit slot if the exchange fits the radio grant."""
         start_us = received_end_us + LL_IFS_US
-        end_us = start_us + phy.airtime_us(pdu_size)
-        exchange_end = end_us
-        if response_size:
-            exchange_end += (
-                LL_IFS_US
-                + LL_RESPONSE_START_TOLERANCE_US
-                + phy.airtime_us(response_size)
-            )
-        if not self.resource.fits_radio(exchange_end) or start_us < (
+        if not self.resource.fits_radio(start_us + duration_us) or start_us < (
             self.radio.earliest_start_us(channel, phy, transmit=True)
         ):
             return None
-        return start_us, end_us
+        return start_us
 
     async def receive_response(
         self,

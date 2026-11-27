@@ -20,14 +20,11 @@ from bscontroller.linklayer import (
     LL_ADV_DELAY_MAX_US,
     LL_ADV_PRIMARY_CHANNELS,
     LL_EVENT_COUNTER_MASK,
-    LL_IFS_US,
     LL_INSTANT_MIN_LISTENING_EVENTS,
     LL_MAFS_US,
     LL_PERIODIC_INTERVAL_UNIT_US,
     LL_SCA_50_PPM,
     PDU_ADV_ADI_DID_MASK,
-    PDU_ADV_AUX_CONNECT_RSP_SIZE,
-    PDU_ADV_CONNECT_SIZE,
     PDU_CRC_SIZE,
 )
 from bscontroller.linklayer.advertising_event import (
@@ -69,10 +66,11 @@ from bscontroller.linklayer.scheduler import (
 )
 from bscontroller.linklayer.timing import (
     LL_INSTANT_PAST_THRESHOLD,
+    connect_exchange_us,
     counter_distance,
     window_widening,
 )
-from bscontroller.radio.base import PHY_OCTET_BITS, RADIO_SWITCH_TIME_US, Phy
+from bscontroller.radio.base import PHY_OCTET_BITS, RADIO_SWITCH_TIME_US
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -113,15 +111,6 @@ def subevent_start_us(item: Advertising) -> int:
     )
 
 
-def connect_exchange_us(phy: Phy, coding: int) -> int:
-    """AUX_CONNECT_REQ, T_IFS and AUX_CONNECT_RSP (Core Vol 6, Part B, 4.4.2.12.2)."""
-    return (
-        phy.airtime_us(PDU_ADV_CONNECT_SIZE, coding)
-        + LL_IFS_US
-        + phy.airtime_us(PDU_ADV_AUX_CONNECT_RSP_SIZE)
-    )
-
-
 def subevent_transmit_window(item: Advertising, connecting: bool) -> RadioReservation:
     """Next AUX_SYNC_SUBEVENT_IND, or the AUX_CONNECT_REQ exchange replacing it.
 
@@ -133,7 +122,7 @@ def subevent_transmit_window(item: Advertising, connecting: bool) -> RadioReserv
     phy = item.secondary_phy
     coding = item.secondary_coding.factor()
     duration = (
-        connect_exchange_us(phy, coding)
+        connect_exchange_us(phy, request_coding=coding)
         if connecting
         else phy.airtime_us(
             len(subevent_pdu(item, entry.data if entry else b'').encode()), coding

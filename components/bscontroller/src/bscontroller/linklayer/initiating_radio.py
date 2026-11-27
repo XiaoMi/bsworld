@@ -12,11 +12,9 @@ from bscontroller.address import Address, AddressType, OwnAddressType
 from bscontroller.errors import ErrorCode
 from bscontroller.linklayer import (
     LL_CONN_INTERVAL_UNIT_US,
-    LL_IFS_US,
     PDU_ADV_ACCESS_ADDRESS,
     PDU_ADV_ADDRESS_OFFSET,
     PDU_ADV_ADDRESSES_END,
-    PDU_ADV_AUX_CONNECT_RSP_SIZE,
     PDU_ADV_CHSEL_MASK,
     PDU_ADV_CONNECT_PAYLOAD_SIZE,
     PDU_ADV_CONNECT_SIZE,
@@ -38,14 +36,18 @@ from bscontroller.linklayer.filtering import InitiatorFilterPolicy
 from bscontroller.linklayer.results import ConnectionAccepted
 from bscontroller.linklayer.scheduler import RadioPriority
 from bscontroller.linklayer.state import Role
-from bscontroller.linklayer.timing import auxiliary_window_delay_us
-from bscontroller.radio.base import PHY_CODED_S8_FACTOR, RADIO_SWITCH_TIME_US
+from bscontroller.linklayer.timing import (
+    LL_RESPONSE_START_TOLERANCE_US,
+    auxiliary_window_delay_us,
+    connect_exchange_us,
+)
+from bscontroller.radio.base import PHY_CODED_S8_FACTOR, RADIO_SWITCH_TIME_US, Phy
 
 if TYPE_CHECKING:
     from bscontroller.linklayer.discovery import Advertising, Initiating
     from bscontroller.linklayer.link import RadioLink
     from bscontroller.linklayer.parameters import Parameters
-    from bscontroller.radio.base import Phy, Received
+    from bscontroller.radio.base import Received
 
 
 async def initiate_legacy(
@@ -99,14 +101,14 @@ async def initiate_legacy(
         return
     if not link.roles.connections.can_accept(peer):
         return
-    slot = link.interframe_slot(channel, packet.end_us, PDU_ADV_CONNECT_SIZE)
-    if slot is None:
+    duration_us = Phy.LE_1M.airtime_us(PDU_ADV_CONNECT_SIZE)
+    start_us = link.interframe_slot(channel, packet.end_us, duration_us)
+    if start_us is None:
         return
-    start_us, request_end = slot
     # Choose a usable first connection window before sending CONNECT_IND;
     # its timing becomes shared state as soon as the peer accepts the request.
     parameters = link.connection_parameters(
-        item.parameters, request_end, LL_CONN_INTERVAL_UNIT_US
+        item.parameters, start_us + duration_us, LL_CONN_INTERVAL_UNIT_US
     )
     if parameters is None:
         return
@@ -172,17 +174,15 @@ async def initiate_extended(
     if link.initiating is not item or not link.roles.connections.can_accept(address):
         return
     phy = packet.phy
-    slot = link.interframe_slot(
+    start_us = link.interframe_slot(
         channel,
         packet.end_us,
-        PDU_ADV_CONNECT_SIZE,
+        connect_exchange_us(phy) + LL_RESPONSE_START_TOLERANCE_US,
         phy,
-        response_size=PDU_ADV_AUX_CONNECT_RSP_SIZE,
     )
     # Core Vol 6, Part B, 4.4.4.2 reuses the scanner backoff.
-    if slot is None or not item.backoff.permit():
+    if start_us is None or not item.backoff.permit():
         return
-    start_us, end_us = slot
     own, generated = link.privacy.select_local_address(
         item.own_address_type,
         item.identity_address or item.address,
@@ -191,7 +191,7 @@ async def initiate_extended(
     item.address = own
     parameters = link.connection_parameters(
         (item.phy_parameters or {}).get(phy, item.parameters),
-        end_us,
+        start_us + phy.airtime_us(PDU_ADV_CONNECT_SIZE),
         auxiliary_window_delay_us(phy),
         phy,
     )
@@ -276,7 +276,7 @@ async def pawr_connect(
     if not link.resource.admit(
         item,
         start_us - RADIO_SWITCH_TIME_US,
-        request_end_us + LL_IFS_US + phy.airtime_us(PDU_ADV_AUX_CONNECT_RSP_SIZE),
+        start_us + connect_exchange_us(phy, request_coding=coding),
         RadioPriority.PERIODIC_TX,
         earliest_us=link.radio.earliest_start_us(channel, phy, transmit=True)
         - RADIO_SWITCH_TIME_US,

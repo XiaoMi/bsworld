@@ -20,7 +20,6 @@ from bscontroller.linklayer import (
     PDU_ADV_ADDRESS_SIZE,
     PDU_ADV_ADI_DID_BITS,
     PDU_ADV_ADI_SIZE,
-    PDU_ADV_AUX_CONNECT_RSP_SIZE,
     PDU_ADV_AUX_PTR_SIZE,
     PDU_ADV_CONNECT_SIZE,
     PDU_ADV_EXT_HEADER_SIZE_MAX,
@@ -39,7 +38,11 @@ from bscontroller.linklayer.advertising_pdu import (
 )
 from bscontroller.linklayer.bis import BIG_INFO_AD_TYPE
 from bscontroller.linklayer.discovery import AD_TYPE_CHANNEL_MAP_UPDATE_INDICATION
-from bscontroller.linklayer.timing import LL_RESPONSE_START_TOLERANCE_US
+from bscontroller.linklayer.timing import (
+    LL_RESPONSE_START_TOLERANCE_US,
+    connect_exchange_us,
+    scan_exchange_us,
+)
 from bscontroller.radio.base import (
     PHY_CODED_S8_FACTOR,
     RADIO_SWITCH_TIME_US,
@@ -281,22 +284,8 @@ def advertising_time_us(item: Advertising, *, check_capacity: bool = False) -> i
             )
         )
     elif item.mode == AdvertisingMode.CONNECTABLE:
-        duration += (
-            2 * LL_IFS_US
-            + phy.airtime_us(PDU_ADV_CONNECT_SIZE)
-            + phy.airtime_us(PDU_ADV_AUX_CONNECT_RSP_SIZE, coding)
-        )
+        duration += LL_IFS_US + connect_exchange_us(phy, response_coding=coding)
     return duration
-
-
-def _scan_exchange_us(response_size: int) -> int:
-    """From the end of a legacy advertisement through the end of SCAN_RSP."""
-    return (
-        2 * LL_IFS_US
-        + LL_RESPONSE_START_TOLERANCE_US
-        + Phy.LE_1M.airtime_us(PDU_ADV_SCAN_REQ_SIZE)
-        + Phy.LE_1M.airtime_us(response_size)
-    )
 
 
 def advertising_event_time_us(item: Advertising) -> int:
@@ -315,8 +304,8 @@ def advertising_event_time_us(item: Advertising) -> int:
         AdvertisingPduType.ADV_IND,
         AdvertisingPduType.ADV_SCAN_IND,
     ):
-        response_us = _scan_exchange_us(
-            PDU_HEADER_SIZE + PDU_ADV_ADDRESS_SIZE + len(item.scan_response)
+        response_us = LL_IFS_US + scan_exchange_us(
+            Phy.LE_1M, PDU_HEADER_SIZE + PDU_ADV_ADDRESS_SIZE + len(item.scan_response)
         )
     elif item.pdu_type == AdvertisingPduType.ADV_DIRECT_IND:
         response_us = (

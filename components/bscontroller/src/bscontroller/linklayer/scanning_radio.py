@@ -20,7 +20,6 @@ from bscontroller.linklayer import (
     PDU_ADV_LEGACY_SIZE_MAX,
     PDU_ADV_LEGACY_SIZE_MIN,
     PDU_ADV_RXADD_MASK,
-    PDU_ADV_SCAN_REQ_SIZE,
     PDU_ADV_SECOND_ADDRESS_OFFSET,
     PDU_ADV_TXADD_MASK,
     PDU_ADV_TYPE_MASK,
@@ -43,6 +42,7 @@ from bscontroller.linklayer.initiating_radio import (
 )
 from bscontroller.linklayer.results import SyncInfoReceived
 from bscontroller.linklayer.state import AdvertisingProperties, AdvertisingReport
+from bscontroller.linklayer.timing import scan_exchange_us
 from bscontroller.radio.base import Phy
 
 if TYPE_CHECKING:
@@ -192,13 +192,12 @@ async def scan_packet(
     ):
         return
     # The response length is unknown when the scanner commits to SCAN_REQ.
-    slot = link.interframe_slot(
+    start_us = link.interframe_slot(
         channel,
         packet.end_us,
-        PDU_ADV_SCAN_REQ_SIZE,
-        response_size=PDU_ADV_LEGACY_SIZE_MAX,
+        scan_exchange_us(Phy.LE_1M, PDU_ADV_LEGACY_SIZE_MAX),
     )
-    if slot is not None and scan.backoff.permit():
+    if start_us is not None and scan.backoff.permit():
         # Consume backoff only for an eligible advertisement. A missing response
         # or one from another advertiser counts as a failed attempt.
         scan.address = link.privacy.local_address(
@@ -207,7 +206,7 @@ async def scan_packet(
             identity,
         )
         request = scan_request(scan.address, address)
-        end_us = await link.transmit(channel, request, start_us=slot[0])
+        end_us = await link.transmit(channel, request, start_us=start_us)
         if link.scan is not scan:
             return
         response = await link.receive_response(
@@ -526,14 +525,13 @@ async def _request_scan_response(
     link: RadioLink, scan, channel, received, ext, address, identity
 ):
     """Send AUX_SCAN_REQ and bind AUX_SCAN_RSP to this advertiser and ADI."""
-    slot = link.interframe_slot(
+    start_us = link.interframe_slot(
         channel,
         received.end_us,
-        PDU_ADV_SCAN_REQ_SIZE,
+        scan_exchange_us(received.phy, PDU_HEADER_SIZE + PDU_ADV_EXT_PAYLOAD_SIZE_MAX),
         received.phy,
-        response_size=PDU_HEADER_SIZE + PDU_ADV_EXT_PAYLOAD_SIZE_MAX,
     )
-    if slot is None or not scan.backoff.permit():
+    if start_us is None or not scan.backoff.permit():
         return None
     scan.address = link.privacy.local_address(
         scan.own_address_type, scan.identity_address or scan.address, identity
@@ -541,7 +539,7 @@ async def _request_scan_response(
     end_us = await link.transmit(
         channel,
         scan_request(scan.address, address),
-        start_us=slot[0],
+        start_us=start_us,
         phy=received.phy,
     )
     if link.scan is not scan:
