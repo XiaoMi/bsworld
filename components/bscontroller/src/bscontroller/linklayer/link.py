@@ -248,24 +248,51 @@ class RadioLink:
         # Vol 4, Part E, 7.8.76: antenna level = transceiver input - RF path gain.
         return compensated_power(rssi, -self.rf_rx_path_compensation)
 
+    def interframe_slot(
+        self,
+        channel: int,
+        received_end_us: int,
+        pdu_size: int,
+        phy: Phy = Phy.LE_1M,
+        *,
+        response_size: int = 0,
+    ) -> tuple[int, int] | None:
+        """Return the T_IFS transmit slot if the exchange fits the radio grant."""
+        start_us = received_end_us + LL_IFS_US
+        end_us = start_us + phy.airtime_us(pdu_size)
+        exchange_end = end_us
+        if response_size:
+            exchange_end += (
+                LL_IFS_US
+                + LL_RESPONSE_START_TOLERANCE_US
+                + phy.airtime_us(response_size)
+            )
+        if not self.resource.fits_radio(exchange_end) or start_us < (
+            self.radio.earliest_start_us(channel, phy, transmit=True)
+        ):
+            return None
+        return start_us, end_us
+
     async def receive_response(
         self,
         channel: int,
         transmit_end_us: int,
         phy: Phy = Phy.LE_1M,
         *,
+        search_deadline_us: int | None = None,
         deadline_us: int | None = None,
         **parameters,
     ) -> Received | None:
-        """Limit address detection, not the length of an acquired response."""
+        """Receive within the response window and an optional full-packet deadline."""
         response_start = transmit_end_us + LL_IFS_US
         until_us = response_start + LL_RESPONSE_START_TOLERANCE_US + phy.address_us
-        if deadline_us is not None:
-            until_us = min(until_us, deadline_us)
+        if search_deadline_us is not None:
+            until_us = min(until_us, search_deadline_us)
         return await self.radio.receive(
             channel,
             until_us,
             start_us=response_start - LL_RESPONSE_START_TOLERANCE_US,
+            deadline_us=deadline_us,
             phy=phy,
             **parameters,
         )

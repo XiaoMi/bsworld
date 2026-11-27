@@ -20,10 +20,12 @@ the IUT's SCAN_REQ or CONNECT_IND, ``ut_rx_report`` pops advertising reports, an
 import pytest
 
 from bscontroller.hci import HCI_LE_SCAN_INTERVAL_UNIT_US
-from bscontroller.linklayer import LL_IFS_US
+from bscontroller.linklayer import LL_IFS_US, PDU_ADV_CONNECT_SIZE
 from bscontroller.linklayer.connection import Connection
 from bscontroller.linklayer.parameters import Parameters
+from bscontroller.linklayer.scheduler import ONE_SHOT_INTERVAL_US, RadioReservation
 from bscontroller.linklayer.state import Role
+from bscontroller.radio.base import Phy
 from tests.unit.linklayer.air.advertising import (
     SCAN_WINDOW,
     create_connection,
@@ -928,6 +930,34 @@ def test_initiate_sends_connect_ind_and_becomes_central(iut, pdu):
     )
     iut.ut_rx_q_is_empty()
     assert not iut.ll.initiating_enabled
+
+
+@pytest.mark.parametrize('spare_us', [-1, 0], ids=['overlaps-acl', 'fits'])
+def test_connect_ind_requires_room_before_acl_reservation(iut, monkeypatch, spare_us):
+    """An eligible ADV_IND leads to CONNECT_IND only if its TX fits before an ACL."""
+    create_connection(iut)
+    advertisement = adv_ind()
+    start_us = iut.now_us + 1000
+    request_end = (
+        start_us
+        + Phy.LE_1M.airtime_us(len(advertisement))
+        + LL_IFS_US
+        + Phy.LE_1M.airtime_us(PDU_ADV_CONNECT_SIZE)
+    )
+    reservation = RadioReservation(request_end + spare_us, 200, ONE_SHOT_INTERVAL_US)
+    monkeypatch.setattr(iut.link.resource, '_reservations', lambda _: [reservation])
+    iut.lt_tx(advertisement, at=start_us)
+
+    initiator = iut.link.initiating
+    iut.call(iut.link.roles.scanning.run(initiator, reservation.start_us))
+
+    if spare_us < 0:
+        iut.lt_rx_q_is_empty()
+        iut.ut_rx_q_is_empty()
+        assert iut.link.initiating is initiator
+    else:
+        assert iut.lt_rx(PduType.CONNECT_IND).end_us == reservation.start_us
+        iut.ut_rx(CONNECTED, status=0, role=hci.Role.CENTRAL, peer_address=PEER)
 
 
 @pytest.mark.parametrize(

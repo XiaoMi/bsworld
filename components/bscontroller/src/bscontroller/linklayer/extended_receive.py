@@ -51,6 +51,7 @@ async def follow_auxiliary(
         aux.channel,
         until,
         start_us=max(radio.now_us + 1, start - widening),
+        deadline_us=resource.deadline_us,
         phy=phy,
         **parameters,
     )

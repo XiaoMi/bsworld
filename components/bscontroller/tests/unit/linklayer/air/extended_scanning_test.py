@@ -23,9 +23,21 @@ from dataclasses import replace
 import pytest
 
 from bscontroller.hci import HCI_LE_SCAN_INTERVAL_UNIT_US
-from bscontroller.linklayer import LL_IFS_US, AdvertisingMode
+from bscontroller.linklayer import (
+    LL_IFS_US,
+    PDU_ADV_EXT_PAYLOAD_SIZE_MAX,
+    PDU_ADV_SCAN_REQ_SIZE,
+    PDU_HEADER_SIZE,
+    AdvertisingMode,
+)
 from bscontroller.linklayer.advertising_pdu import AuxPtr, ExtendedPdu
 from bscontroller.linklayer.parameters import Parameters
+from bscontroller.linklayer.scheduler import (
+    ONE_SHOT_INTERVAL_US,
+    RadioPriority,
+    RadioReservation,
+)
+from bscontroller.linklayer.timing import LL_RESPONSE_START_TOLERANCE_US
 from bscontroller.radio.base import Phy
 from tests.unit.linklayer.air.advertising import create_extended_connection
 from tests.unit.linklayer.air.harness import (
@@ -611,6 +623,84 @@ def test_active_sends_aux_scan_req_and_reports_response(iut):
     iut.ut_rx_report(event_type=SCANNABLE | SCAN_RESPONSE, data=b'response')
     iut.ut_rx_q_is_empty()
     assert iut.ll.scan_parameters.backoff.successes == 1
+
+
+@pytest.mark.parametrize('spare_us', [-1, 0], ids=['overlaps-iso', 'fits'])
+def test_aux_scan_requires_room_for_response_before_iso(iut, monkeypatch, spare_us):
+    """Allow AUX_SCAN_REQ only when the grant covers TX and the first response PDU."""
+    scan(iut, active=True)
+    primary_pdu = primary(AdvertisingMode.SCANNABLE)
+    auxiliary_pdu = auxiliary(mode=AdvertisingMode.SCANNABLE)
+    start_us = iut.now_us + 1000
+    response_start = (
+        start_us
+        + AUX_OFFSET
+        + Phy.LE_1M.airtime_us(len(auxiliary_pdu.encode()))
+        + 2 * LL_IFS_US
+        + Phy.LE_1M.airtime_us(PDU_ADV_SCAN_REQ_SIZE)
+    )
+    response_end = (
+        response_start
+        + LL_RESPONSE_START_TOLERANCE_US
+        + Phy.LE_1M.airtime_us(PDU_HEADER_SIZE + PDU_ADV_EXT_PAYLOAD_SIZE_MAX)
+    )
+    reservation = RadioReservation(
+        response_end + spare_us, 200, ONE_SHOT_INTERVAL_US, RadioPriority.ISOCHRONOUS
+    )
+    monkeypatch.setattr(iut.link.resource, '_reservations', lambda _: [reservation])
+    iut.lt_tx(primary_pdu, at=start_us)
+    iut.lt_tx(auxiliary_pdu, channel=AUX_CHANNEL, after=AUX_OFFSET)
+    iut.lt_tx(scan_response(b'response'), channel=AUX_CHANNEL, at=response_start)
+
+    active_scan = iut.link.scan
+    iut.call(iut.link.roles.scanning.run(active_scan, reservation.start_us))
+
+    iut.ut_rx_report(event_type=SCANNABLE, data=b'')
+    if spare_us < 0:
+        iut.lt_rx_q_is_empty()
+        assert active_scan.backoff.count == 1
+        assert not active_scan.backoff.failures
+    else:
+        iut.lt_rx(PduType.SCAN_REQ)
+        iut.ut_rx_report(event_type=SCANNABLE | SCAN_RESPONSE, data=b'response')
+        assert active_scan.backoff.successes == 1
+    iut.ut_rx_q_is_empty()
+
+
+def test_aux_scan_response_chain_stops_at_iso_reservation(iut, monkeypatch):
+    """An acquired scan response chain cannot continue into the next radio grant."""
+    scan(iut, active=True)
+    start_us = iut.now_us + 1000
+    auxiliary_pdu = auxiliary(mode=AdvertisingMode.SCANNABLE)
+    response_start = (
+        start_us
+        + AUX_OFFSET
+        + Phy.LE_1M.airtime_us(len(auxiliary_pdu.encode()))
+        + 2 * LL_IFS_US
+        + Phy.LE_1M.airtime_us(PDU_ADV_SCAN_REQ_SIZE)
+    )
+    reservation = RadioReservation(
+        response_start + AUX_OFFSET + 150,
+        200,
+        ONE_SHOT_INTERVAL_US,
+        RadioPriority.ISOCHRONOUS,
+    )
+    monkeypatch.setattr(iut.link.resource, '_reservations', lambda _: [reservation])
+    iut.lt_tx(primary(AdvertisingMode.SCANNABLE), at=start_us)
+    iut.lt_tx(auxiliary_pdu, channel=AUX_CHANNEL, after=AUX_OFFSET)
+    iut.lt_tx(
+        scan_response(b'first', more=AUX_OFFSET), channel=AUX_CHANNEL, at=response_start
+    )
+    iut.lt_tx(chain(bytes(50)), channel=AUX_CHANNEL, after=AUX_OFFSET)
+
+    iut.call(iut.link.roles.scanning.run(iut.link.scan, reservation.start_us))
+
+    iut.lt_rx(PduType.SCAN_REQ)
+    iut.ut_rx_report(event_type=SCANNABLE, data=b'')
+    report = iut.ut_rx_report(data=b'first')
+    assert report.event_type & SCAN_RESPONSE and status_of(report) == TRUNCATED
+    assert iut.now_us <= reservation.start_us
+    iut.ut_rx_q_is_empty()
 
 
 @pytest.mark.parametrize(

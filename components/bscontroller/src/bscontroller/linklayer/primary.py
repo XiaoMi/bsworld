@@ -283,9 +283,12 @@ async def initiate(
         return
     if not link.roles.connections.can_accept(peer):
         return
+    slot = link.interframe_slot(channel, packet.end_us, PDU_ADV_CONNECT_SIZE)
+    if slot is None:
+        return
+    start_us, request_end = slot
     # Choose a usable first connection window before sending CONNECT_IND;
     # its timing becomes shared state as soon as the peer accepts the request.
-    request_end = packet.end_us + LL_IFS_US + Phy.LE_1M.airtime_us(PDU_ADV_CONNECT_SIZE)
     parameters = link.connection_parameters(
         item.parameters, request_end, LL_CONN_INTERVAL_UNIT_US
     )
@@ -304,7 +307,7 @@ async def initiate(
         + bytes(peer)
         + parameters.encode()
     )
-    end_us = await link.transmit(channel, pdu, start_us=packet.end_us + LL_IFS_US)
+    end_us = await link.transmit(channel, pdu, start_us=start_us)
     link.roles.accepted(
         ConnectionAccepted(
             parameters,
@@ -400,16 +403,20 @@ async def scan_packet(
         None,
     )
     if (
-        link.scan is scan
-        and scan.active
-        and pdu[0] & PDU_ADV_TYPE_MASK
-        in (AdvertisingPduType.ADV_IND, AdvertisingPduType.ADV_SCAN_IND)
-        # The response length is unknown when the scanner commits to SCAN_REQ.
-        and link.resource.fits_radio(
-            packet.end_us + _scan_exchange_us(PDU_ADV_LEGACY_SIZE_MAX)
-        )
-        and scan.backoff.permit()
+        link.scan is not scan
+        or not scan.active
+        or pdu[0] & PDU_ADV_TYPE_MASK
+        not in (AdvertisingPduType.ADV_IND, AdvertisingPduType.ADV_SCAN_IND)
     ):
+        return
+    # The response length is unknown when the scanner commits to SCAN_REQ.
+    slot = link.interframe_slot(
+        channel,
+        packet.end_us,
+        PDU_ADV_SCAN_REQ_SIZE,
+        response_size=PDU_ADV_LEGACY_SIZE_MAX,
+    )
+    if slot is not None and scan.backoff.permit():
         # Consume backoff only for an eligible advertisement. A missing response
         # or one from another advertiser counts as a failed attempt.
         scan.address = link.privacy.local_address(
@@ -418,12 +425,12 @@ async def scan_packet(
             identity,
         )
         request = scan_request(scan.address, address)
-        end_us = await link.transmit(
-            channel, request, start_us=packet.end_us + LL_IFS_US
-        )
+        end_us = await link.transmit(channel, request, start_us=slot[0])
         if link.scan is not scan:
             return
-        response = await link.receive_response(channel, end_us)
+        response = await link.receive_response(
+            channel, end_us, deadline_us=link.resource.deadline_us
+        )
         if link.scan is not scan:
             return
         success = bool(
@@ -496,7 +503,7 @@ async def advertise_legacy(advertising: AdvertisingManager, item: Advertising) -
                 packet = await link.receive_response(
                     channel,
                     end_us,
-                    deadline_us=item.deadline_us if item.high_duty else None,
+                    search_deadline_us=item.deadline_us if item.high_duty else None,
                 )
                 if not advertising.event_is_current(item):
                     return
