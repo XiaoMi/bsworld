@@ -140,11 +140,15 @@ async def collect_chain(
     first: ExtendedPdu,
     *,
     is_current: Callable[[], bool],
-) -> tuple[bytes, DataStatus, int | None]:
-    """Assemble a single extended advertising report from received fragments."""
+    primary_tx_power: int | None = None,
+) -> ChainFragment:
+    """Assemble an extended advertising report (Core Vol 4, Part E, 7.7.65.13)."""
     data = []
+    tx_power = first.tx_power if first.tx_power is not None else primary_tx_power
     async for fragment in receive_chain(
         radio, resource, packet, first, is_current=is_current
     ):
         data.append(fragment.data)
-    return b''.join(data), fragment.status, fragment.tx_power
+        if fragment.tx_power is not None:
+            tx_power = fragment.tx_power
+    return ChainFragment(b''.join(data), fragment.status, fragment.rssi, tx_power)

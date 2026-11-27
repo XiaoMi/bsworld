@@ -283,6 +283,35 @@ def test_chain_reassembles_complete_data(iut, pieces):
 
 
 @pytest.mark.parametrize(
+    'head_power,tail_power,expected',
+    [(None, None, -12), (-8, None, -8), (-8, 0, 0)],
+    ids=['primary-power', 'head-power', 'tail-power'],
+)
+def test_chain_reports_last_rssi_and_most_recent_tx_power(
+    iut, head_power, tail_power, expected
+):
+    """Use the last packet's RSSI and the last present TxPower (Vol 4, Part E,
+    7.7.65.13).
+    """
+    scan(iut)
+    iut.lt_tx(replace(primary(), tx_power=-12), rssi=-53)
+    iut.lt_tx(
+        auxiliary(b'head', more=AUX_OFFSET, tx_power=head_power),
+        channel=AUX_CHANNEL,
+        after=AUX_OFFSET,
+        rssi=-45,
+    )
+    iut.lt_tx(
+        chain(b'tail', tx_power=tail_power),
+        channel=AUX_CHANNEL,
+        after=AUX_OFFSET,
+        rssi=-69,
+    )
+    iut.run(WINDOW_US)
+    iut.ut_rx_report(data=b'headtail', rssi=-69, tx_power=expected)
+
+
+@pytest.mark.parametrize(
     'fault',
     ['missing', 'adi', 'mode', 'malformed', 'empty-continuation', 'phy'],
 )
@@ -837,22 +866,28 @@ def test_active_follows_scan_response_chain(iut):
         3. Run one scan window and collect the reports.
 
     Expected:
-        - The joined scan-response report data is "firstsecond".
+        - The scan response reports "firstsecond" with the RSSI of the
+          continuation and the TxPower from AUX_SCAN_RSP (Vol 4, Part E, 7.7.65.13).
     """
     scan(iut, active=True)
     send_event(
         iut,
         primary(AdvertisingMode.SCANNABLE),
-        auxiliary(mode=AdvertisingMode.SCANNABLE),
+        auxiliary(mode=AdvertisingMode.SCANNABLE, tx_power=-13),
     )
-    iut.lt_tx(scan_response(b'first', more=AUX_OFFSET), channel=AUX_CHANNEL)
+    iut.lt_tx(
+        scan_response(b'first', more=AUX_OFFSET, tx_power=-8),
+        channel=AUX_CHANNEL,
+        rssi=-45,
+    )
     # AUX_SCAN_RSP has no ADI, so its continuation carries none either.
-    iut.lt_tx(ExtendedPdu(data=b'second'), channel=AUX_CHANNEL, after=AUX_OFFSET)
+    iut.lt_tx(
+        ExtendedPdu(data=b'second'), channel=AUX_CHANNEL, after=AUX_OFFSET, rssi=-69
+    )
     iut.run(WINDOW_US)
-    reports = iut.reports()
-    assert (
-        b''.join(r.data for r in reports if r.event_type & SCAN_RESPONSE)
-        == b'firstsecond'
+    iut.ut_rx_report(data=b'', event_type=SCANNABLE, tx_power=-13)
+    iut.ut_rx_report(
+        data=b'firstsecond', event_type=SCANNABLE | SCAN_RESPONSE, rssi=-69, tx_power=-8
     )
 
 
